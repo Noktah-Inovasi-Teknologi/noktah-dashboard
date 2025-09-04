@@ -7,6 +7,7 @@ export default defineNuxtConfig({
     '@nuxt/image',
     '@nuxt/scripts',
     '@nuxt/test-utils',
+    '@nuxt/test-utils/module',
     '@nuxt/ui',
     '@nuxt/content'
   ]
