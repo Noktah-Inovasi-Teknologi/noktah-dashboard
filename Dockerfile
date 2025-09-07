@@ -1,37 +1,54 @@
 # Build stage
-FROM node:18-alpine AS builder
+FROM node:22.19.0-slim AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+#Enable pnpm
+ENV PNPM_HOME="/pnpm"
+ENV PATH="$PNPM_HOME:$PATH"
+RUN corepack enable
 
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
-COPY nuxt.config.ts ./
-COPY tsconfig.json ./
+COPY ./package.json /app/
+COPY ./pnpm-lock.yaml /app/
 
 # Install dependencies
-RUN npm ci --only=production
+RUN pnpm install --shamefully-hoist
+
+# # Rebuild native modules for Linux
+# RUN pnpm rebuild better-sqlite3
 
 # Copy source code
 COPY . .
 
-# Generate Prisma client
-RUN npx prisma generate
-
 # Build the application
-RUN npm run build
+# RUN NUXT_TELEMETRY_DISABLED=1 CI=1 pnpm build
+RUN pnpm build
 
 # Production stage
-FROM node:18-alpine AS runner
+FROM node:22.19.0-slim AS runner
 
 WORKDIR /app
 
+# Install curl for health checks
+RUN apt-get update && apt-get install -y curl && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Define environment variables
+ENV HOST=0.0.0.0 NODE_ENV=production
+ENV NODE_ENV=production
+
 # Create non-root user
-RUN addgroup --system --gid 1001 nuxtjs
-RUN adduser --system --uid 1001 nuxtjs
+RUN groupadd --gid 1001 nuxtjs && useradd --uid 1001 --gid nuxtjs --shell /bin/bash --create-home nuxtjs
 
 # Copy built application
-COPY --from=builder --chown=nuxtjs:nuxtjs /app/.output ./
-COPY --from=builder --chown=nuxtjs:nuxtjs /app/node_modules ./node_modules
+COPY --from=builder /app/.output ./
 
 # Switch to non-root user
 USER nuxtjs
@@ -44,4 +61,4 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
   CMD curl -f http://localhost:3000/health || exit 1
 
 # Start the application
-CMD ["node", "server/index.mjs"]
+CMD ["node", "/app/server/index.mjs"]

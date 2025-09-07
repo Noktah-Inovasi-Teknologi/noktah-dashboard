@@ -1,0 +1,7 @@
+tunnel: 3224d0f7-3553-45cf-91ad-d838aec7f0cb
+credentials-file: /etc/cloudflared/credentials.json
+
+ingress:
+  - hostname: dashboard.noktah.co
+    service: http://nuxt-app:3000
+  - service: http_status:404

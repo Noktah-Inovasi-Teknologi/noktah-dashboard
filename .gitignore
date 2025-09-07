@@ -27,3 +27,22 @@ logs
 data
 log
 secret
+
+# Cloudflare credentials
+config/cloudflare/credentials.json
+
+# Service account keys  
+**/gdrive-service-account.json
+**/*service-account*.json
+
+# SSL certificates
+**/*.pem
+**/*.key
+**/*.crt
+**/*.p12
+**/*.pfx
+
+# Tunnel configs
+cloudflared-config.yml
+tunnel-*.yml
+tunnel-*.json

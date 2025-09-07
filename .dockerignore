@@ -1,0 +1,51 @@
+# Node.js
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Nuxt.js build output
+.nuxt
+.output
+dist
+
+# Development files
+.env.local
+.env.development
+.env.test
+
+# IDE files
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+
+# Logs
+logs
+*.log
+
+# Test files
+coverage
+test
+*.test.js
+*.test.ts
+
+# Documentation
+README.md
+*.md
+
+# Volume mounts
+volume
+data
