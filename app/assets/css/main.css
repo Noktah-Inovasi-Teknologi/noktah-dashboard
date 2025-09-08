@@ -1,0 +1,68 @@
+@import "tailwindcss";
+@import "@nuxt/ui";
+
+@theme static {
+  /* Font Variables */
+  /* Header Typography - 7 levels */
+  --font-header-1: clamp(2.5rem, 2rem + 2.5vw, 4rem);
+  --font-header-2: clamp(2rem, 1.7rem + 1.5vw, 3rem);
+  --font-header-3: clamp(1.75rem, 1.5rem + 1.25vw, 2.5rem);
+  --font-header-4: clamp(1.5rem, 1.3rem + 1vw, 2rem);
+  --font-header-5: clamp(1.25rem, 1.1rem + 0.75vw, 1.75rem);
+  --font-header-6: clamp(1.125rem, 1rem + 0.625vw, 1.5rem);
+  --font-header-7: clamp(1rem, 0.9rem + 0.5vw, 1.25rem);
+
+  /* Paragraph Typography - 7 levels */
+  --font-paragraph-1: clamp(1.125rem, 1rem + 0.625vw, 1.5rem);
+  --font-paragraph-2: clamp(1rem, 0.95rem + 0.25vw, 1.125rem);
+  --font-paragraph-3: clamp(0.875rem, 0.8rem + 0.375vw, 1rem);
+  --font-paragraph-4: clamp(0.8rem, 0.75rem + 0.25vw, 0.9rem);
+  --font-paragraph-5: clamp(0.75rem, 0.7rem + 0.25vw, 0.875rem);
+  --font-paragraph-6: clamp(0.7rem, 0.65rem + 0.25vw, 0.8rem);
+  --font-paragraph-7: clamp(0.65rem, 0.6rem + 0.25vw, 0.75rem);
+
+  /* Font Weights */
+  --font-weight-thin: 100;
+  --font-weight-light: 300;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --font-weight-extrabold: 800;
+  --font-weight-black: 900;
+
+  /* Container Variables - Dashboard specific */
+  --container-sidebar: clamp(16rem, 15rem + 5vw, 20rem);
+  --container-content: clamp(48rem, 45rem + 15vw, 80rem);
+  --container-full: 100%;
+
+  /* Spacing Variables - 5 levels */
+  --spacing-tiny: clamp(0.25rem, 0.2rem + 0.25vw, 0.375rem);
+  --spacing-small: clamp(0.375rem, 0.3rem + 0.375vw, 0.5rem);
+  --spacing-compact: clamp(0.5rem, 0.4rem + 0.5vw, 0.75rem);
+  --spacing-comfortable: clamp(1rem, 0.8rem + 1vw, 1.5rem);
+  --spacing-spacious: clamp(2rem, 1.5rem + 2.5vw, 3rem);
+
+  /* Radius Variables - 1 level */
+  --radius-custom: clamp(0.5rem, 0.4rem + 0.5vw, 0.75rem);
+
+  /* Drop Shadow Variables - 3 levels */
+  --drop-shadow-subtle: 0 1px 3px rgb(0 0 0 / 0.1);
+  --drop-shadow-moderate: 0 4px 12px rgb(0 0 0 / 0.15);
+  --drop-shadow-prominent: 0 20px 40px rgb(0 0 0 / 0.2);
+
+  /* Blur Variables - 3 levels */
+  --blur-light: 8px;
+  --blur-medium: 16px;
+  --blur-heavy: 32px;
+
+  /* Easing Variables - 3 levels */
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-snappy: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --ease-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+
+  /* Animation Variables - 3 levels */
+  --animate-fast: 200ms;
+  --animate-normal: 400ms;
+  --animate-slow: 800ms;
+}

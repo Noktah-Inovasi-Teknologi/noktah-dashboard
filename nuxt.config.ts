@@ -1,6 +1,8 @@
-// https://nuxt.com/docs/api/configuration/nuxt-config
+import tailwindcss from "@tailwindcss/vite";
+
 export default defineNuxtConfig({
   compatibilityDate: "2025-07-15",
+  css: ["~/assets/css/main.css"],
   content: {
     database: {
       type: "postgres",
@@ -29,4 +31,26 @@ export default defineNuxtConfig({
     "@nuxt/content",
     "@nuxtjs/kinde",
   ],
+  routeRules: {
+    "/**": {
+      appMiddleware: ["auth-logged-in"],
+      kinde: {
+        redirectUrl: "/api/login",
+        external: true,
+      },
+    },
+    "/workflows": {
+      appMiddleware: ["auth-logged-in"],
+      kinde: {
+        permissions: {
+          "noktah-dashboard:admin": true,
+        },
+        redirectUrl: "/api/login",
+        external: true,
+      },
+    },
+  },
+  vite: {
+    plugins: [tailwindcss()],
+  },
 });
