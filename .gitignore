@@ -9,6 +9,90 @@ dist
 # Node dependencies
 node_modules
 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Prefect
+.prefect/
+prefect.db
+prefect.db-wal
+prefect.db-shm
+
 # Logs
 logs
 *.log
@@ -35,6 +119,10 @@ config/cloudflare/credentials.json
 **/gdrive-service-account.json
 **/*service-account*.json
 
+# Google OAuth client secrets and tokens
+**/client_secret_*.json
+**/token.json
+
 # SSL certificates
 **/*.pem
 **/*.key
@@ -46,3 +134,10 @@ config/cloudflare/credentials.json
 cloudflared-config.yml
 tunnel-*.yml
 tunnel-*.json
+
+# Additional credential backups
+**/credentials.json
+**/*credentials*.json
+*.backup
+*.bak
+service/prefect/CUsersbagasDocumentsGitHubnoktah-dashboardserviceprefecttoken.json

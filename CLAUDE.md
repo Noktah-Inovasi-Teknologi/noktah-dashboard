@@ -13,7 +13,7 @@ Enterprise dashboard platform for AI-powered data analysis and content creation,
 # Install dependencies
 pnpm install
 
-# Development server (http://localhost:3000)
+# Development server (http://localhost:3002)
 pnpm dev
 
 # Production build
@@ -32,7 +32,22 @@ pnpm test:unit
 pnpm test:nuxt
 ```
 
-### Backend Services (Python/CrewAI)
+### Backend Services
+
+#### Prefect Workflows (Python)
+```bash
+# Run flows inside Prefect container (recommended)
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py
+
+# Run flows locally (requires environment setup)
+cd service/prefect
+python run_flow.py
+
+# Access Prefect UI
+# http://localhost:4200
+```
+
+#### CrewAI Service (Currently Disabled)
 ```bash
 # Install Python dependencies
 cd service/crewai
@@ -48,37 +63,29 @@ uvicorn main:app --reload --port 8000
 
 ### Docker Environment
 ```bash
-# Development environment (minimal services: nuxt, postgres, redis, prefect, crewai)
-docker-compose -f docker-compose.dev.yml up -d
+# Start all services (full stack with monitoring)
+docker-compose up -d
 
-# Production environment (full monitoring stack)
-docker-compose -f docker-compose.prod.yml up -d
+# Start core services only
+docker-compose up -d postgres redis
 
-# Development: Start core services only
-docker-compose -f docker-compose.dev.yml up -d postgres redis
-
-# Production: Start core services only (without Nuxt app)
-docker-compose -f docker-compose.prod.yml up -d postgres redis prometheus grafana loki promtail
+# Start with specific services
+docker-compose up -d postgres redis nuxt-app
 
 # Graceful shutdown
-docker-compose -f docker-compose.dev.yml down  # Development
-docker-compose -f docker-compose.prod.yml down  # Production
+docker-compose down
 
 # Force rebuild and restart (after code changes)
-docker-compose -f docker-compose.dev.yml down && docker-compose -f docker-compose.dev.yml up -d --build  # Development
-docker-compose -f docker-compose.prod.yml down && docker-compose -f docker-compose.prod.yml up -d --build  # Production
+docker-compose down && docker-compose up -d --build
 
 # View service status
-docker-compose -f docker-compose.dev.yml ps  # Development
-docker-compose -f docker-compose.prod.yml ps  # Production
+docker-compose ps
 
 # View logs (all services)
-docker-compose -f docker-compose.dev.yml logs -f  # Development
-docker-compose -f docker-compose.prod.yml logs -f  # Production
+docker-compose logs -f
 
 # View logs (specific service)
-docker-compose -f docker-compose.dev.yml logs -f [service_name]  # Development
-docker-compose -f docker-compose.prod.yml logs -f [service_name]  # Production
+docker-compose logs -f [service_name]
 
 # Monitor resource usage
 docker stats
@@ -138,7 +145,12 @@ chmod +x ./cloudflared
 - `script/` - Setup and utility scripts
 - `secrets/` - Secret files (not in version control)
 
-### CrewAI Service Architecture
+### Prefect Service Architecture
+- `flows/` - Workflow definitions (content plan spreadsheet reader implemented)
+- `tasks/` - Task definitions (Google Sheets and Jira tasks implemented)
+- `run_flow.py` - Local flow execution script with environment setup
+
+### CrewAI Service Architecture (Currently Disabled)
 - `agent/` - AI agent definitions (currently empty, needs implementation)
 - `crew/` - Crew workflow definitions (currently empty, needs implementation)  
 - `model/` - Pydantic request/response models
@@ -147,22 +159,15 @@ chmod +x ./cloudflared
 
 ## Service Endpoints & Ports
 
-### Development Environment
-- **Nuxt App**: http://localhost:3000 (Nuxt 4 application)
-- **CrewAI API**: http://localhost:8000 (FastAPI with Swagger docs at `/docs`)
-- **Prefect Workflows**: http://localhost:4200 (workflow orchestration)
-- **PostgreSQL Database**: localhost:5432
-- **Redis Cache**: localhost:6379
-
-### Production Environment
+### Service Endpoints & Ports
 - **Main Dashboard**: http://localhost (Nginx proxy, ports 80/443)
-- **Nuxt App Direct**: http://localhost:3000 (Nuxt 4 application)
+- **Nuxt App**: http://localhost:3000 (Nuxt 4 application in Docker, 3002 for local dev)
 - **Grafana Monitoring**: http://localhost:3001 (dashboards & analytics)
 - **Prometheus Metrics**: http://localhost:9090 (raw metrics data)
-- **CrewAI API**: http://localhost:8000 (FastAPI with Swagger docs at `/docs`)
 - **Prefect Workflows**: http://localhost:4200 (workflow orchestration)
 - **PostgreSQL Database**: localhost:5432
 - **Redis Cache**: localhost:6379
+- **CrewAI API**: http://localhost:8000 (currently disabled in docker-compose.yml)
 
 ### Health Check Endpoints
 - **Nuxt App**: http://localhost:3000/api/health-check
@@ -183,8 +188,16 @@ POSTGRES_PASSWORD=your_secure_password
 # Redis Configuration  
 REDIS_PASSWORD=your_redis_password
 
-# Authentication
-JWT_SECRET=your_jwt_secret_key
+# Prefect Configuration
+PREFECT_API_URL=http://localhost:4200/api
+PREFECT_UI_URL=http://localhost:4200
+
+# Kinde Authentication
+NUXT_KINDE_DOMAIN=your_kinde_domain
+NUXT_KINDE_CLIENT_ID=your_kinde_client_id
+NUXT_KINDE_CLIENT_SECRET=your_kinde_client_secret
+NUXT_KINDE_REDIRECT_URL=your_redirect_url
+NUXT_KINDE_LOGOUT_REDIRECT_URL=your_logout_redirect_url
 
 # Google Services
 GOOGLE_CLIENT_ID=your_google_client_id
@@ -194,7 +207,7 @@ GOOGLE_DRIVE_FOLDER_ID=your_drive_folder_id
 # AI Services
 OPENROUTER_API_KEY=your_openrouter_api_key
 
-# Monitoring (Production)
+# Monitoring
 GRAFANA_ADMIN_PASSWORD=your_grafana_password
 
 # Backup Configuration
@@ -206,7 +219,7 @@ SENTRY_DSN=your_sentry_dsn
 ```
 
 ### Required External Services
-- **Google OAuth2** - User authentication
+- **Kinde** - User authentication
 - **Google Drive API** - Backup storage  
 - **OpenRouter** - AI model access
 - **Sentry** - Error tracking (optional)
@@ -283,13 +296,15 @@ SENTRY_DSN=your_sentry_dsn
 
 ### Current Implementation Status
 - ✅ Nuxt 4 frontend with TypeScript and Vue 3
-- ✅ Docker development and production environments
-- ✅ FastAPI foundation with authentication middleware
+- ✅ Docker environment with single compose file
+- ✅ Kinde authentication integration
 - ✅ Testing framework configured (Vitest + Playwright)
 - ✅ Backup automation with Google Drive integration
 - ✅ Health check endpoints implemented
-- ⚠️ CrewAI agents and crews need implementation
-- ⚠️ Database and Redis utility classes need implementation
+- ✅ Full monitoring stack (Prometheus/Grafana/Loki)
+- ✅ Prefect workflows with Google Sheets integration (fully working in container)
+- ✅ Prefect tasks for Google API and Jira operations
+- ⚠️ CrewAI service implemented but disabled in docker-compose.yml
 - ⚠️ Frontend application pages need development
 
 ### Missing Implementations
