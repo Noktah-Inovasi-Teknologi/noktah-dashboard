@@ -1,10 +1,13 @@
 """
 Google Credentials Block for Prefect workflows
+
+This module provides Prefect Blocks for securely storing and managing
+Google API credentials with automatic token refresh and service initialization.
 """
 import os
-import json
 import logging
-from typing import Dict, List, Any, Optional, Union, TYPE_CHECKING
+from typing import Dict, List, Any, Optional, TYPE_CHECKING
+
 from prefect.blocks.core import Block
 from pydantic import Field, SecretStr
 from google.auth.transport.requests import Request
@@ -57,15 +60,13 @@ class GoogleCredentials(Block):
         description="Path to store/load refresh token"
     )
     
-    # Scopes
+    # Scopes (only Sheets and Drive are used in this project)
     scopes: List[str] = Field(
         default=[
             'https://www.googleapis.com/auth/spreadsheets',
-            'https://www.googleapis.com/auth/drive',
-            'https://www.googleapis.com/auth/calendar',
-            'https://www.googleapis.com/auth/documents'
+            'https://www.googleapis.com/auth/drive.readonly'
         ],
-        description="Google API scopes"
+        description="Google API scopes (Sheets read/write, Drive read-only)"
     )
     
     def get_client(self) -> 'GoogleClient':
@@ -98,12 +99,16 @@ class GoogleCredentials(Block):
 class GoogleClient:
     """
     Google API client with OAuth2 authentication and token refresh handling.
-    
-    This client manages authentication credentials, handles token refresh automatically,
-    and provides methods for interacting with multiple Google APIs including
-    Sheets, Drive, Calendar, and Documents.
+
+    This client manages authentication credentials, handles automatic token refresh,
+    and provides methods for interacting with Google Sheets and Drive APIs.
+
+    Attributes:
+        credentials: Google OAuth2 credentials object
+        sheets_service: Google Sheets API service (initialized lazily)
+        drive_service: Google Drive API service (initialized lazily)
     """
-    
+
     def __init__(
         self,
         client_id: Optional[str] = None,
@@ -115,67 +120,76 @@ class GoogleClient:
     ):
         """
         Initialize Google client with OAuth2 credentials.
-        
+
         Args:
             client_id: Google OAuth2 Client ID
             client_secret: Google OAuth2 Client Secret
             refresh_token: Google OAuth2 Refresh Token
-            credentials_file: Path to client secrets JSON file
+            credentials_file: Path to client secrets JSON file (for local OAuth flow)
             token_file: Path to store/load refresh token
-            scopes: Google API scopes
+            scopes: Google API scopes (defaults to Sheets and Drive read-only)
+
+        Raises:
+            ValueError: If credentials cannot be initialized
         """
-        # Set default scopes
+        # Set default scopes (only what's needed)
         self.scopes = scopes or [
             'https://www.googleapis.com/auth/spreadsheets',
-            'https://www.googleapis.com/auth/drive',
-            'https://www.googleapis.com/auth/calendar',
-            'https://www.googleapis.com/auth/documents'
+            'https://www.googleapis.com/auth/drive.readonly'
         ]
-        
-        # Set credentials from parameters or environment
+
+        # Set credentials from parameters or environment variables
         self.client_id = client_id or os.getenv('GOOGLE_CLIENT_ID')
         self.client_secret = client_secret or os.getenv('GOOGLE_CLIENT_SECRET')
         self.refresh_token = refresh_token or os.getenv('GOOGLE_REFRESH_TOKEN')
-        
+
         # Set file paths
-        self.credentials_file = credentials_file or self._get_default_credentials_file()
-        self.token_file = token_file or os.path.join(os.path.dirname(__file__), '..', 'token.json')
-        
-        self.credentials = None
-        self.service = None
-        
+        self.credentials_file = credentials_file
+        self.token_file = token_file or os.path.join(
+            os.path.dirname(__file__), '..', 'token.json'
+        )
+
+        # Service instances (lazy initialization)
+        self.credentials: Optional[Credentials] = None
+        self._sheets_service = None
+        self._drive_service = None
+
         # Initialize credentials
         self._initialize_credentials()
     
-    def _get_default_credentials_file(self) -> str:
-        """Get the default path to the client secrets file."""
-        current_dir = os.path.dirname(os.path.dirname(__file__))  # Go up one level from blocks/
-        # Look for the client secrets file
-        for file in os.listdir(current_dir):
-            if file.startswith('client_secret_') and file.endswith('.json'):
-                return os.path.join(current_dir, file)
-        
-        raise FileNotFoundError(
-            "No client secrets file found. Please ensure the OAuth2 client secrets "
-            "file is present in the service directory."
-        )
-    
-    def _initialize_credentials(self):
-        """Initialize Google API credentials using OAuth2 flow or saved tokens."""
+    def _initialize_credentials(self) -> None:
+        """
+        Initialize Google API credentials using one of three methods:
+        1. Load from saved token file (if exists and valid)
+        2. Use refresh token from environment variables (production)
+        3. Run OAuth2 flow using client secrets file (local development)
+
+        Raises:
+            ValueError: If credentials cannot be initialized
+        """
         credentials = None
-        
+
         # Method 1: Load from saved token file (if exists)
         if self.token_file and os.path.exists(self.token_file):
             try:
-                credentials = Credentials.from_authorized_user_file(self.token_file, self.scopes)
+                credentials = Credentials.from_authorized_user_file(
+                    self.token_file,
+                    self.scopes
+                )
+                logger.info(f"Loaded credentials from token file: {self.token_file}")
             except Exception as e:
                 logger.warning(f"Failed to load token file: {e}")
                 credentials = None
-        
-        # Method 2: Use refresh token from environment variable (for production)
-        elif self.refresh_token and self.client_id and self.client_secret:
+
+        # Method 2: Use refresh token from environment variables (production/Docker)
+        if (not credentials or not credentials.valid) and self.refresh_token:
+            if not self.client_id or not self.client_secret:
+                raise ValueError(
+                    "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set when using GOOGLE_REFRESH_TOKEN"
+                )
+
             credentials = Credentials(
-                token=None,  # Will be refreshed
+                token=None,  # Will be refreshed immediately
                 refresh_token=self.refresh_token,
                 id_token=None,
                 token_uri='https://oauth2.googleapis.com/token',
@@ -183,89 +197,120 @@ class GoogleClient:
                 client_secret=self.client_secret,
                 scopes=self.scopes
             )
-            # Try to refresh the token immediately
+
+            # Refresh token immediately to get access token
             try:
                 credentials.refresh(Request())
+                logger.info("Successfully refreshed credentials using refresh token")
             except Exception as e:
                 logger.error(f"Failed to refresh credentials: {e}")
+                raise ValueError(
+                    f"Failed to refresh Google credentials. Check your environment variables: {e}"
+                )
+
+        # Check if token needs refresh
+        if credentials and credentials.expired and credentials.refresh_token:
+            try:
+                credentials.refresh(Request())
+                logger.info("Refreshed expired credentials")
+            except Exception as e:
+                logger.warning(f"Failed to refresh expired credentials: {e}")
                 credentials = None
-        
-        # Method 3: Run OAuth2 flow using client secrets file (development/initial setup)
+
+        # Method 3: Run OAuth2 flow using client secrets file (local development only)
         if not credentials or not credentials.valid:
-            if credentials and credentials.expired and credentials.refresh_token:
-                try:
-                    credentials.refresh(Request())
-                except Exception as e:
-                    logger.warning(f"Failed to refresh credentials: {e}")
-                    credentials = None
-            
-            # Only try OAuth flow if no credentials and not in container environment
-            if not credentials:
-                if os.getenv('GOOGLE_REFRESH_TOKEN'):
-                    logger.error("Failed to create credentials using refresh token. Check environment variables.")
-                    raise ValueError("Google credentials setup failed. Check GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN environment variables.")
-                else:
-                    credentials = self._run_oauth_flow()
-        
-        # Save credentials for next time
+            if self.credentials_file:
+                credentials = self._run_oauth_flow()
+            else:
+                raise ValueError(
+                    "No valid credentials available. Set GOOGLE_REFRESH_TOKEN environment "
+                    "variable or provide credentials_file for OAuth flow."
+                )
+
+        # Save credentials for next time (if token file path is provided)
         if credentials and self.token_file:
             self._save_credentials(credentials)
-        
+
+        # Store credentials
         self.credentials = credentials
-        
-        # Build the Google services (default to Sheets, but can build others as needed)
-        if self.credentials:
-            self.sheets_service = build('sheets', 'v4', credentials=self.credentials)
-            # Other services can be built on demand
-            self._drive_service = None
-            self._calendar_service = None
-            self._docs_service = None
-        else:
-            raise ValueError("Failed to initialize Google credentials")
+
+        if not self.credentials or not self.credentials.valid:
+            raise ValueError("Failed to initialize valid Google credentials")
     
     def _run_oauth_flow(self) -> Credentials:
-        """Run the OAuth2 flow to get new credentials."""
+        """
+        Run the OAuth2 flow to get new credentials via browser.
+
+        This is used for local development only. In production, use refresh tokens.
+
+        Returns:
+            Credentials object with access and refresh tokens
+
+        Raises:
+            FileNotFoundError: If credentials_file doesn't exist
+        """
         if not self.credentials_file or not os.path.exists(self.credentials_file):
             raise FileNotFoundError(
                 f"Client secrets file not found: {self.credentials_file}. "
-                "Please ensure you have downloaded the OAuth2 client secrets from Google Console."
+                "Download OAuth2 credentials from Google Cloud Console."
             )
-        
+
         flow = InstalledAppFlow.from_client_secrets_file(
-            self.credentials_file, 
+            self.credentials_file,
             self.scopes
         )
-        
-        # Run local server flow using port 8080 (matches OAuth redirect URI)
+
+        # Run local server flow on port 8080 (must match OAuth redirect URI)
         credentials = flow.run_local_server(port=8080)
-        
+        logger.info("OAuth flow completed successfully")
+
         return credentials
-    
-    def _save_credentials(self, credentials: Credentials):
-        """Save credentials to token file for future use."""
+
+    def _save_credentials(self, credentials: Credentials) -> None:
+        """
+        Save credentials to token file for future use.
+
+        Args:
+            credentials: Google OAuth2 credentials to save
+        """
         try:
+            # Ensure directory exists
+            token_dir = os.path.dirname(self.token_file)
+            if token_dir:
+                os.makedirs(token_dir, exist_ok=True)
+
+            # Write credentials JSON
             with open(self.token_file, 'w') as token:
                 token.write(credentials.to_json())
+
+            logger.info(f"Saved credentials to: {self.token_file}")
         except Exception as e:
             logger.warning(f"Failed to save credentials: {e}")
-    
+
+    @property
+    def sheets_service(self):
+        """
+        Get Google Sheets API service with lazy initialization.
+
+        Returns:
+            Google Sheets API service instance
+        """
+        if not self._sheets_service:
+            self._sheets_service = build('sheets', 'v4', credentials=self.credentials)
+            logger.debug("Initialized Google Sheets service")
+        return self._sheets_service
+
     def get_drive_service(self):
-        """Get Google Drive service (lazy initialization)"""
+        """
+        Get Google Drive API service with lazy initialization.
+
+        Returns:
+            Google Drive API service instance
+        """
         if not self._drive_service:
             self._drive_service = build('drive', 'v3', credentials=self.credentials)
+            logger.debug("Initialized Google Drive service")
         return self._drive_service
-    
-    def get_calendar_service(self):
-        """Get Google Calendar service (lazy initialization)"""
-        if not self._calendar_service:
-            self._calendar_service = build('calendar', 'v3', credentials=self.credentials)
-        return self._calendar_service
-    
-    def get_docs_service(self):
-        """Get Google Docs service (lazy initialization)"""
-        if not self._docs_service:
-            self._docs_service = build('docs', 'v1', credentials=self.credentials)
-        return self._docs_service
     
     def test_connection(self) -> Dict[str, Any]:
         """Test the Google API connection."""

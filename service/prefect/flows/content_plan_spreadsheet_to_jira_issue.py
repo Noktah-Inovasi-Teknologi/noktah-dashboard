@@ -1122,106 +1122,220 @@ async def bulk_create_jira_issues_flow(
 
 if __name__ == "__main__":
     import asyncio
-    
+    import argparse
+
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description="Content Plan to Jira Issues Workflow",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Process for next month (default)
+  python content_plan_spreadsheet_to_jira_issue.py
+
+  # Process for specific month in Indonesian format
+  python content_plan_spreadsheet_to_jira_issue.py --month "Januari 2026"
+
+  # Process for specific month in English format
+  python content_plan_spreadsheet_to_jira_issue.py --month "January 2026"
+
+  # Process with specific month and year separately
+  python content_plan_spreadsheet_to_jira_issue.py --month-name Januari --year 2026
+        """
+    )
+
+    parser.add_argument(
+        "--month",
+        type=str,
+        default=None,
+        help='Target month in "Month YYYY" format (e.g., "Januari 2026", "January 2026"). If not provided, uses next month.'
+    )
+
+    parser.add_argument(
+        "--month-name",
+        type=str,
+        default=None,
+        help='Month name only (e.g., "Januari", "January"). Must be used with --year.'
+    )
+
+    parser.add_argument(
+        "--year",
+        type=int,
+        default=None,
+        help='Year (e.g., 2026). Must be used with --month-name.'
+    )
+
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Only validate Jira issues without creating them (dry run)"
+    )
+
+    args = parser.parse_args()
+
+    # Determine target month
+    target_month = None
+    if args.month:
+        target_month = args.month
+    elif args.month_name and args.year:
+        target_month = f"{args.month_name} {args.year}"
+    elif args.month_name or args.year:
+        parser.error("--month-name and --year must be used together")
+
     async def main():
         """
         Complete Content Plan to Jira Issues Workflow
         Numbered steps for clear execution tracking
         """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
+
         # Create run-specific output directory
         run_output_dir = os.path.join(OUTPUT_DIR, timestamp)
         os.makedirs(run_output_dir, exist_ok=True)
-        
+
+        # Log execution parameters
+        execution_params = {
+            "timestamp": timestamp,
+            "target_month": target_month or "Next month (auto)",
+            "validate_only": args.validate_only
+        }
+        print(f"\n{'='*60}")
+        print(f"Content Plan to Jira Issues Workflow")
+        print(f"{'='*60}")
+        print(f"Target Month: {execution_params['target_month']}")
+        print(f"Validate Only: {execution_params['validate_only']}")
+        print(f"Output Directory: {run_output_dir}")
+        print(f"{'='*60}\n")
+
         # Step 1: Read client data from main spreadsheet
+        print("[Step 1/8] Reading client data from main spreadsheet...")
         step1_result = await read_content_plan_flow()
-        
+
         if "error" not in step1_result:
             output_path1 = os.path.join(run_output_dir, "step1_client_data.json")
             save_to_json(step1_result, output_path1)
+            print(f"✓ Successfully read {step1_result.get('total_rows', 0)} clients")
         else:
+            print(f"✗ Error: {step1_result['error']}")
             return
-        
+
         # Step 2: Search for content plan files in client folders
+        print(f"\n[Step 2/8] Searching for content plan files (target: {target_month or 'next month'})...")
         step2_result = await search_content_plan_files_flow(
-            target_month="September 2025"
+            target_month=target_month
         )
-        
+
         if "error" not in step2_result:
             output_path2 = os.path.join(run_output_dir, "step2_content_plan_search.json")
             save_to_json(step2_result, output_path2)
+            summary = step2_result.get("summary", {})
+            print(f"✓ Found {summary.get('clients_with_content_plans', 0)} content plans out of {summary.get('total_clients', 0)} clients")
         else:
+            print(f"✗ Error: {step2_result['error']}")
             return
-        
+
         # Step 3: Filter results for all clients
+        print(f"\n[Step 3/8] Filtering content plan results...")
         step3_result = await filter_content_plan_results_flow(
-            target_month="September 2025"
+            target_month=target_month
         )
-        
+
         if "error" not in step3_result:
             output_path3 = os.path.join(run_output_dir, "step3_filtered_results.json")
             save_to_json(step3_result, output_path3)
+            summary = step3_result.get("summary", {})
+            print(f"✓ Filtered {summary.get('filtered_total', 0)} clients")
         else:
+            print(f"✗ Error: {step3_result['error']}")
             return
-        
+
         # Step 4: Read content plan data with delays
+        print(f"\n[Step 4/8] Reading content plan data with rate limiting...")
         step4_result = await read_content_plan_data_flow(
-            target_month="September 2025",
+            target_month=target_month,
             min_delay_seconds=2,
             max_delay_seconds=4
         )
-        
+
         if "error" not in step4_result:
             output_path4 = os.path.join(run_output_dir, "step4_content_plan_data.json")
             save_to_json(step4_result, output_path4)
+            summary = step4_result.get("summary", {})
+            print(f"✓ Successfully processed {summary.get('successfully_processed', 0)} content plans")
         else:
+            print(f"✗ Error: {step4_result['error']}")
             return
-        
+
         # Step 5: Format data uniformly
+        print(f"\n[Step 5/8] Formatting data uniformly...")
         step5_result = await format_data_processor_flow(
             max_rows=3,
             output_filename="step5_formatted_data.json",
             timestamp=timestamp
         )
-        
+        print(f"✓ Data formatting complete")
+
         # Step 6: Convert content plan to Jira assets
+        print(f"\n[Step 6/8] Converting content plans to Jira issue format...")
         step6_result = await convert_content_plan_to_jira_assets_flow(
-            target_month="September 2025",
+            target_month=target_month,
             timestamp=timestamp
         )
-        
+
         if "error" not in step6_result:
             output_path6 = os.path.join(run_output_dir, "step6_jira_assets.json")
             save_to_json(step6_result, output_path6)
+            summary = step6_result.get("summary", {})
+            print(f"✓ Created {summary.get('total_assets_created', 0)} Jira assets for {summary.get('total_clients_processed', 0)} clients")
         else:
+            print(f"✗ Error: {step6_result['error']}")
             return
-        
+
         # Step 7: Validate Jira issues per client (dry run)
         if "error" not in step6_result and "output_files" in step6_result:
             client_files = step6_result["output_files"]["client_files"]
-            
+
+            print(f"\n[Step 7/8] Validating Jira issues (dry run)...")
             step7_result = await bulk_create_jira_issues_per_client_flow(
                 client_files=client_files,
                 max_issues=45,
                 validate_only=True,
                 timestamp=timestamp
             )
-            
+
             if "error" not in step7_result:
                 output_path7 = os.path.join(run_output_dir, "step7_validation_per_client.json")
                 save_to_json(step7_result, output_path7)
-            
+                summary = step7_result.get("summary", {})
+                print(f"✓ Validation complete: {summary.get('clients_processed', 0)} clients validated")
+            else:
+                print(f"✗ Validation error: {step7_result['error']}")
+
             # Step 8: Create Jira issues in bulk per client (production)
-            step8_result = await bulk_create_jira_issues_per_client_flow(
-                client_files=client_files,
-                max_issues=45,
-                validate_only=False,
-                timestamp=timestamp
-            )
-            
-            if "error" not in step8_result:
-                output_path8 = os.path.join(run_output_dir, "step8_bulk_creation_per_client.json")
-                save_to_json(step8_result, output_path8)
-    
+            if not args.validate_only:
+                print(f"\n[Step 8/8] Creating Jira issues in bulk...")
+                step8_result = await bulk_create_jira_issues_per_client_flow(
+                    client_files=client_files,
+                    max_issues=45,
+                    validate_only=False,
+                    timestamp=timestamp
+                )
+
+                if "error" not in step8_result:
+                    output_path8 = os.path.join(run_output_dir, "step8_bulk_creation_per_client.json")
+                    save_to_json(step8_result, output_path8)
+                    summary = step8_result.get("summary", {})
+                    print(f"✓ Successfully created {summary.get('total_issues_created', 0)} Jira issues")
+                    print(f"  Successful clients: {summary.get('successful_clients', 0)}")
+                    print(f"  Failed clients: {summary.get('failed_clients', 0)}")
+                else:
+                    print(f"✗ Creation error: {step8_result['error']}")
+            else:
+                print(f"\n[Step 8/8] Skipped (validate-only mode)")
+
+        print(f"\n{'='*60}")
+        print(f"Workflow Complete!")
+        print(f"Results saved to: {run_output_dir}")
+        print(f"{'='*60}\n")
+
     asyncio.run(main())

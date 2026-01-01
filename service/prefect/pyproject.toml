@@ -1,0 +1,28 @@
+[project]
+name = "prefect-noktah"
+version = "0.1.0"
+description = "Prefect service for Noktah Dashboard"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    # Workflow orchestration
+    "prefect>=3.6.9",
+
+    # Database driver (async for Prefect 3.x)
+    "asyncpg>=0.30.0",
+
+    # Data processing
+    "pandas>=2.3.3",
+
+    # API integrations
+    "atlassian-python-api>=4.0.7",
+    "google-api-python-client>=2.187.0",
+    "google-auth>=2.40.3",
+    "google-auth-oauthlib>=1.2.2",
+
+    # HTTP client
+    "requests>=2.32.5",
+
+    # Configuration management
+    "pydantic-settings>=2.0.0",
+]

@@ -67,8 +67,15 @@ services:
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
       - GOOGLE_REFRESH_TOKEN=${GOOGLE_REFRESH_TOKEN}
+      - JIRA_URL=${JIRA_URL}
+      - JIRA_USERNAME=${JIRA_USERNAME}
+      - JIRA_TOKEN=${JIRA_API_TOKEN}
     volumes:
-      - ./service/prefect:/app
+      # Mount source files but exclude .venv (use container's venv instead)
+      - ./service/prefect/flows:/app/flows
+      - ./service/prefect/tasks:/app/tasks
+      - ./service/prefect/blocks:/app/blocks
+      - ./service/prefect/data:/app/data
     depends_on:
       - postgres
       - redis
@@ -80,33 +87,6 @@ services:
           cpus: "1.0"
           memory: "1G"
 
-  # CrewAI Service
-  # crewai:
-  #   build:
-  #     context: ./service/crewai
-  #     dockerfile: Dockerfile
-  #   container_name: crewai
-  #   restart: unless-stopped
-  #   ports:
-  #     - "8000:8000"
-  #   env_file:
-  #     - .env
-  #   environment:
-  #     - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-  #     - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
-  #     - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-  #     - ENVIRONMENT=production
-  #   depends_on:
-  #     - postgres
-  #     - redis
-  #   networks:
-  #     - dashboard-networks
-  #   deploy:
-  #     resources:
-  #       limits:
-  #         cpus: "1.0"
-  #         memory: "2G"
-  
   # Database
   postgres:
     image: postgres:15.14-alpine
@@ -164,95 +144,6 @@ services:
       interval: 20s
       timeout: 10s
       retries: 5
-  
-  # Monitoring
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-    restart: unless-stopped
-    ports:
-      - "9090:9090"
-    env_file:
-      - .env
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=15d'
-      - '--web.enable-lifecycle'
-    volumes:
-      - ./config/prometheus:/etc/prometheus:ro
-      - prometheus_data:/prometheus
-    networks:
-      - dashboard-networks
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: "1G"
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    restart: unless-stopped
-    ports:
-      - "3001:3000"
-    env_file:
-      - .env
-    environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
-      - GF_USERS_ALLOW_SIGN_UP=false
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
-    depends_on:
-      - prometheus
-    networks:
-      - dashboard-networks
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: "1G"
-
-  # Logging
-  loki:
-    image: grafana/loki:latest
-    container_name: loki
-    restart: unless-stopped
-    ports:
-      - "3100:3100"
-    env_file:
-      - .env
-    command: -config.file=/etc/loki/local-config.yaml
-    volumes:
-      - loki_data:/loki
-      - ./config/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
-    networks:
-      - dashboard-networks
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: "1G"
-
-  promtail:
-    image: grafana/promtail:latest
-    container_name: promtail
-    restart: unless-stopped
-    env_file:
-      - .env
-    volumes:
-      - ./logs:/var/log:ro
-      - ./config/promtail/promtail-config.yaml:/etc/promtail/config.yml:ro
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-    command: -config.file=/etc/promtail/config.yml
-    networks:
-      - dashboard-networks
-    depends_on:
-      - loki
 
   # Cloudflare Tunnel
   cloudflared:
@@ -271,40 +162,9 @@ services:
     networks:
       - dashboard-networks
 
-  # Backup Service
-  backup-service:
-    build:
-      context: ./service/backup
-      dockerfile: Dockerfile
-    container_name: backup-service
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-      - GOOGLE_DRIVE_FOLDER_ID=${GOOGLE_DRIVE_FOLDER_ID}
-      - BACKUP_SCHEDULE=${BACKUP_SCHEDULE}
-      - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS}
-    volumes:
-      - ./secrets:/secrets:ro
-      - ./data/backups:/backups
-      - postgres_data:/backup-source/postgres:ro
-      - redis_data:/backup-source/redis:ro
-    depends_on:
-      - postgres
-      - redis
-    networks:
-      - dashboard-networks
-
 volumes:
   postgres_data:
   redis_data:
-  prometheus_data:
-  grafana_data:
-  loki_data:
 
 networks:
   dashboard-networks:

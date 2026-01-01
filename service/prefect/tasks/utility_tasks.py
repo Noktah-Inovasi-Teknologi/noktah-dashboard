@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Literal, Optional, Dict, List, Any
 from prefect import task
 from prefect.logging import get_run_logger
-from hashmap import WORKERS, FIELD_ASSOCIATE, CONTENT_EDITOR
+from hashmap import WORKERS, FIELD_ASSOCIATE, CONTENT_EDITOR, COMPONENTS
 
 logger = logging.getLogger(__name__)
 
@@ -405,7 +405,7 @@ def process_row_uniform(row: Dict[str, Any], row_index: int) -> Dict[str, Any]:
 def convert_content_plan_row_to_jira_issue(
     row: Dict[str, Any], 
     client_name: str,
-    component_hashmap: Optional[Dict[str, str]] = None
+    component_hashmap: Optional[Dict[str, str]] = COMPONENTS
 ) -> Dict[str, Any]:
     """
     Convert a content plan row to Jira issue type 10009 (Asset) format
@@ -422,27 +422,7 @@ def convert_content_plan_row_to_jira_issue(
     
     # Default component hashmap based on issue_type_10009_fields.json
     if component_hashmap is None:
-        component_hashmap = {
-            "Balakosa Rewind and Play": "10034",
-            "Ecky Dental Center": "10000",
-            "Gudang Karung Jumbo Sidoarjo": "10010",
-            "Kabin Event Organizer": "10003",
-            "Karsa Studio": "10099",
-            "Klinik Mata Bireuen": "10101",
-            "Klinik Mata Boyolali": "10008",
-            "Klinik Mata Jogja": "10068",
-            "Klinik Mata Sampang": "10006",
-            "Klinik Spesialis Langsa": "10033",
-            "Klinik Utama Gresik": "10007",
-            "Klinik Utama Sumenep": "10005",
-            "Lasik Asyik by SMEC Tebet": "10009",
-            "Nirwana Coffee Space Pamekasan": "10002",
-            "Nirwana Coffee Space Sumenep": "10001",
-            "Pelita Delapan": "10100",
-            "Qur'anic Integrated School of Muhammadiyah (QISMu)": "10004",
-            "RS Mata SMEC Balikpapan": "10067",
-            "Satoe Rock Steak": "10066"
-        }
+        component_hashmap = COMPONENTS
     
     try:
         # Extract summary from "Topik" column
@@ -572,6 +552,18 @@ def convert_content_plan_row_to_jira_issue(
                             "type": "paragraph",
                             "content": [
                                 {"type": "text", "text": format_text_field_uniform(row.get('Visualisasi Konten', ''))}
+                            ]
+                        },
+                        {
+                            "type": "paragraph",
+                            "content": [
+                                {"type": "text", "text": "Asset: ", "marks": [{"type": "strong"}]},
+                            ]
+                        },
+                        {
+                            "type": "paragraph",
+                            "content": [
+                                {"type": "text", "text": format_text_field_uniform(row.get('Asset', ''))}
                             ]
                         },
                         {
