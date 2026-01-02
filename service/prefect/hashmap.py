@@ -8,8 +8,10 @@ WORKERS = {
     "Halimatudz Dzakiyah": "712020:aca16589-e25b-416f-b295-fe663315a99d",
     "Nathaniella Dwi Arthanti": "712020:d1149fc3-0a52-4277-a83b-3ef564cb889b",
     "Noktah Inovasi Teknologi": "712020:5f41db40-76d3-400a-a78a-df5dc433c8cc",
-    "Saladin Abdul Tawaab Al Aziz": "712020:e9225fd2-2f84-41da-8a84-d68ff48f2aa0",
     "Siti Nurhayati": "712020:c4884994-9302-4d63-bc22-513656d41516",
+    "Prastara Dito": "712020:3ff573f8-3d40-466b-9abc-6dcae8a45201",
+    "Muhammad Rozzan Abdillah": "712020:53d2a112-d408-48db-96f0-5698ad9ca6d9",
+    "Bayu Wiranata": "712020:d18c7dcc-de48-44d5-b846-d04c6ed6a7ab",
 }
 
 # Components mapping - name as key, ID as value
@@ -39,58 +41,67 @@ COMPONENTS = {
     "Persada Darul Ulum": "10137",
     "Bahari Sentosa Abadi": "10138",
     "Klinik Utama Gasa": "10139",
+    "Batik Umrah & Travel": "10205",
+    "Eskala": "10206",
+    "Memomancy": "10207",
 }
 
 # Content Editor mapping - client name as key, worker name as value
 CONTENT_EDITOR = {
-    "Klinik Mata Boyolali": "Nathaniella Dwi Arthanti",
-    "Kabin Event Organizer": "Nathaniella Dwi Arthanti",
     "Ecky Dental Center": "Nathaniella Dwi Arthanti",
+    "Klinik Utama Sumenep": "Nathaniella Dwi Arthanti",
+    "Klinik Mata Boyolali": "Nathaniella Dwi Arthanti",
     "Gudang Karung Jumbo Sidoarjo": "Nathaniella Dwi Arthanti",
-    "Klinik Mata Bireuen": "Alia Ayya",
-    "Klinik Utama Gresik": "Alia Ayya",
-    "LASIK Asyik by SMEC Tebet": "Noktah Inovasi Teknologi",
-    "Bahari Sentosa Abadi": "Anggit Rigen Mandegani",
-    "Balakosa Rewind and Play": "Alia Ayya",
-    "Nirwana Coffee Space Pamekasan": "Anggit Rigen Mandegani",
-    "Pelita Delapan": "Anggit Rigen Mandegani",
-    "Nirwana Coffee Space Sumenep": "Alia Ayya",
-    "Klinik Utama Gasa": "Nathaniella Dwi Arthanti",
-    "Klinik Utama Sumenep": "Saladin Abdul Tawaab Al Aziz",
-    "Karsa Studio": "Saladin Abdul Tawaab Al Aziz",
-    "Klinik Spesialis Langsa": "Saladin Abdul Tawaab Al Aziz",
-    "Klinik Mata Sampang": "Saladin Abdul Tawaab Al Aziz",
-    "Klinik Mata Jogja": "Anggit Rigen Mandegani",
+    "Klinik Spesialis Langsa": "Nathaniella Dwi Arthanti",
+
     "RS Mata SMEC Medan": "Noktah Inovasi Teknologi",
-    "RS Mata SMEC Balikpapan": "Anggit Rigen Mandegani",
-    "dr. Tommy": "Noktah Inovasi Teknologi",
     "ORM JBB Pertamina PN": "Noktah Inovasi Teknologi",
     "Persada Darul Ulum": "Noktah Inovasi Teknologi",
+    "LASIK Asyik by SMEC Tebet": "Noktah Inovasi Teknologi",
+    "Klinik Mata Sampang": "Noktah Inovasi Teknologi",
+    "Klinik Utama Gasa": "Noktah Inovasi Teknologi",
+
+    "Klinik Mata Bireuen": "Alia Ayya",
+    "Klinik Utama Gresik": "Alia Ayya",
+    "Nirwana Coffee Space Sumenep": "Alia Ayya",
+    "Balakosa Rewind and Play": "Alia Ayya",
+    "Batik Umrah & Travel": "Alia Ayya",
+
+    "Nirwana Coffee Space Pamekasan": "Anggit Rigen Mandegani",
+    "Klinik Mata Jogja": "Anggit Rigen Mandegani",
+    "Pelita Delapan": "Anggit Rigen Mandegani",
+    "RS Mata SMEC Balikpapan": "Anggit Rigen Mandegani",
+    "Karsa Studio": "Anggit Rigen Mandegani",
+
+    "Eskala": "Prastara Dito",
+    "Memomancy": "Prastara Dito",
 }
 
 # Field Associate mapping - client name as key, worker name as value
 FIELD_ASSOCIATE = {
     "Gudang Karung Jumbo Sidoarjo": "Farah Qurrotu Aini",
-    "Bahari Sentosa Abadi": "Farah Qurrotu Aini",
     "Klinik Utama Gresik": "Farah Qurrotu Aini",
     "Klinik Mata Sampang": "Farah Qurrotu Aini",
     "Persada Darul Ulum": "Farah Qurrotu Aini",
-    "Klinik Mata Bireuen": "Farah Qurrotu Aini",
-    "Klinik Spesialis Langsa": "Farah Qurrotu Aini",
-    "ORM JBB Pertamina PN": "Halimatudz Dzakiyah",
-    "dr. Tommy": "Halimatudz Dzakiyah",
+
     "Klinik Mata Boyolali": "Halimatudz Dzakiyah",
-    "Klinik Mata Jogja": "Halimatudz Dzakiyah",
-    "LASIK Asyik by SMEC Tebet": "Halimatudz Dzakiyah",
     "RS Mata SMEC Medan": "Halimatudz Dzakiyah",
     "RS Mata SMEC Balikpapan": "Halimatudz Dzakiyah",
-    "Kabin Event Organizer": "Siti Nurhayati",
-    "Ecky Dental Center": "Siti Nurhayati",
-    "Balakosa Rewind and Play": "Siti Nurhayati",
-    "Nirwana Coffee Space Pamekasan": "Siti Nurhayati",
-    "Pelita Delapan": "Siti Nurhayati",
+
     "Nirwana Coffee Space Sumenep": "Siti Nurhayati",
-    "Klinik Utama Gasa": "Siti Nurhayati",
+    "Nirwana Coffee Space Pamekasan": "Siti Nurhayati",
+    "Balakosa Rewind and Play": "Siti Nurhayati",
+    "Ecky Dental Center": "Siti Nurhayati",
     "Klinik Utama Sumenep": "Siti Nurhayati",
     "Karsa Studio": "Siti Nurhayati",
+    "Pelita Delapan": "Siti Nurhayati",
+
+    "Klinik Utama Gasa": "Muhammad Rozzan Abdillah",
+    "Batik Umrah & Travel": "Muhammad Rozzan Abdillah",
+    "Klinik Mata Jogja": "Muhammad Rozzan Abdillah",
+
+    "ORM JBB Pertamina PN": "Bayu Wiranata",
+    "Klinik Mata Bireuen": "Bayu Wiranata",
+    "LASIK Asyik by SMEC Tebet": "Bayu Wiranata",
+    "Klinik Spesialis Langsa": "Bayu Wiranata",
 }
