@@ -2,6 +2,28 @@
 
 This service provides organized Prefect workflows for integrating multiple APIs and automation tools in a single platform.
 
+## Quick Reference
+
+```bash
+# Run content plan flow for specific month
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "April 2026"
+
+# Validate only (dry run)
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "April 2026" --validate-only
+
+# Run with less logging
+docker exec -e PREFECT_LOGGING_LEVEL=INFO prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "April 2026"
+
+# Run in background
+docker exec -d prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "April 2026"
+
+# Follow logs
+docker logs -f prefect
+
+# Force rebuild
+docker-compose up -d --build prefect
+```
+
 ## Structure
 
 ```
@@ -85,17 +107,68 @@ conda run -n noktah-dashboard-workflow python main.py deploy
 1. **Start Prefect server**
    ```bash
    # From project root
-   docker-compose -f docker-compose.dev.yml up -d prefect
+   docker-compose up -d prefect
    ```
 
-2. **Deploy workflows**
-   ```bash
-   # Access the container
-   docker exec -it noktah-dashboard-prefect-1 python main.py deploy
-   ```
-
-3. **Access Prefect UI**
+2. **Access Prefect UI**
    Open http://localhost:4200
+
+3. **Run Content Plan to Jira Flow**
+   ```bash
+   # Run for next month (default)
+   docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py
+
+   # Run for specific month
+   docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "April 2026"
+
+   # Run with month name and year separately
+   docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month-name April --year 2026
+
+   # Validate only (dry run - no Jira issues created)
+   docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "April 2026" --validate-only
+   ```
+
+4. **Reduce Log Verbosity**
+   ```bash
+   # Temporary: override at runtime
+   docker exec -e PREFECT_LOGGING_LEVEL=INFO prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "April 2026"
+
+   # Permanent: edit docker-compose.yml and change PREFECT_LOGGING_LEVEL from DEBUG to INFO
+   # Then restart: docker-compose restart prefect
+   ```
+
+5. **Run in Background (for long-running flows)**
+   ```bash
+   # Run in background
+   docker exec -d prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "April 2026"
+
+   # Follow logs
+   docker logs -f prefect
+
+   # Alternative: run with nohup and save output
+   docker exec prefect bash -c "nohup python flows/content_plan_spreadsheet_to_jira_issue.py --month 'April 2026' > /app/data/output.log 2>&1 &"
+
+   # Check output
+   docker exec prefect cat /app/data/output.log
+   ```
+
+6. **Container Management**
+   ```bash
+   # Restart Prefect
+   docker-compose restart prefect
+
+   # Force rebuild (after code/dependency changes)
+   docker-compose up -d --build prefect
+
+   # Force rebuild without cache
+   docker-compose build --no-cache prefect && docker-compose up -d prefect
+
+   # View logs
+   docker-compose logs -f prefect
+
+   # Check container status
+   docker-compose ps
+   ```
 
 ### Local Development
 
@@ -231,11 +304,26 @@ Each integration follows the same pattern, making the codebase consistent and ma
    - Check API permissions and scopes
    - Test connections independently
 
-### Debug Mode
+### Logging Levels
 
-Enable detailed logging:
+Available log levels (from least to most verbose):
+
+| Level | Description |
+|-------|-------------|
+| `ERROR` | Only errors |
+| `WARNING` | Warnings and errors |
+| `INFO` | Normal progress messages (recommended for production) |
+| `DEBUG` | Everything (default, useful for development) |
 
 ```bash
+# Enable debug logging (local)
 export PREFECT_LOGGING_LEVEL=DEBUG
 python main.py jira test
+
+# Change logging level in Docker (temporary)
+docker exec -e PREFECT_LOGGING_LEVEL=INFO prefect python flows/content_plan_spreadsheet_to_jira_issue.py
+
+# Change logging level in Docker (permanent)
+# Edit docker-compose.yml: PREFECT_LOGGING_LEVEL=INFO
+# Then: docker-compose restart prefect
 ```

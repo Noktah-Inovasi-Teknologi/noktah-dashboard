@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "=== Enterprise Dashboard Health Check ==="
+echo "=== Prefect Workflow Service Health Check ==="
 
 # Check Docker services
 echo "Checking Docker services..."
@@ -9,15 +9,15 @@ docker-compose ps
 # Check service endpoints
 echo -e "\nChecking service endpoints..."
 
-# Main application
-if curl -f -s http://localhost >/dev/null; then
-    echo "✓ Main Dashboard: HEALTHY"
+# Prefect Server
+if curl -f -s http://localhost:4200/api/health >/dev/null; then
+    echo "✓ Prefect Server: HEALTHY"
 else
-    echo "✗ Main Dashboard: UNHEALTHY"
+    echo "✗ Prefect Server: UNHEALTHY"
 fi
 
 # Database
-if docker exec postgres pg_isready -U dashboard_user >/dev/null 2>&1; then
+if docker exec postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
     echo "✓ PostgreSQL: HEALTHY"
 else
     echo "✗ PostgreSQL: UNHEALTHY"
@@ -30,20 +30,13 @@ else
     echo "✗ Redis: UNHEALTHY"
 fi
 
-# CrewAI Service
-if curl -f -s http://localhost:8000/health >/dev/null; then
-    echo "✓ CrewAI Service: HEALTHY"
-else
-    echo "✗ CrewAI Service: UNHEALTHY"
-fi
-
 # Check disk space
 echo -e "\nDisk Space Usage:"
 df -h | grep -E "(Filesystem|/dev/)"
 
 # Check memory usage
 echo -e "\nMemory Usage:"
-free -h
+free -h 2>/dev/null || vm_stat 2>/dev/null || echo "Memory info not available"
 
 # Check Docker resource usage
 echo -e "\nDocker Resource Usage:"

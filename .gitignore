@@ -112,9 +112,6 @@ data
 log
 secret
 
-# Cloudflare credentials
-config/cloudflare/credentials.json
-
 # Service account keys  
 **/gdrive-service-account.json
 **/*service-account*.json
@@ -140,4 +137,3 @@ tunnel-*.json
 **/*credentials*.json
 *.backup
 *.bak
-service/prefect/CUsersbagasDocumentsGitHubnoktah-dashboardserviceprefecttoken.json

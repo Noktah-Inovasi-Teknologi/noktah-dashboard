@@ -1,75 +1,78 @@
-# Nuxt Minimal Starter
+# Prefect Workflow Service
 
-Look at the [Nuxt documentation](https://nuxt.com/docs/getting-started/introduction) to learn more.
+Workflow orchestration service for automating integrations with Google APIs and Jira.
 
-## Setup
+## Quick Start
 
-Make sure to install dependencies:
+### Prerequisites
+- Docker Desktop
+- `.env` file with required credentials
 
-```bash
-# npm
-npm install
-
-# pnpm
-pnpm install
-
-# yarn
-yarn install
-
-# bun
-bun install
-```
-
-## Development Server
-
-Start the development server on `http://localhost:3000`:
+### Start Services
 
 ```bash
-# npm
-npm run dev
+# Start all services
+docker-compose up -d
 
-# pnpm
-pnpm dev
-
-# yarn
-yarn dev
-
-# bun
-bun run dev
+# Check service status
+docker-compose ps
 ```
 
-## Production
+### Access
+- **Prefect UI**: http://localhost:4200
+- **API Health**: http://localhost:4200/api/health
 
-Build the application for production:
+## Running Workflows
 
 ```bash
-# npm
-npm run build
+# Execute a flow
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py
 
-# pnpm
-pnpm build
-
-# yarn
-yarn build
-
-# bun
-bun run build
+# View logs
+docker-compose logs -f prefect
 ```
 
-Locally preview production build:
+## Services
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| Prefect | 4200 | Workflow orchestration |
+| PostgreSQL | 5432 | State persistence |
+| Redis | 6379 | Cache and queues |
+
+## Configuration
+
+Create a `.env` file with:
 
 ```bash
-# npm
-npm run preview
+# Database
+POSTGRES_DB=dashboard
+POSTGRES_DB_PREFECT=prefect
+POSTGRES_USER=user
+POSTGRES_PASSWORD=password
+REDIS_PASSWORD=password
 
-# pnpm
-pnpm preview
+# Google APIs
+GOOGLE_CLIENT_ID=your_client_id
+GOOGLE_CLIENT_SECRET=your_client_secret
+GOOGLE_REFRESH_TOKEN=your_refresh_token
 
-# yarn
-yarn preview
-
-# bun
-bun run preview
+# Jira
+JIRA_URL=https://your-domain.atlassian.net
+JIRA_USERNAME=your_email
+JIRA_API_TOKEN=your_token
 ```
 
-Check out the [deployment documentation](https://nuxt.com/docs/getting-started/deployment) for more information.
+## Development
+
+```bash
+# Local development with UV
+cd service/prefect
+uv sync
+uv run python flows/content_plan_spreadsheet_to_jira_issue.py
+```
+
+## Documentation
+
+- [Prefect Service README](service/prefect/README.md) - Detailed workflow documentation
+- [Prefect Development Rules](.claude/rules/backend/prefect.md) - Development guidelines

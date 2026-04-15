@@ -1,5 +1,5 @@
 @echo off
-echo Starting Enterprise Dashboard Setup...
+echo Starting Prefect Workflow Service Setup...
 
 REM Check if Docker Desktop is running
 docker info >nul 2>&1
@@ -10,11 +10,7 @@ if %errorlevel% neq 0 (
 )
 
 REM Create required directories
-if not exist "data" mkdir data
-if not exist "data\backups" mkdir data\backups
-if not exist "data\uploads" mkdir data\uploads
-if not exist "data\crewai" mkdir data\crewai
-if not exist "log" mkdir log
+if not exist "service\prefect\data" mkdir service\prefect\data
 if not exist "secrets" mkdir secrets
 
 REM Copy environment file
@@ -43,13 +39,11 @@ docker-compose ps
 REM Display access information
 echo.
 echo ======================================
-echo Enterprise Dashboard Setup Complete!
+echo Prefect Workflow Service Setup Complete!
 echo ======================================
-echo Main Dashboard: http://localhost
-echo Grafana Monitoring: http://localhost:3001
-echo Prefect Workflows: http://localhost:4200
-echo CrewAI Service: http://localhost:8000
-echo Prometheus Metrics: http://localhost:9090
+echo Prefect UI: http://localhost:4200
+echo PostgreSQL: localhost:5432
+echo Redis: localhost:6379
 echo ======================================
 echo.
 
