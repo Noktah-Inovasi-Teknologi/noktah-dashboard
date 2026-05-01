@@ -7,6 +7,7 @@ WORKERS = {
     "Noktah Inovasi Teknologi": "712020:5f41db40-76d3-400a-a78a-df5dc433c8cc",
     "Siti Nurhayati": "712020:c4884994-9302-4d63-bc22-513656d41516",
     "Muhammad Rozzan Abdillah": "712020:53d2a112-d408-48db-96f0-5698ad9ca6d9",
+    "Putri Indah Lestari": "712020:dbb9cdea-89f0-486d-b937-e4da56a5cf0f",
 }
 
 # Components mapping - name as key, ID as value
@@ -44,9 +45,11 @@ COMPONENTS = {
 
 # Content Editor mapping - client name as key, worker name as value
 CONTENT_EDITOR = {
-    "Klinik Mata Sampang": "Noktah Inovasi Teknologi",
-    "Klinik Utama Sumenep": "Noktah Inovasi Teknologi",
-    "Gudang Karung Jumbo Sidoarjo": "Noktah Inovasi Teknologi",
+    "Klinik Mata Sampang": "Putri Indah Lestari",
+    "Klinik Utama Sumenep": "Putri Indah Lestari",
+    "Gudang Karung Jumbo Sidoarjo": "Putri Indah Lestari",
+    "Klinik Utama Gasa": "Putri Indah Lestari",
+    "Ecky Dental Center": "Putri Indah Lestari",
 
     "Klinik Mata Bireuen": "Alia Ayya",
     "Klinik Utama Gresik": "Alia Ayya",
@@ -59,20 +62,15 @@ CONTENT_EDITOR = {
     "Nirwana Coffee Space Pamekasan": "Anggit Rigen Mandegani",
     "Klinik Mata Jogja": "Anggit Rigen Mandegani",
     "Pelita Delapan": "Anggit Rigen Mandegani",
-    "RS Mata SMEC Balikpapan": "Anggit Rigen Mandegani",
     "Klinik Spesialis Langsa": "Anggit Rigen Mandegani",
     "Pondok Pesantren Ittihadul Muhibbin": "Anggit Rigen Mandegani",
     "RS Mata SMEC Medan": "Anggit Rigen Mandegani",
-
-    "Klinik Utama Gasa": "Muhammad Rozzan Abdillah",
-    "Ecky Dental Center": "Muhammad Rozzan Abdillah",
 }
 
 # Field Associate mapping - client name as key, worker name as value
 FIELD_ASSOCIATE = {
     "Klinik Mata Boyolali": "Halimatudz Dzakiyah",
     "RS Mata SMEC Medan": "Halimatudz Dzakiyah",
-    "RS Mata SMEC Balikpapan": "Halimatudz Dzakiyah",
     "Klinik Mata Bireuen": "Halimatudz Dzakiyah",
     "LASIK Asyik by SMEC Tebet": "Halimatudz Dzakiyah",
     "Klinik Spesialis Langsa": "Halimatudz Dzakiyah",

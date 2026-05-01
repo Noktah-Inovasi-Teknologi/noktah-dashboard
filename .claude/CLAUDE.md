@@ -13,6 +13,12 @@ Prefect workflow orchestration service for automating integrations with Google A
 # Run flows inside Prefect container (recommended)
 docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py
 
+# Run for a specific month/year
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "Juni 2026"
+
+# Dry run (validate only, no Jira issues created)
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --validate-only
+
 # Access Prefect UI
 # http://localhost:4200
 
@@ -180,12 +186,34 @@ JIRA_API_TOKEN=your_jira_api_token
 
 ### Running Workflows
 ```bash
-# Execute a flow in the container
+# Execute a flow in the container (defaults to next month)
 docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py
+
+# Run for a specific month and year (combined format)
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "Juni 2026"
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "June 2026"
+
+# Run for a specific month and year (separate args)
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month-name Juni --year 2026
+
+# Dry run — validate Jira issues without creating them
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --validate-only
+
+# Combine month targeting with validate-only
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "Juni 2026" --validate-only
 
 # View execution in Prefect UI
 # http://localhost:4200
 ```
+
+#### Flow Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `--month` | `str` | Target month in `"Month YYYY"` format, e.g. `"Juni 2026"` or `"June 2026"`. Omit to auto-use next month. |
+| `--month-name` | `str` | Month name only (e.g. `"Juni"`). Must be paired with `--year`. |
+| `--year` | `int` | Year (e.g. `2026`). Must be paired with `--month-name`. |
+| `--validate-only` | flag | Dry-run mode — validates Jira issue data without creating issues in Jira. |
 
 ### Security Considerations
 - Environment variables for all sensitive data
