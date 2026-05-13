@@ -41,6 +41,7 @@ COMPONENTS = {
     "Eskala": "10206",
     "Memomancy": "10207",
     "Pondok Pesantren Ittihadul Muhibbin": "10240",
+    "Klinik Mata SMEC Bitung": "10273",
 }
 
 # Content Editor mapping - client name as key, worker name as value
@@ -50,6 +51,7 @@ CONTENT_EDITOR = {
     "Gudang Karung Jumbo Sidoarjo": "Putri Indah Lestari",
     "Klinik Utama Gasa": "Putri Indah Lestari",
     "Ecky Dental Center": "Putri Indah Lestari",
+    "Klinik Mata SMEC Bitung": "Putri Indah Lestari",
 
     "Klinik Mata Bireuen": "Alia Ayya",
     "Klinik Utama Gresik": "Alia Ayya",
@@ -89,4 +91,5 @@ FIELD_ASSOCIATE = {
     "Klinik Mata Jogja": "Muhammad Rozzan Abdillah",
     "Klinik Utama Gresik": "Muhammad Rozzan Abdillah",
     "Gudang Karung Jumbo Sidoarjo": "Muhammad Rozzan Abdillah",
+    "Klinik Mata SMEC Bitung": "Muhammad Rozzan Abdillah",
 }
