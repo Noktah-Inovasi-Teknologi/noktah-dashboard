@@ -1141,6 +1141,12 @@ Examples:
 
   # Process with specific month and year separately
   python content_plan_spreadsheet_to_jira_issue.py --month-name Januari --year 2026
+
+  # Run for a single client only
+  python content_plan_spreadsheet_to_jira_issue.py --single "Klinik Utama Gresik"
+
+  # Single client with specific month and dry run
+  python content_plan_spreadsheet_to_jira_issue.py --single "Klinik Utama Gresik" --month "Juni 2026" --validate-only
         """
     )
 
@@ -1171,6 +1177,14 @@ Examples:
         help="Only validate Jira issues without creating them (dry run)"
     )
 
+    parser.add_argument(
+        "--single",
+        type=str,
+        default=None,
+        metavar="CLIENT_NAME",
+        help='Run for a single client by name, including spaces (e.g., "Klinik Utama Gresik"). Matches case-insensitively against the Clients sheet.'
+    )
+
     args = parser.parse_args()
 
     # Determine target month
@@ -1181,6 +1195,8 @@ Examples:
         target_month = f"{args.month_name} {args.year}"
     elif args.month_name or args.year:
         parser.error("--month-name and --year must be used together")
+
+    single_client = [args.single] if args.single else None
 
     async def main():
         """
@@ -1197,13 +1213,15 @@ Examples:
         execution_params = {
             "timestamp": timestamp,
             "target_month": target_month or "Next month (auto)",
-            "validate_only": args.validate_only
+            "validate_only": args.validate_only,
+            "single_client": args.single or "All clients"
         }
         print(f"\n{'='*60}")
         print(f"Content Plan to Jira Issues Workflow")
         print(f"{'='*60}")
         print(f"Target Month: {execution_params['target_month']}")
         print(f"Validate Only: {execution_params['validate_only']}")
+        print(f"Single Client: {execution_params['single_client']}")
         print(f"Output Directory: {run_output_dir}")
         print(f"{'='*60}\n")
 
@@ -1234,10 +1252,11 @@ Examples:
             print(f"✗ Error: {step2_result['error']}")
             return
 
-        # Step 3: Filter results for all clients
+        # Step 3: Filter results for all clients (or single client)
         print(f"\n[Step 3/8] Filtering content plan results...")
         step3_result = await filter_content_plan_results_flow(
-            target_month=target_month
+            target_month=target_month,
+            client_names=single_client
         )
 
         if "error" not in step3_result:
@@ -1253,6 +1272,7 @@ Examples:
         print(f"\n[Step 4/8] Reading content plan data with rate limiting...")
         step4_result = await read_content_plan_data_flow(
             target_month=target_month,
+            client_names=single_client,
             min_delay_seconds=2,
             max_delay_seconds=4
         )
@@ -1279,6 +1299,7 @@ Examples:
         print(f"\n[Step 6/8] Converting content plans to Jira issue format...")
         step6_result = await convert_content_plan_to_jira_assets_flow(
             target_month=target_month,
+            client_names=single_client,
             timestamp=timestamp
         )
 
