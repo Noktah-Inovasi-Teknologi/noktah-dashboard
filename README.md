@@ -38,7 +38,6 @@ docker-compose logs -f prefect
 |---------|------|---------|
 | Prefect | 4200 | Workflow orchestration |
 | PostgreSQL | 5432 | State persistence |
-| Redis | 6379 | Cache and queues |
 
 ## Configuration
 
@@ -50,7 +49,6 @@ POSTGRES_DB=dashboard
 POSTGRES_DB_PREFECT=prefect
 POSTGRES_USER=user
 POSTGRES_PASSWORD=password
-REDIS_PASSWORD=password
 
 # Google APIs
 GOOGLE_CLIENT_ID=your_client_id

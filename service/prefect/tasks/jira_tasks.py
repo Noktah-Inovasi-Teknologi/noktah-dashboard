@@ -47,7 +47,7 @@ async def get_server_info(credentials_block_name: str = "jira-creds") -> Dict[st
     """
     try:
         # Load credentials from block
-        jira_creds = await JiraCredentials.load(credentials_block_name)
+        jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
         result = jira_creds.test_connection()
         
         if result["status"] != "success":
@@ -78,7 +78,7 @@ async def search_projects(credentials_block_name: str = "jira-creds") -> List[Di
     """
     try:
         # Load credentials from block
-        jira_creds = await JiraCredentials.load(credentials_block_name)
+        jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
         client = jira_creds.get_client()
         
         projects = client.get_projects()
@@ -115,7 +115,7 @@ async def search_issues(
     """
     try:
         # Load credentials from block
-        jira_creds = await JiraCredentials.load(credentials_block_name)
+        jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
         client = jira_creds.get_client()
         
         issues = client.search_issues(jql, max_results)
@@ -146,7 +146,7 @@ async def get_issue(
     """
     try:
         # Load credentials from block
-        jira_creds = await JiraCredentials.load(credentials_block_name)
+        jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
         client = jira_creds.get_client()
         
         issue = client.get_issue(issue_key)
@@ -183,7 +183,7 @@ async def create_issue(
     """
     try:
         # Load credentials from block
-        jira_creds = await JiraCredentials.load(credentials_block_name)
+        jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
         client = jira_creds.get_client()
         
         issue_key = client.create_issue(project_key, summary, description, issue_type)
@@ -216,7 +216,7 @@ async def update_issue(
     """
     try:
         # Load credentials from block
-        jira_creds = await JiraCredentials.load(credentials_block_name)
+        jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
         client = jira_creds.get_client()
         
         result = client.update_issue(issue_key, fields)
@@ -253,7 +253,7 @@ async def add_comment(
     """
     try:
         # Load credentials from block
-        jira_creds = await JiraCredentials.load(credentials_block_name)
+        jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
         client = jira_creds.get_client()
         
         result = client.add_comment(issue_key, comment)
@@ -284,7 +284,7 @@ async def get_all_issue_types(credentials_block_name: str = "jira-creds") -> Lis
     """
     try:
         # Load credentials from block
-        jira_creds = await JiraCredentials.load(credentials_block_name)
+        jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
         client = jira_creds.get_client()
         
         # Get issue types using the client method
@@ -316,7 +316,7 @@ async def get_issue_type(
     """
     try:
         # Load credentials from block
-        jira_creds = await JiraCredentials.load(credentials_block_name)
+        jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
         client = jira_creds.get_client()
         
         # Get all issue types and find the specific one
@@ -360,7 +360,7 @@ async def get_issue_type_fields(
     """
     try:
         # Load credentials from block
-        jira_creds = await JiraCredentials.load(credentials_block_name)
+        jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
         client = jira_creds.get_client()
         
         # Get create metadata for the project and issue type
@@ -431,7 +431,7 @@ async def get_issue_type_field_options(
     """
     try:
         # Load credentials from block
-        jira_creds = await JiraCredentials.load(credentials_block_name)
+        jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
         client = jira_creds.get_client()
         
         # Get create metadata for the specific field
@@ -498,7 +498,7 @@ async def get_project_components(
     """
     try:
         # Load credentials from block
-        jira_creds = await JiraCredentials.load(credentials_block_name)
+        jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
         client = jira_creds.get_client()
         
         # Get project components
@@ -543,7 +543,7 @@ async def create_issues_bulk(
             issue_updates = issue_updates[:max_issues]
         
         # Load credentials from block
-        jira_creds = await JiraCredentials.load(credentials_block_name)
+        jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
         client = jira_creds.get_client()
         
         # Prepare bulk create payload
@@ -795,7 +795,7 @@ async def get_issue_transitions(
     """
     try:
         # Load credentials from block
-        jira_creds = await JiraCredentials.load(credentials_block_name)
+        jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
         client = jira_creds.get_client()
         
         # Get issue transitions
@@ -830,7 +830,7 @@ async def transition_issue(
     """
     try:
         # Load credentials from block
-        jira_creds = await JiraCredentials.load(credentials_block_name)
+        jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
         client = jira_creds.get_client()
         
         # Execute transition

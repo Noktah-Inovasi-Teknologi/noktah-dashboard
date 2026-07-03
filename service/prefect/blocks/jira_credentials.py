@@ -73,6 +73,35 @@ class JiraCredentials(Block):
         client = self.get_client()
         return client.test_connection()
 
+    @classmethod
+    async def load_or_env(cls, name: str) -> "JiraCredentials":
+        """
+        Load a saved credentials block, or build one from environment variables.
+
+        Attempts to load the Prefect block document named ``name``. If it does
+        not exist (or cannot be loaded), fall back to constructing credentials
+        from JIRA_URL / JIRA_USERNAME / JIRA_TOKEN so flows work without
+        pre-registering blocks.
+
+        Args:
+            name: Name of the Jira credentials block document.
+
+        Returns:
+            JiraCredentials instance.
+        """
+        try:
+            return await cls.load(name)
+        except Exception as e:
+            logger.info(
+                f"Block '{name}' not loaded ({e}); "
+                "building JiraCredentials from environment variables"
+            )
+            return cls(
+                jira_url=os.getenv("JIRA_URL"),
+                jira_username=os.getenv("JIRA_USERNAME"),
+                jira_token=os.getenv("JIRA_TOKEN"),
+            )
+
 
 class JiraClient:
     """

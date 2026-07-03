@@ -23,13 +23,6 @@ else
     echo "✗ PostgreSQL: UNHEALTHY"
 fi
 
-# Redis
-if docker exec redis redis-cli --no-auth-warning -a "$REDIS_PASSWORD" ping >/dev/null 2>&1; then
-    echo "✓ Redis: HEALTHY"
-else
-    echo "✗ Redis: UNHEALTHY"
-fi
-
 # Check disk space
 echo -e "\nDisk Space Usage:"
 df -h | grep -E "(Filesystem|/dev/)"

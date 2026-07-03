@@ -56,7 +56,7 @@ The service follows a modular structure:
 
 **Error Handling**: Tasks should raise exceptions (unlike flows) to leverage Prefect's retry mechanism
 
-**Credentials Pattern**: Accept credentials_block_name parameter with default value, load credentials dynamically
+**Credentials Pattern**: Accept credentials_block_name parameter with default value, load credentials dynamically via the block's `load_or_env()` classmethod (e.g. `GoogleCredentials.load_or_env(credentials_block_name)`) so the task works whether or not the block is registered in Prefect
 
 **Best Practices**:
 - Single responsibility - one task performs one operation
@@ -71,7 +71,7 @@ The service follows a modular structure:
 
 **Credential Fields**: Use SecretStr for sensitive data (api_key, client_secret, refresh_token)
 
-**Environment Fallback**: Load credentials from environment variables if not provided directly
+**Environment Fallback**: Load credentials from environment variables if not provided directly. Expose a `load_or_env(name)` classmethod that tries `cls.load(name)` first and, if the block document isn't registered, falls back to building the block from environment variables — this is the method tasks should call instead of `load()` directly
 
 **Client Factory**: Implement get_client() method that returns authenticated client instance
 

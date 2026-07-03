@@ -88,12 +88,41 @@ class GoogleCredentials(Block):
     def test_connection(self) -> Dict[str, Any]:
         """
         Test the Google API connection.
-        
+
         Returns:
             Dict containing connection status
         """
         client = self.get_client()
         return client.test_connection()
+
+    @classmethod
+    async def load_or_env(cls, name: str) -> "GoogleCredentials":
+        """
+        Load a saved credentials block, or build one from environment variables.
+
+        Attempts to load the Prefect block document named ``name``. If it does
+        not exist (or cannot be loaded), fall back to constructing credentials
+        from GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN so
+        flows work without pre-registering blocks.
+
+        Args:
+            name: Name of the Google credentials block document.
+
+        Returns:
+            GoogleCredentials instance.
+        """
+        try:
+            return await cls.load(name)
+        except Exception as e:
+            logger.info(
+                f"Block '{name}' not loaded ({e}); "
+                "building GoogleCredentials from environment variables"
+            )
+            return cls(
+                client_id=os.getenv("GOOGLE_CLIENT_ID"),
+                client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
+                refresh_token=os.getenv("GOOGLE_REFRESH_TOKEN"),
+            )
 
 
 class GoogleClient:

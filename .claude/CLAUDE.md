@@ -70,7 +70,6 @@ uv run python run_google_oauth.py
 ### Services
 - **Prefect**: Workflow orchestration server (Port 4200)
 - **PostgreSQL**: Database for Prefect state persistence (Port 5432)
-- **Redis**: Cache and task queues (Port 6379)
 
 ### Key Directories
 - `service/prefect/` - Prefect workflow service
@@ -103,7 +102,6 @@ service/prefect/
 |---------|------|-----|
 | Prefect UI | 4200 | http://localhost:4200 |
 | PostgreSQL | 5432 | localhost:5432 |
-| Redis | 6379 | localhost:6379 |
 
 ### Health Check Endpoints
 - **Prefect API**: http://localhost:4200/api/health
@@ -120,9 +118,6 @@ POSTGRES_DB_DEV=your_dev_database
 POSTGRES_DB_PREFECT=prefect
 POSTGRES_USER=your_database_user
 POSTGRES_PASSWORD=your_secure_password
-
-# Redis Configuration
-REDIS_PASSWORD=your_redis_password
 
 # Google Services (for workflows)
 GOOGLE_CLIENT_ID=your_google_client_id
@@ -157,7 +152,6 @@ JIRA_API_TOKEN=your_jira_api_token
 ### Infrastructure
 - **Docker** - Containerization
 - **PostgreSQL 15** - Database
-- **Redis** - Cache
 
 ## Deployment Environment
 
@@ -165,11 +159,9 @@ JIRA_API_TOKEN=your_jira_api_token
 - **Platform**: Windows with Docker Desktop
 - **Container Runtime**: Docker Desktop
 - **Database**: PostgreSQL container with persistent volumes
-- **Cache**: Redis container with persistence
 
 ### Current Services
 - PostgreSQL (healthy)
-- Redis (healthy)
 - Prefect Server (healthy)
 
 ## Development Notes
@@ -218,5 +210,4 @@ docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --mon
 ### Security Considerations
 - Environment variables for all sensitive data
 - Postgres authentication with SCRAM-SHA-256
-- Redis password protection
 - No secrets in version control

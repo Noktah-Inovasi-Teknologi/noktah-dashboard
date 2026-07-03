@@ -1,329 +1,115 @@
-# Prefect Multi-API Workflows
+# Prefect Service
 
-This service provides organized Prefect workflows for integrating multiple APIs and automation tools in a single platform.
-
-## Quick Reference
-
-```bash
-# Run content plan flow for specific month
-docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "April 2026"
-
-# Validate only (dry run)
-docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "April 2026" --validate-only
-
-# Run with less logging
-docker exec -e PREFECT_LOGGING_LEVEL=INFO prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "April 2026"
-
-# Run in background
-docker exec -d prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "April 2026"
-
-# Follow logs
-docker logs -f prefect
-
-# Force rebuild
-docker-compose up -d --build prefect
-```
+Prefect 3.x workflow orchestration service that reads content plans from Google Sheets and creates Jira issues from them. Runs in Docker via the root `docker-compose.yml`, backed by PostgreSQL for flow-run state.
 
 ## Structure
 
 ```
 service/prefect/
-├── workflows/
-│   ├── jira_client.py        # Jira API client
-│   ├── jira_workflows.py     # Jira workflow definitions
-│   ├── common/               # Shared utilities and helpers
-│   │   └── __init__.py
-│   └── __init__.py           # Main workflows package
-├── main.py                   # CLI runner for all workflows
-├── requirements.txt          # Python dependencies
-├── Dockerfile               # Container definition
-├── .env.example             # Environment variables template
-└── README.md
+├── flows/
+│   ├── content_plan_spreadsheet_to_jira_issue.py  # Main flow (read Sheets -> convert -> create Jira issues)
+│   └── common/                                    # Shared flow helpers
+├── tasks/
+│   ├── google_tasks.py    # Sheets/Drive operations
+│   ├── jira_tasks.py      # Jira read/write operations
+│   └── utility_tasks.py   # Date/text/number formatting, JSON output helpers
+├── blocks/
+│   ├── google_credentials.py  # GoogleCredentials block (OAuth refresh token)
+│   └── jira_credentials.py    # JiraCredentials block (Basic auth: email + API token)
+├── hashmap.py              # Static mappings: WORKERS, COMPONENTS, CONTENT_EDITOR, FIELD_ASSOCIATE
+├── main.py                 # CLI entry point
+├── run_google_oauth.py     # One-time Google OAuth setup (local dev)
+├── pyproject.toml / uv.lock
+├── Dockerfile
+└── data/                   # Timestamped flow output (JSON), gitignored
 ```
 
 ## Setup
 
-1. **Environment Configuration**
-   ```bash
-   # Copy the example environment file to root directory
-   cp .env.example ../../.env.local
-   
-   # Edit ../../.env.local with your API credentials
-   JIRA_URL=https://your-domain.atlassian.net
-   JIRA_USERNAME=your-email@example.com
-   JIRA_API_TOKEN=your-jira-api-token
-   
-   # Add other API keys as needed
-   SLACK_TOKEN=xoxb-your-slack-token
-   GITHUB_TOKEN=ghp_your-github-token
-   OPENAI_API_KEY=sk-your-openai-key
-   ```
-
-2. **API Tokens**
-   - **Jira**: https://id.atlassian.com/manage-profile/security/api-tokens
-   - **Slack**: https://api.slack.com/apps (Bot User OAuth Token)
-   - **GitHub**: https://github.com/settings/tokens
-   - **OpenAI**: https://platform.openai.com/api-keys
-
-## Available Workflows
-
-### Jira Integration
-
-- **Connection Test** - Test API connection and list projects
-- **Issue Search** - Search issues using JQL queries
-- **Issue Creation** - Create new issues with optional comments
-- **Health Check** - Periodic monitoring (scheduled every 15 minutes)
-
-### Future Integrations (Ready to Add)
-
-- **Slack** - Send notifications, manage channels
-- **GitHub** - Create PRs, manage issues, repository operations
-- **Email** - SMTP/IMAP automation
-- **Database** - Data processing and ETL workflows
-- **AI/ML** - OpenAI, Anthropic API integrations
-
-## Usage
-
-### Command Line Interface
-
-The `main.py` script provides a comprehensive CLI for all workflows:
+Environment variables are read from the `.env` file at the repository root (see `.env.example` there). Required for this service:
 
 ```bash
-# Show all available commands
-conda run -n noktah-dashboard-workflow python main.py --help
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
+GOOGLE_REFRESH_TOKEN=your_google_refresh_token
 
-# Jira workflows
-conda run -n noktah-dashboard-workflow python main.py jira test
-conda run -n noktah-dashboard-workflow python main.py jira health
-conda run -n noktah-dashboard-workflow python main.py jira search "project = ESKL ORDER BY created DESC"
-conda run -n noktah-dashboard-workflow python main.py jira create ESKL "New task from workflow" --description "Automated task creation" --comment "Created via Prefect"
-
-# Deploy all workflows to Prefect server
-conda run -n noktah-dashboard-workflow python main.py deploy
+JIRA_URL=https://your-domain.atlassian.net
+JIRA_USERNAME=your_email@domain.com
+JIRA_API_TOKEN=your_jira_api_token   # mapped to JIRA_TOKEN inside the container
 ```
 
-### Using Docker
+Google and Jira credentials are normally stored as Prefect Blocks (`google-creds`, `jira-creds`). If a block isn't registered, `GoogleCredentials.load_or_env()` / `JiraCredentials.load_or_env()` fall back to building credentials from the environment variables above, so flows still run without pre-registering blocks.
 
-1. **Start Prefect server**
-   ```bash
-   # From project root
-   docker-compose up -d prefect
-   ```
+## Running
 
-2. **Access Prefect UI**
-   Open http://localhost:4200
-
-3. **Run Content Plan to Jira Flow**
-   ```bash
-   # Run for next month (default)
-   docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py
-
-   # Run for specific month
-   docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "April 2026"
-
-   # Run with month name and year separately
-   docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month-name April --year 2026
-
-   # Validate only (dry run - no Jira issues created)
-   docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "April 2026" --validate-only
-   ```
-
-4. **Reduce Log Verbosity**
-   ```bash
-   # Temporary: override at runtime
-   docker exec -e PREFECT_LOGGING_LEVEL=INFO prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "April 2026"
-
-   # Permanent: edit docker-compose.yml and change PREFECT_LOGGING_LEVEL from DEBUG to INFO
-   # Then restart: docker-compose restart prefect
-   ```
-
-5. **Run in Background (for long-running flows)**
-   ```bash
-   # Run in background
-   docker exec -d prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "April 2026"
-
-   # Follow logs
-   docker logs -f prefect
-
-   # Alternative: run with nohup and save output
-   docker exec prefect bash -c "nohup python flows/content_plan_spreadsheet_to_jira_issue.py --month 'April 2026' > /app/data/output.log 2>&1 &"
-
-   # Check output
-   docker exec prefect cat /app/data/output.log
-   ```
-
-6. **Container Management**
-   ```bash
-   # Restart Prefect
-   docker-compose restart prefect
-
-   # Force rebuild (after code/dependency changes)
-   docker-compose up -d --build prefect
-
-   # Force rebuild without cache
-   docker-compose build --no-cache prefect && docker-compose up -d prefect
-
-   # View logs
-   docker-compose logs -f prefect
-
-   # Check container status
-   docker-compose ps
-   ```
-
-### Local Development
-
-1. **Install dependencies**
-   ```bash
-   conda activate noktah-dashboard-workflow
-   pip install -r requirements.txt
-   ```
-
-2. **Run workflows directly**
-   ```bash
-   python main.py jira test
-   python main.py jira search "project = YOUR-PROJECT"
-   ```
-
-## Workflow Development
-
-### Adding New API Integrations
-
-1. **Create client file** (e.g., `workflows/slack_client.py`)
-2. **Create workflow definitions** (e.g., `workflows/slack_workflows.py`)  
-3. **Update `workflows/__init__.py`** to export new workflows
-4. **Add commands to `main.py`** for CLI access
-5. **Update deployment function** to include new workflows
-
-### Example Workflow Structure
-
-```python
-# workflows/your_api_client.py
-class YourAPIClient:
-    def __init__(self):
-        self.api_key = config('YOUR_API_KEY')
-    
-    def some_operation(self):
-        # API implementation
-        pass
-
-# workflows/your_api_workflows.py
-from prefect import flow, task
-from .your_api_client import YourAPIClient
-
-@task
-async def your_api_task():
-    client = YourAPIClient()
-    return client.some_operation()
-
-@flow
-async def your_api_flow():
-    result = await your_api_task()
-    return result
-```
-
-## Workflow Monitoring
-
-- **Prefect UI**: http://localhost:4200
-- **Flow Runs**: Monitor execution status and logs
-- **Schedules**: Health checks run automatically every 15 minutes
-- **Artifacts**: Results and reports stored in Prefect database
-
-## Testing Workflows
-
-All workflows include comprehensive error handling and logging:
+### In Docker (recommended)
 
 ```bash
-# Test individual components
-conda run -n noktah-dashboard-workflow python -c "
-import asyncio
-from workflows.jira_workflows import jira_connection_test_flow
-asyncio.run(jira_connection_test_flow())
-"
+# From the repo root
+docker-compose up -d prefect
+
+# Run the content plan -> Jira flow (defaults to next month)
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py
+
+# Target a specific month
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "Juni 2026"
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month-name Juni --year 2026
+
+# Dry run - validate Jira issue data without creating issues
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --validate-only
+
+# Follow logs
+docker-compose logs -f prefect
+
+# Rebuild after Dockerfile/dependency changes
+docker-compose up -d --build prefect
 ```
 
-## Deployment Options
+Prefect UI: http://localhost:4200
 
-### Development Environment
-- Uses local SQLite database
-- Temporary Prefect server
-- Manual workflow execution
+### Locally with UV
 
-### Production Environment  
-- PostgreSQL database for workflow state
-- Persistent Prefect server
-- Scheduled workflow execution
-- Monitoring and alerting
+```bash
+cd service/prefect
+uv sync
+uv run python flows/content_plan_spreadsheet_to_jira_issue.py --validate-only
 
-## Integration with n8n Migration
+# One-time OAuth setup for local Google API access
+uv run python run_google_oauth.py
+```
 
-This Prefect setup replaces n8n workflows with:
+## Flow Parameters
 
-- **Type-safe workflow definitions** instead of visual nodes
-- **Version-controlled Python code** instead of JSON exports
-- **Built-in retry logic** and comprehensive error handling
-- **Centralized monitoring** via Prefect UI
-- **Multi-API support** in a single service
-- **Scalable async execution** with better performance
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `--month` | `str` | Target month as `"Month YYYY"`, e.g. `"Juni 2026"` or `"June 2026"`. Omit to auto-target next month. |
+| `--month-name` | `str` | Month name only (e.g. `"Juni"`). Must be paired with `--year`. |
+| `--year` | `int` | Year (e.g. `2026`). Must be paired with `--month-name`. |
+| `--validate-only` | flag | Validates converted Jira issue data without creating issues in Jira. |
 
-## Extending the Platform
+## What the flow does
 
-The structure is designed for easy extension:
+`content_plan_spreadsheet_to_jira_issue.py` chains several sub-flows:
 
-1. **Add new API clients** in the `workflows/` directory
-2. **Create workflow definitions** using Prefect decorators
-3. **Update the CLI** to include new commands
-4. **Deploy** using the existing deployment infrastructure
+1. **Search** client Drive folders for the target month's content plan spreadsheet.
+2. **Read** each spreadsheet's rows via the Google Sheets API.
+3. **Format** rows uniformly (dates, text, numeric fields).
+4. **Convert** rows into Jira issue-type payloads (issue type `10009`), using `hashmap.py` to resolve worker/component/editor/associate assignments per client.
+5. **Validate or create** issues in Jira in bulk (max 45 per request), per client.
 
-Each integration follows the same pattern, making the codebase consistent and maintainable.
+Each run writes a timestamped directory under `data/` (e.g. `data/20260702_191619/`) containing a step-by-step JSON trace (`step1_client_data.json`, `step4_content_plan_data.json`, `step7_validation_per_client.json`, etc.) for debugging and auditing.
 
-## Best Practices
+## Adding a New Flow
 
-- **Environment Variables**: Store all credentials in `.env.local`
-- **Error Handling**: Use try/catch in all API operations
-- **Logging**: Use Prefect's built-in logging for observability
-- **Type Hints**: Include type annotations for better code quality
-- **Documentation**: Document all workflow parameters and return values
-- **Testing**: Test workflows locally before deployment
+1. Add task(s) to the relevant file in `tasks/` (or a new file if it's a new API group), following the `api-group.resource.action` naming convention.
+2. Create a new file in `flows/` with an `@flow`-decorated async function returning a `Dict[str, Any]` (`start_time`, `end_time`, `data`, `summary`, optional `error`).
+3. Add an `argparse` CLI block under `if __name__ == "__main__":` for standalone execution, mirroring the existing flow.
+4. Test locally with `uv run python flows/your_flow.py` before running it in Docker.
+
+See [.claude/rules/backend/prefect.md](../../.claude/rules/backend/prefect.md) for full development standards (flow/task/block conventions, error handling, logging).
 
 ## Troubleshooting
 
-### Common Issues
-
-1. **Environment Variables Not Found**
-   - Check `.env.local` exists in project root
-   - Verify variable names match exactly
-   - Restart workflows after environment changes
-
-2. **Import Errors**
-   - Ensure all dependencies are installed
-   - Check Python path configuration
-   - Verify conda environment is activated
-
-3. **API Authentication Failures**
-   - Verify API tokens are valid and not expired
-   - Check API permissions and scopes
-   - Test connections independently
-
-### Logging Levels
-
-Available log levels (from least to most verbose):
-
-| Level | Description |
-|-------|-------------|
-| `ERROR` | Only errors |
-| `WARNING` | Warnings and errors |
-| `INFO` | Normal progress messages (recommended for production) |
-| `DEBUG` | Everything (default, useful for development) |
-
-```bash
-# Enable debug logging (local)
-export PREFECT_LOGGING_LEVEL=DEBUG
-python main.py jira test
-
-# Change logging level in Docker (temporary)
-docker exec -e PREFECT_LOGGING_LEVEL=INFO prefect python flows/content_plan_spreadsheet_to_jira_issue.py
-
-# Change logging level in Docker (permanent)
-# Edit docker-compose.yml: PREFECT_LOGGING_LEVEL=INFO
-# Then: docker-compose restart prefect
-```
+- **Credential errors**: verify `GOOGLE_*` / `JIRA_*` env vars are set in the container (`docker exec prefect env`), or that the `google-creds` / `jira-creds` blocks are registered in the Prefect UI.
+- **Rebuild needed**: after changing `pyproject.toml`, `uv.lock`, or the `Dockerfile`, run `docker-compose up -d --build prefect`.
+- **Flow run history**: check the Prefect UI at http://localhost:4200 for detailed logs per flow run.

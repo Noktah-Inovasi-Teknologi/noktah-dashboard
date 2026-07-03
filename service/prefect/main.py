@@ -25,7 +25,7 @@ def setup_environment():
     env_vars = [
         'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REFRESH_TOKEN',
         'GOOGLE_SERVICE_ACCOUNT_JSON',
-        'DATABASE_URL', 'REDIS_URL'
+        'DATABASE_URL'
     ]
     
     for var in env_vars:

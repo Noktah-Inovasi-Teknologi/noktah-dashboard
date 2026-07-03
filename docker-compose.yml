@@ -31,7 +31,6 @@ services:
       - ./service/prefect/data:/app/data
     depends_on:
       - postgres
-      - redis
     networks:
       - dashboard-networks
     deploy:
@@ -79,34 +78,8 @@ services:
       retries: 5
       start_period: 30s
 
-  # Cache and Queues
-  redis:
-    image: redis:alpine
-    container_name: redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    env_file:
-      - .env
-    command: redis-server --requirepass ${REDIS_PASSWORD} --save 60 1000
-    volumes:
-      - redis_data:/data
-    networks:
-      - dashboard-networks
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: "1G"
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
-      interval: 20s
-      timeout: 10s
-      retries: 5
-
 volumes:
   postgres_data:
-  redis_data:
 
 networks:
   dashboard-networks:

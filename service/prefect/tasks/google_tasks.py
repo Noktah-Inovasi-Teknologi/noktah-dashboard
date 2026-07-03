@@ -34,7 +34,7 @@ async def google_test_connection(credentials_block_name: str = "google-creds") -
     """
     try:
         # Load credentials from block
-        google_creds = await GoogleCredentials.load(credentials_block_name)
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
         result = google_creds.test_connection()
         
         if result["status"] != "success":
@@ -63,7 +63,7 @@ async def google_read_spreadsheet_info(
     """
     try:
         # Load credentials from block
-        google_creds = await GoogleCredentials.load(credentials_block_name)
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
         client = google_creds.get_client()
         return client.get_spreadsheet_info(spreadsheet_id)
     except Exception as e:
@@ -94,7 +94,7 @@ async def google_read_sheet_data(
     """
     try:
         # Load credentials from block
-        google_creds = await GoogleCredentials.load(credentials_block_name)
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
         client = google_creds.get_client()
         
         # Use pandas DataFrame for data processing
@@ -149,7 +149,7 @@ async def google_read_sheet_raw(
     """
     try:
         # Load credentials from block
-        google_creds = await GoogleCredentials.load(credentials_block_name)
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
         client = google_creds.get_client()
         
         # Read raw data
@@ -193,7 +193,7 @@ async def google_filter_drive_files(
             return []
         
         # Load credentials from block
-        google_creds = await GoogleCredentials.load(credentials_block_name)
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
         client = google_creds.get_client()
         
         # Get Drive service
@@ -249,7 +249,7 @@ async def google_filter_files_in_folder(
             return []
         
         # Load credentials from block
-        google_creds = await GoogleCredentials.load(credentials_block_name)
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
         client = google_creds.get_client()
         
         # Get Drive service

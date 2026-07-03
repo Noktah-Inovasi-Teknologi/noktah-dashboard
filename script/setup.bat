@@ -43,7 +43,6 @@ echo Prefect Workflow Service Setup Complete!
 echo ======================================
 echo Prefect UI: http://localhost:4200
 echo PostgreSQL: localhost:5432
-echo Redis: localhost:6379
 echo ======================================
 echo.
 
