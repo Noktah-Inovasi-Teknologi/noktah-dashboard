@@ -45,6 +45,57 @@ services:
       retries: 3
       start_period: 40s
 
+  # AI Chat / RAG Platform
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    container_name: anythingllm
+    restart: unless-stopped
+    ports:
+      - "${ANYTHINGLLM_PORT:-3001}:3001"
+    cap_add:
+      - SYS_ADMIN
+    volumes:
+      - ./service/anythingllm/.env:/app/server/.env
+      - ./service/anythingllm/storage:/app/server/storage
+      - ./service/anythingllm/collector/hotdir:/app/collector/hotdir
+      - ./service/anythingllm/collector/outputs:/app/collector/outputs
+      - ./service/anythingllm/branding/favicon.ico:/app/server/public/favicon.ico:ro
+      - ./service/anythingllm/branding/apple-touch-icon.png:/app/server/public/favicon.png:ro
+      - ./service/anythingllm/branding/favicon-16x16.png:/app/server/public/favicon-16x16.png:ro
+      - ./service/anythingllm/branding/favicon-32x32.png:/app/server/public/favicon-32x32.png:ro
+      - ./service/anythingllm/branding/apple-touch-icon.png:/app/server/public/apple-touch-icon.png:ro
+      - ./service/anythingllm/branding/android-chrome-192x192.png:/app/server/public/android-chrome-192x192.png:ro
+      - ./service/anythingllm/branding/android-chrome-512x512.png:/app/server/public/android-chrome-512x512.png:ro
+      - ./service/anythingllm/branding/manifest.json:/app/server/public/manifest.json:ro
+    environment:
+      - STORAGE_DIR=/app/server/storage
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - dashboard-networks
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "2G"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/api/ping').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Cloudflare Tunnel (public ingress)
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - anythingllm
+    networks:
+      - dashboard-networks
+
   # Database
   postgres:
     image: postgres:15.14-alpine

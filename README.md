@@ -38,6 +38,7 @@ docker-compose logs -f prefect
 |---------|------|---------|
 | Prefect | 4200 | Workflow orchestration |
 | PostgreSQL | 5432 | State persistence |
+| AnythingLLM | 3001 | AI chat / RAG platform |
 
 ## Configuration
 
