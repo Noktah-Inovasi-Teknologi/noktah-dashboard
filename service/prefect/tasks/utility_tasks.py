@@ -14,6 +14,13 @@ from prefect import task
 from prefect.logging import get_run_logger
 from hashmap import WORKERS, FIELD_ASSOCIATE, CONTENT_EDITOR, COMPONENTS
 
+try:
+    from ..shared.dates import utc_now_iso
+    from ..shared.io import save_json
+except ImportError:
+    from shared.dates import utc_now_iso
+    from shared.io import save_json
+
 logger = logging.getLogger(__name__)
 
 
@@ -374,7 +381,7 @@ def process_row_uniform(row: Dict[str, Any], row_index: int) -> Dict[str, Any]:
     """
     processed_row = {
         "row_index": row_index,
-        "processed_at": datetime.now().isoformat() + "Z",
+        "processed_at": utc_now_iso(),
         "original_data": row,
         "formatted_data": {}
     }
@@ -403,9 +410,9 @@ def process_row_uniform(row: Dict[str, Any], row_index: int) -> Dict[str, Any]:
 
 @task(name="convert-content-plan-row-to-jira-issue")
 def convert_content_plan_row_to_jira_issue(
-    row: Dict[str, Any], 
+    row: Dict[str, Any],
     client_name: str,
-    component_hashmap: Optional[Dict[str, str]] = COMPONENTS
+    component_hashmap: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
     """
     Convert a content plan row to Jira issue type 10009 (Asset) format
@@ -646,7 +653,7 @@ def convert_content_plan_row_to_jira_issue(
             "component_id": component_id,
             "field_associate_name": field_associate_name,
             "content_editor_name": content_editor_name,
-            "converted_at": datetime.now().isoformat() + "Z",
+            "converted_at": utc_now_iso(),
             "original_row": row
         }
         
@@ -670,12 +677,5 @@ def save_to_json(data: Dict[str, Any], output_path: str) -> str:
     Returns:
         Path to the saved file
     """
-    # Ensure directory exists
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    
-    # Write JSON with proper formatting
-    with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    
-    logger.info(f"Data saved to JSON file: {output_path}")
-    return output_path
+    # Delegate to the shared IO helper (creates parent dir, UTF-8, 2-space indent).
+    return save_json(data, output_path)

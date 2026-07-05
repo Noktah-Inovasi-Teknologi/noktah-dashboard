@@ -8,16 +8,21 @@ services:
     container_name: prefect
     restart: unless-stopped
     ports:
-      - "4200:4200"
+      # Bind to localhost only; public access is via the Cloudflare tunnel.
+      - "127.0.0.1:4200:4200"
     env_file:
       - .env
     environment:
       - PREFECT_SERVER_API_HOST=0.0.0.0
       - PREFECT_SERVER_API_PORT=4200
       - PREFECT_API_DATABASE_CONNECTION_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB_PREFECT}
-      - PREFECT_LOGGING_LEVEL=DEBUG
+      - PREFECT_LOGGING_LEVEL=INFO
       - PREFECT_API_URL=http://localhost:4200/api
       - PREFECT_UI_API_URL=http://localhost:4200/api
+      # Basic auth for the UI/API (user:pass). Also set as PREFECT_API_AUTH_STRING
+      # so in-container clients (docker exec runs) authenticate to the local API.
+      - PREFECT_SERVER_API_AUTH_STRING=${PREFECT_API_AUTH_STRING}
+      - PREFECT_API_AUTH_STRING=${PREFECT_API_AUTH_STRING}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
       - GOOGLE_REFRESH_TOKEN=${GOOGLE_REFRESH_TOKEN}
@@ -25,9 +30,7 @@ services:
       - JIRA_USERNAME=${JIRA_USERNAME}
       - JIRA_TOKEN=${JIRA_API_TOKEN}
     volumes:
-      - ./service/prefect/flows:/app/flows
-      - ./service/prefect/tasks:/app/tasks
-      - ./service/prefect/blocks:/app/blocks
+      # Only mount the output directory; code runs from the baked image (production).
       - ./service/prefect/data:/app/data
     depends_on:
       - postgres
@@ -40,6 +43,48 @@ services:
           memory: "1G"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Workflow Worker (executes deployment runs from the work pool)
+  prefect-worker:
+    build:
+      context: ./service/prefect
+      dockerfile: Dockerfile
+    container_name: prefect-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PREFECT_API_URL=http://prefect:4200/api
+      - PREFECT_API_AUTH_STRING=${PREFECT_API_AUTH_STRING}
+      - PREFECT_LOGGING_LEVEL=INFO
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REFRESH_TOKEN=${GOOGLE_REFRESH_TOKEN}
+      - JIRA_URL=${JIRA_URL}
+      - JIRA_USERNAME=${JIRA_USERNAME}
+      - JIRA_TOKEN=${JIRA_API_TOKEN}
+    volumes:
+      - ./service/prefect/data:/app/data
+    depends_on:
+      - prefect
+    networks:
+      - dashboard-networks
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1G"
+    # Override the server entrypoint: start a worker against the shared pool.
+    entrypoint: []
+    command: ["uv", "run", "prefect", "worker", "start", "--pool", "noktah-pool"]
+    # The image HEALTHCHECK targets the server's /api/health; the worker has no
+    # such endpoint. Check the worker process is alive via /proc (no pgrep in image).
+    healthcheck:
+      test: ["CMD", "python", "-c", "import glob; import sys; sys.exit(0 if any(b'prefect' in open(p,'rb').read() and b'worker' in open(p,'rb').read() for p in glob.glob('/proc/[0-9]*/cmdline')) else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -93,6 +138,7 @@ services:
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     depends_on:
       - anythingllm
+      - prefect
     networks:
       - dashboard-networks
 
@@ -101,8 +147,10 @@ services:
     image: postgres:15.14-alpine
     container_name: postgres
     restart: unless-stopped
-    ports:
-      - "5432:5432"
+    # No host port mapping: the database is reachable only on the internal
+    # docker network (prefect / prefect-worker). Uncomment for local DB access:
+    #   ports:
+    #     - "127.0.0.1:5432:5432"
     env_file:
       - .env
     environment:

@@ -7,20 +7,30 @@ Prefect 3.x workflow orchestration service that reads content plans from Google 
 ```
 service/prefect/
 ├── flows/
-│   ├── content_plan_spreadsheet_to_jira_issue.py  # Main flow (read Sheets -> convert -> create Jira issues)
+│   ├── content_plan_spreadsheet_to_jira_issue.py  # Pipeline flow + sub-flows (read Sheets -> convert -> create Jira issues)
 │   └── common/                                    # Shared flow helpers
 ├── tasks/
-│   ├── google_tasks.py    # Sheets/Drive operations
-│   ├── jira_tasks.py      # Jira read/write operations
+│   ├── google_tasks.py    # Sheets/Drive operations (shared Google rate limiter)
+│   ├── jira_tasks.py      # Jira read/write operations (resilient bulk create)
 │   └── utility_tasks.py   # Date/text/number formatting, JSON output helpers
+├── shared/                # Framework-agnostic shared utilities (unit-testable)
+│   ├── rate_limit.py      # AsyncRateLimiter with adaptive backoff-on-429
+│   ├── retry.py           # Retryable/terminal errors, Retry-After, backoff runner
+│   ├── batching.py        # chunked() / run_in_batches()
+│   ├── http.py            # async HTTP wrapper (rate limit + typed errors)
+│   ├── jira_api.py        # resilient bulk issue creation (batch + backoff)
+│   ├── dates.py           # utc_now_iso(), month helpers
+│   └── io.py              # save_json(), run_output_dir()
 ├── blocks/
 │   ├── google_credentials.py  # GoogleCredentials block (OAuth refresh token)
 │   └── jira_credentials.py    # JiraCredentials block (Basic auth: email + API token)
 ├── hashmap.py              # Static mappings: WORKERS, COMPONENTS, CONTENT_EDITOR, FIELD_ASSOCIATE
+├── prefect.yaml            # Deployment definitions (work pool: noktah-pool)
+├── bootstrap.sh            # Create work pool + register deployments (idempotent)
 ├── main.py                 # CLI entry point
 ├── run_google_oauth.py     # One-time Google OAuth setup (local dev)
 ├── pyproject.toml / uv.lock
-├── Dockerfile
+├── Dockerfile / .dockerignore
 └── data/                   # Timestamped flow output (JSON), gitignored
 ```
 
@@ -40,32 +50,68 @@ JIRA_API_TOKEN=your_jira_api_token   # mapped to JIRA_TOKEN inside the container
 
 Google and Jira credentials are normally stored as Prefect Blocks (`google-creds`, `jira-creds`). If a block isn't registered, `GoogleCredentials.load_or_env()` / `JiraCredentials.load_or_env()` fall back to building credentials from the environment variables above, so flows still run without pre-registering blocks.
 
-## Running
+## Production setup (server + worker + auth)
 
-### In Docker (recommended)
+The stack is **production-only** (no dev bind-mounts): the `prefect` (server) and
+`prefect-worker` containers run the code baked into the image. A code change
+requires a rebuild: `docker-compose up -d --build prefect prefect-worker`.
 
 ```bash
-# From the repo root
-docker-compose up -d prefect
+# From the repo root -- start the DB, server and worker
+docker-compose up -d --build postgres prefect prefect-worker
 
-# Run the content plan -> Jira flow (defaults to next month)
-docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py
-
-# Target a specific month
-docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "Juni 2026"
-docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month-name Juni --year 2026
-
-# Dry run - validate Jira issue data without creating issues
-docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --validate-only
-
-# Follow logs
-docker-compose logs -f prefect
-
-# Rebuild after Dockerfile/dependency changes
-docker-compose up -d --build prefect
+# One-time: create the work pool and register deployments (idempotent)
+docker exec prefect bash bootstrap.sh
 ```
 
-Prefect UI: http://localhost:4200
+**Auth:** the UI/API require basic auth via `PREFECT_API_AUTH_STRING` (`user:pass`
+in `.env`). The server port `4200` is bound to `127.0.0.1` only; expose it
+publicly by adding a Cloudflare Tunnel public hostname (Zero Trust > Networks >
+Tunnels) pointing `prefect.<domain>` -> `http://prefect:4200`, protected with a
+Cloudflare Access policy. Postgres has no host port (internal network only).
+
+Prefect UI: http://localhost:4200 (log in with `PREFECT_API_AUTH_STRING`).
+
+## Running the pipeline
+
+### Via deployment (recommended)
+
+Triggered manually (no schedule -- content-plan finalization timing varies):
+
+```bash
+# From the UI: Deployments > content-plan-to-jira-pipeline/content-plan-to-jira > Run
+# Or from the CLI (inside the container):
+docker exec prefect prefect deployment run \
+  'content-plan-to-jira-pipeline/content-plan-to-jira' \
+  -p target_month="Juli 2026" -p validate_only=true \
+  -p 'client_names=["Klinik Utama Gresik","Klinik Mata Jogja","Klinik Mata Boyolali"]'
+```
+
+Runs are picked up by `prefect-worker` and appear as a single parent flow run
+(with nested sub-flows) in the UI.
+
+### Via the standalone CLI (fallback)
+
+```bash
+# Defaults to next month; validate-only is the safe default in the deployment,
+# but the CLI creates issues unless --validate-only is passed.
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --validate-only
+
+# Target a specific month
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "Juli 2026"
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month-name Juli --year 2026
+
+# One or several clients (validate only)
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py \
+  --month "Juli 2026" --validate-only \
+  --clients "Klinik Utama Gresik" "Klinik Mata Jogja" "Klinik Mata Boyolali"
+
+# Follow logs
+docker-compose logs -f prefect prefect-worker
+
+# Rebuild after code/Dockerfile/dependency changes
+docker-compose up -d --build prefect prefect-worker
+```
 
 ### Locally with UV
 
@@ -82,10 +128,15 @@ uv run python run_google_oauth.py
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `--month` | `str` | Target month as `"Month YYYY"`, e.g. `"Juni 2026"` or `"June 2026"`. Omit to auto-target next month. |
-| `--month-name` | `str` | Month name only (e.g. `"Juni"`). Must be paired with `--year`. |
+| `--month` | `str` | Target month as `"Month YYYY"`, e.g. `"Juli 2026"` or `"July 2026"`. Omit to auto-target next month. |
+| `--month-name` | `str` | Month name only (e.g. `"Juli"`). Must be paired with `--year`. |
 | `--year` | `int` | Year (e.g. `2026`). Must be paired with `--month-name`. |
 | `--validate-only` | flag | Validates converted Jira issue data without creating issues in Jira. |
+| `--single` | `str` | Run for a single client by name (alias for one `--clients` value). |
+| `--clients` | `str...` | One or more client names (space-separated; quote names with spaces). |
+
+The deployment exposes the same options as flow parameters: `target_month`,
+`validate_only`, `client_names` (list), `max_issues`.
 
 ## What the flow does
 
@@ -99,12 +150,22 @@ uv run python run_google_oauth.py
 
 Each run writes a timestamped directory under `data/` (e.g. `data/20260702_191619/`) containing a step-by-step JSON trace (`step1_client_data.json`, `step4_content_plan_data.json`, `step7_validation_per_client.json`, etc.) for debugging and auditing.
 
-## Adding a New Flow
+## Adding a New Workflow
 
-1. Add task(s) to the relevant file in `tasks/` (or a new file if it's a new API group), following the `api-group.resource.action` naming convention.
-2. Create a new file in `flows/` with an `@flow`-decorated async function returning a `Dict[str, Any]` (`start_time`, `end_time`, `data`, `summary`, optional `error`).
-3. Add an `argparse` CLI block under `if __name__ == "__main__":` for standalone execution, mirroring the existing flow.
-4. Test locally with `uv run python flows/your_flow.py` before running it in Docker.
+1. Reuse `shared/` for cross-cutting concerns instead of re-implementing them:
+   rate limiting (`shared.rate_limit`), retries/backoff (`shared.retry`),
+   batching (`shared.batching`), HTTP (`shared.http`), timestamps/months
+   (`shared.dates`), JSON I/O (`shared.io`).
+2. Add task(s) to the relevant file in `tasks/` (or a new API-group file), following
+   the `api-group.resource.action` naming convention; keep tasks thin over `shared/`.
+3. Create a new file in `flows/` with an `@flow`-decorated async entrypoint.
+4. Register it: add a `deployments:` entry in `prefect.yaml` pointing at
+   `flows/your_flow.py:your_flow`, `work_pool.name: noktah-pool`, then re-run
+   `docker exec prefect bash bootstrap.sh` (or `prefect deploy --all`).
+5. Test locally first with `uv run python flows/your_flow.py`.
+
+The shared `noktah-pool` worker runs every deployment, so new workflows need no
+new infrastructure. Scale throughput by adding `prefect-worker` replicas.
 
 See [.claude/rules/backend/prefect.md](../../.claude/rules/backend/prefect.md) for full development standards (flow/task/block conventions, error handling, logging).
 

@@ -8,22 +8,38 @@ Prefect workflow orchestration service for automating integrations with Google A
 
 ## Development Commands
 
-### Prefect Workflows
+### Prefect Deployments (production)
+```bash
+# Start server + worker, then register the work pool + deployments (idempotent)
+docker-compose up -d --build postgres prefect prefect-worker
+docker exec prefect bash bootstrap.sh
+
+# Trigger the pipeline manually (validate-only shown; omit to create issues)
+docker exec prefect prefect deployment run \
+  'content-plan-to-jira-pipeline/content-plan-to-jira' \
+  -p target_month="Juli 2026" -p validate_only=true
+```
+The UI/API (http://localhost:4200, bound to localhost; public via Cloudflare
+Tunnel) require basic auth from `PREFECT_API_AUTH_STRING`.
+
+### Prefect Workflows (standalone CLI)
 ```bash
 # Run flows inside Prefect container (recommended)
 docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py
 
 # Run for a specific month/year
-docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "Juni 2026"
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --month "Juli 2026"
 
 # Dry run (validate only, no Jira issues created)
 docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --validate-only
 
-# Access Prefect UI
-# http://localhost:4200
+# One or more clients
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py \
+  --month "Juli 2026" --validate-only \
+  --clients "Klinik Utama Gresik" "Klinik Mata Jogja" "Klinik Mata Boyolali"
 
 # View flow logs
-docker-compose logs -f prefect
+docker-compose logs -f prefect prefect-worker
 ```
 
 ### Docker Environment
@@ -100,8 +116,8 @@ service/prefect/
 
 | Service | Port | URL |
 |---------|------|-----|
-| Prefect UI | 4200 | http://localhost:4200 |
-| PostgreSQL | 5432 | localhost:5432 |
+| Prefect UI | 4200 | http://127.0.0.1:4200 (basic auth; public via Cloudflare Tunnel) |
+| PostgreSQL | 5432 | internal network only (no host port) |
 
 ### Health Check Endpoints
 - **Prefect API**: http://localhost:4200/api/health
@@ -118,6 +134,9 @@ POSTGRES_DB_DEV=your_dev_database
 POSTGRES_DB_PREFECT=prefect
 POSTGRES_USER=your_database_user
 POSTGRES_PASSWORD=your_secure_password
+
+# Prefect UI/API basic auth (user:password), required by prefect + prefect-worker
+PREFECT_API_AUTH_STRING=admin:change_me
 
 # Google Services (for workflows)
 GOOGLE_CLIENT_ID=your_google_client_id

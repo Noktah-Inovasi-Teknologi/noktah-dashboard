@@ -1,0 +1,24 @@
+# Keep the build context small and secrets out of the image.
+
+# Virtualenv (359 MB; rebuilt in-image via `uv sync`)
+.venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local run output (timestamped JSON traces)
+data/
+
+# Secrets and OAuth tokens (never bake into the image)
+token.json
+client_secret_*.json
+*.env
+.env
+
+# Logs and editor cruft
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

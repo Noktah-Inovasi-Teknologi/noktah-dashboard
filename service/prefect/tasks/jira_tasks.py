@@ -18,12 +18,14 @@ from prefect.logging import get_run_logger
 
 try:
     from ..blocks.jira_credentials import JiraCredentials
+    from ..shared.jira_api import build_basic_auth_header, bulk_create_issues
 except ImportError:
     # For running as standalone script
     import sys
     import os
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from blocks.jira_credentials import JiraCredentials
+    from shared.jira_api import build_basic_auth_header, bulk_create_issues
 
 logger = logging.getLogger(__name__)
 
@@ -535,78 +537,41 @@ async def create_issues_bulk(
         Dict containing created issues information and any errors
     """
     logger = get_run_logger()
-    
+
     try:
         # Limit the number of issues to prevent API overload
         if len(issue_updates) > max_issues:
             logger.warning(f"Limiting issue creation from {len(issue_updates)} to {max_issues} issues")
             issue_updates = issue_updates[:max_issues]
-        
+
         # Load credentials from block
         jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
         client = jira_creds.get_client()
-        
-        # Prepare bulk create payload
-        bulk_payload = {
-            "issueUpdates": issue_updates
-        }
-        
-        # Execute bulk create request using raw API call
-        import requests
-        import json
-        
-        # Get auth headers from client
-        auth_header = client._auth_header if hasattr(client, '_auth_header') else None
-        if not auth_header:
-            # Fallback to basic auth using correct attribute names
-            import base64
-            auth_string = f"{client.jira_username}:{client.jira_token}"
-            auth_bytes = auth_string.encode('ascii')
-            auth_b64 = base64.b64encode(auth_bytes).decode('ascii')
-            auth_header = f"Basic {auth_b64}"
-        
-        headers = {
-            "Authorization": auth_header,
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
-        
-        # Make the bulk create request
-        url = f"{client.jira_url}/rest/api/3/issue/bulk"
-        response = requests.post(
-            url=url,
-            headers=headers,
-            data=json.dumps(bulk_payload),
-            timeout=120  # 2 minute timeout for bulk operations
+
+        # Delegate to the shared, resilient bulk helper: it batches to Jira's
+        # per-request cap, applies a shared rate limiter, and retries on HTTP
+        # 429/5xx honoring Retry-After (instead of silently swallowing errors,
+        # which previously caused bulk creation to stop after ~10 clients).
+        auth_header = build_basic_auth_header(client.jira_username, client.jira_token)
+        result = await bulk_create_issues(
+            base_url=client.jira_url,
+            auth_header=auth_header,
+            issues=issue_updates,
         )
-        
-        if response.status_code == 201:
-            result_data = response.json()
-            created_issues = result_data.get("issues", [])
-            errors = result_data.get("errors", [])
-            
-            logger.info(f"Successfully created {len(created_issues)} issues in bulk")
-            if errors:
-                logger.warning(f"Encountered {len(errors)} errors during bulk creation")
-            
-            return {
-                "status": "success",
-                "created_issues": created_issues,
-                "errors": errors,
-                "total_requested": len(issue_updates),
-                "total_created": len(created_issues),
-                "total_errors": len(errors)
-            }
+
+        if result["status"] == "error":
+            logger.error(
+                f"Bulk creation failed: {result.get('error')} "
+                f"(requested={result['total_requested']})"
+            )
         else:
-            error_msg = f"Bulk issue creation failed with status {response.status_code}"
-            logger.error(f"{error_msg}: {response.text}")
-            return {
-                "status": "error",
-                "error": error_msg,
-                "response_text": response.text,
-                "status_code": response.status_code
-            }
-        
+            logger.info(
+                f"Bulk creation {result['status']}: "
+                f"created={result['total_created']}, errors={result['total_errors']}"
+            )
+
+        return result
+
     except Exception as e:
         logger.error(f"Failed to create issues in bulk: {str(e)}")
         return {

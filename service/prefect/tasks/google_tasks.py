@@ -11,14 +11,31 @@ from prefect.logging import get_run_logger
 
 try:
     from ..blocks.google_credentials import GoogleCredentials
+    from ..shared.rate_limit import AsyncRateLimiter
 except ImportError:
     # For running as standalone script
     import sys
     import os
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from blocks.google_credentials import GoogleCredentials
+    from shared.rate_limit import AsyncRateLimiter
 
 logger = logging.getLogger(__name__)
+
+# Shared limiter for all Google API calls in this process. Paces Sheets/Drive
+# reads so bursts across many clients don't trip Google's per-user quotas.
+GOOGLE_RATE_LIMITER = AsyncRateLimiter(min_interval=1.0, max_interval=20.0)
+
+
+def _escape_drive_query_value(value: str) -> str:
+    """
+    Escape a value for safe interpolation into a Drive ``q`` query string.
+
+    Drive query literals are single-quoted; backslashes and single quotes must
+    be escaped to avoid broken or injected queries when a folder id or file-name
+    pattern contains an apostrophe.
+    """
+    return str(value).replace("\\", "\\\\").replace("'", "\\'")
 
 
 @task(name="google-test-connection", retries=2, retry_delay_seconds=30)
@@ -93,10 +110,13 @@ async def google_read_sheet_data(
         Dict containing sheet data and metadata
     """
     try:
+        # Pace Sheets reads to stay under Google's per-user quota.
+        await GOOGLE_RATE_LIMITER.acquire()
+
         # Load credentials from block
         google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
         client = google_creds.get_client()
-        
+
         # Use pandas DataFrame for data processing
         df = client.to_dataframe(
             spreadsheet_id=spreadsheet_id,
@@ -257,13 +277,15 @@ async def google_filter_files_in_folder(
         
         files = []
         
+        escaped_pattern = _escape_drive_query_value(file_name_pattern) if file_name_pattern else ""
+
         if include_subfolders:
             # Search recursively - first get all folders under this folder
             folders_to_search = [folder_id]
-            
+
             # Get all subfolders recursively
             def get_subfolders(parent_folder_id):
-                subfolder_query = f"'{parent_folder_id}' in parents and mimeType='application/vnd.google-apps.folder'"
+                subfolder_query = f"'{_escape_drive_query_value(parent_folder_id)}' in parents and mimeType='application/vnd.google-apps.folder'"
                 subfolder_result = drive_service.files().list(
                     q=subfolder_query,
                     spaces='drive',
@@ -279,10 +301,11 @@ async def google_filter_files_in_folder(
             
             # Search in all folders
             for search_folder_id in folders_to_search:
+                escaped_folder = _escape_drive_query_value(search_folder_id)
                 if file_name_pattern:
-                    query = f"'{search_folder_id}' in parents and name contains '{file_name_pattern}'"
+                    query = f"'{escaped_folder}' in parents and name contains '{escaped_pattern}'"
                 else:
-                    query = f"'{search_folder_id}' in parents"
+                    query = f"'{escaped_folder}' in parents"
                 
                 request_params = {
                     'q': query,
@@ -300,10 +323,11 @@ async def google_filter_files_in_folder(
                     break
         else:
             # Search only in the specified folder - use proper API parameters
+            escaped_folder = _escape_drive_query_value(folder_id)
             if file_name_pattern:
-                query = f"'{folder_id}' in parents and name contains '{file_name_pattern}'"
+                query = f"'{escaped_folder}' in parents and name contains '{escaped_pattern}'"
             else:
-                query = f"'{folder_id}' in parents"
+                query = f"'{escaped_folder}' in parents"
             
             logger.info(f"Executing Drive API query: {query}")
             

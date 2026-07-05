@@ -47,6 +47,13 @@ except ImportError:
         convert_content_plan_row_to_jira_issue
     )
 
+try:
+    from ..shared.dates import utc_now_iso
+    from ..shared.io import run_output_dir
+except ImportError:
+    from shared.dates import utc_now_iso
+    from shared.io import run_output_dir
+
 logger = logging.getLogger(__name__)
 
 # Configuration
@@ -72,7 +79,7 @@ async def read_content_plan_flow(
         credentials_block_name: Name of the Google credentials block
     """
     results = {
-        "start_time": datetime.now().isoformat(),
+        "start_time": utc_now_iso(),
         "spreadsheet_id": spreadsheet_id,
         "sheet_name": sheet_name,
         "data": [],
@@ -113,7 +120,7 @@ async def read_content_plan_flow(
         
         results["data"] = content_data
         results["total_rows"] = len(content_data)
-        results["end_time"] = datetime.now().isoformat()
+        results["end_time"] = utc_now_iso()
         results["dataframe_info"] = dataframe_info
         results["summary"] = {
             "total_rows": len(content_data),
@@ -126,7 +133,7 @@ async def read_content_plan_flow(
     except Exception as e:
         logger.error(f"Workflow failed: {str(e)}")
         results["error"] = str(e)
-        results["end_time"] = datetime.now().isoformat()
+        results["end_time"] = utc_now_iso()
         return results
 
 
@@ -136,37 +143,43 @@ async def search_content_plan_files_flow(
     spreadsheet_id: str = SPREADSHEET_ID,
     sheet_name: str = SHEET_NAME,
     credentials_block_name: str = "google-creds",
-    target_month: Optional[str] = None
+    target_month: Optional[str] = None,
+    clients: Optional[List[Dict[str, Any]]] = None
 ):
     """
     Search for content plan spreadsheets in each client's Content Plan folder
-    
+
     Args:
         spreadsheet_id: Google Spreadsheet ID for client data
         sheet_name: Name of the sheet containing client data
         credentials_block_name: Name of the Google credentials block
-        target_month: Specific month to search for (e.g., "September 2025", "Januari 2024"). 
+        target_month: Specific month to search for (e.g., "September 2025", "Januari 2024").
                      If None, searches for next month.
+        clients: Pre-fetched client records. When provided, the internal client
+                 read is skipped (used by the parent pipeline to avoid re-reading
+                 the client spreadsheet on every stage).
     """
     results = {
-        "start_time": datetime.now().isoformat(),
+        "start_time": utc_now_iso(),
         "clients": [],
         "summary": {}
     }
-    
+
     try:
-        # First get the client data
-        client_data_result = await read_content_plan_flow(
-            spreadsheet_id=spreadsheet_id,
-            sheet_name=sheet_name,
-            credentials_block_name=credentials_block_name
-        )
-        
-        if "error" in client_data_result:
-            results["error"] = f"Failed to get client data: {client_data_result['error']}"
-            return results
-        
-        clients = client_data_result["data"]
+        # Reuse pre-fetched client data when the parent flow supplies it;
+        # otherwise read it once here (standalone behavior).
+        if clients is None:
+            client_data_result = await read_content_plan_flow(
+                spreadsheet_id=spreadsheet_id,
+                sheet_name=sheet_name,
+                credentials_block_name=credentials_block_name
+            )
+
+            if "error" in client_data_result:
+                results["error"] = f"Failed to get client data: {client_data_result['error']}"
+                return results
+
+            clients = client_data_result["data"]
         
         # Get target month - either specified or next month in Indonesian format
         if target_month:
@@ -268,13 +281,13 @@ async def search_content_plan_files_flow(
             "target_month_input": target_month
         }
         
-        results["end_time"] = datetime.now().isoformat()
+        results["end_time"] = utc_now_iso()
         return results
         
     except Exception as e:
         logger.error(f"Flow failed: {str(e)}")
         results["error"] = str(e)
-        results["end_time"] = datetime.now().isoformat()
+        results["end_time"] = utc_now_iso()
         return results
 
 
@@ -286,7 +299,8 @@ async def filter_content_plan_results_flow(
     client_names: Optional[List[str]] = None,
     spreadsheet_id: str = SPREADSHEET_ID,
     sheet_name: str = SHEET_NAME,
-    credentials_block_name: str = "google-creds"
+    credentials_block_name: str = "google-creds",
+    search_results: Optional[Dict[str, Any]] = None
 ):
     """
     Filter content plan search results by specific client numbers or names for debugging.
@@ -303,7 +317,7 @@ async def filter_content_plan_results_flow(
         Filtered results with only specified clients
     """
     results = {
-        "start_time": datetime.now().isoformat(),
+        "start_time": utc_now_iso(),
         "filter_criteria": {
             "client_numbers": client_numbers,
             "client_names": client_names,
@@ -314,18 +328,21 @@ async def filter_content_plan_results_flow(
     }
     
     try:
-        # Get all content plan results first
-        all_results = await search_content_plan_files_flow(
-            target_month=target_month,
-            spreadsheet_id=spreadsheet_id,
-            sheet_name=sheet_name,
-            credentials_block_name=credentials_block_name
-        )
-        
+        # Reuse pre-computed search results when supplied by the parent flow;
+        # otherwise run the search once here (standalone behavior).
+        all_results = search_results
+        if all_results is None:
+            all_results = await search_content_plan_files_flow(
+                target_month=target_month,
+                spreadsheet_id=spreadsheet_id,
+                sheet_name=sheet_name,
+                credentials_block_name=credentials_block_name
+            )
+
         if "error" in all_results:
             results["error"] = f"Failed to get content plan data: {all_results['error']}"
             return results
-        
+
         all_output = all_results["output"]
         filtered_output = []
         
@@ -363,13 +380,13 @@ async def filter_content_plan_results_flow(
             "filter_applied": bool(client_numbers or client_names)
         }
         
-        results["end_time"] = datetime.now().isoformat()
+        results["end_time"] = utc_now_iso()
         return results
         
     except Exception as e:
         logger.error(f"Filter flow failed: {str(e)}")
         results["error"] = str(e)
-        results["end_time"] = datetime.now().isoformat()
+        results["end_time"] = utc_now_iso()
         return results
 
 
@@ -381,7 +398,8 @@ async def read_content_plan_data_flow(
     client_names: Optional[List[str]] = None,
     min_delay_seconds: int = 5,
     max_delay_seconds: int = 10,
-    credentials_block_name: str = "google-creds"
+    credentials_block_name: str = "google-creds",
+    content_plan_list: Optional[List[Dict[str, Any]]] = None
 ):
     """
     Read content plan data from each client's spreadsheet with random delays.
@@ -398,7 +416,7 @@ async def read_content_plan_data_flow(
         Dict containing content plan data for each client
     """
     results = {
-        "start_time": datetime.now().isoformat(),
+        "start_time": utc_now_iso(),
         "content_plans": [],
         "summary": {},
         "processing_info": {
@@ -409,31 +427,33 @@ async def read_content_plan_data_flow(
     }
     
     try:
-        # Get filtered content plan results
-        if client_numbers or client_names:
-            filtered_results = await filter_content_plan_results_flow(
-                target_month=target_month,
-                client_numbers=client_numbers,
-                client_names=client_names,
-                credentials_block_name=credentials_block_name
-            )
-            
-            if "error" in filtered_results:
-                results["error"] = f"Failed to get filtered results: {filtered_results['error']}"
-                return results
-                
-            content_plan_list = filtered_results["filtered_output"]
-        else:
-            all_results = await search_content_plan_files_flow(
-                target_month=target_month,
-                credentials_block_name=credentials_block_name
-            )
-            
-            if "error" in all_results:
-                results["error"] = f"Failed to get content plan data: {all_results['error']}"
-                return results
-                
-            content_plan_list = all_results["output"]
+        # Reuse a pre-computed content plan list when supplied by the parent
+        # flow; otherwise derive it here (standalone behavior).
+        if content_plan_list is None:
+            if client_numbers or client_names:
+                filtered_results = await filter_content_plan_results_flow(
+                    target_month=target_month,
+                    client_numbers=client_numbers,
+                    client_names=client_names,
+                    credentials_block_name=credentials_block_name
+                )
+
+                if "error" in filtered_results:
+                    results["error"] = f"Failed to get filtered results: {filtered_results['error']}"
+                    return results
+
+                content_plan_list = filtered_results["filtered_output"]
+            else:
+                all_results = await search_content_plan_files_flow(
+                    target_month=target_month,
+                    credentials_block_name=credentials_block_name
+                )
+
+                if "error" in all_results:
+                    results["error"] = f"Failed to get content plan data: {all_results['error']}"
+                    return results
+
+                content_plan_list = all_results["output"]
         
         # Process each content plan with delays
         processing_start_time = datetime.now()
@@ -467,7 +487,7 @@ async def read_content_plan_data_flow(
                     "content_plan_id": content_plan_id,
                     "data": content_plan_data["data"],
                     "dataframe_info": content_plan_data["dataframe_info"],
-                    "processing_timestamp": datetime.now().isoformat()
+                    "processing_timestamp": utc_now_iso()
                 }
                 
                 results["content_plans"].append(client_result)
@@ -479,13 +499,11 @@ async def read_content_plan_data_flow(
                     "client_name": client_name,
                     "content_plan_id": content_plan_id,
                     "error": str(e),
-                    "processing_timestamp": datetime.now().isoformat()
+                    "processing_timestamp": utc_now_iso()
                 })
             
-            # Add random delay between requests (except for the last item)
-            if index < len(content_plan_list) - 1:
-                delay_seconds = random.uniform(min_delay_seconds, max_delay_seconds)
-                await asyncio.sleep(delay_seconds)
+            # Pacing between Sheets reads is handled by the shared Google rate
+            # limiter inside google_read_sheet_data, so no manual delay is needed.
         
         processing_end_time = datetime.now()
         total_processing_time = (processing_end_time - processing_start_time).total_seconds()
@@ -500,13 +518,13 @@ async def read_content_plan_data_flow(
             "average_delay_seconds": (min_delay_seconds + max_delay_seconds) / 2
         }
         
-        results["end_time"] = datetime.now().isoformat()
+        results["end_time"] = utc_now_iso()
         return results
         
     except Exception as e:
         logger.error(f"Content plan reader flow failed: {str(e)}")
         results["error"] = str(e)
-        results["end_time"] = datetime.now().isoformat()
+        results["end_time"] = utc_now_iso()
         return results
 
 
@@ -532,7 +550,7 @@ async def format_data_processor_flow(
     logger = get_run_logger()
     
     results = {
-        "start_time": datetime.now().isoformat() + "Z",
+        "start_time": utc_now_iso(),
         "spreadsheet_id": spreadsheet_id,
         "sheet_name": sheet_name,
         "max_rows": max_rows,
@@ -599,7 +617,7 @@ async def format_data_processor_flow(
                 "source_spreadsheet_id": spreadsheet_id,
                 "source_sheet_name": sheet_name,
                 "source_spreadsheet_title": results["spreadsheet_title"],
-                "processed_at": datetime.now().isoformat() + "Z",
+                "processed_at": utc_now_iso(),
                 "total_rows": len(processed_rows),
                 "format_standards": {
                     "date_time": "ISO 8601 (YYYY-MM-DDTHH:MM:SSZ)",
@@ -626,14 +644,14 @@ async def format_data_processor_flow(
             ]
         }
         
-        results["end_time"] = datetime.now().isoformat() + "Z"
+        results["end_time"] = utc_now_iso()
         
         return results
         
     except Exception as e:
         logger.error(f"Data processing flow failed: {str(e)}")
         results["error"] = str(e)
-        results["end_time"] = datetime.now().isoformat() + "Z"
+        results["end_time"] = utc_now_iso()
         return results
 
 
@@ -644,7 +662,8 @@ async def convert_content_plan_to_jira_assets_flow(
     client_names: Optional[List[str]] = None,
     credentials_block_name: str = "google-creds",
     component_hashmap: Optional[Dict[str, str]] = None,
-    timestamp: Optional[str] = None
+    timestamp: Optional[str] = None,
+    content_plan_results: Optional[Dict[str, Any]] = None
 ):
     """
     Convert content plan data to Jira issue type 10009 (Asset) format
@@ -660,20 +679,22 @@ async def convert_content_plan_to_jira_assets_flow(
         Dict containing converted Jira assets for each content plan row
     """
     results = {
-        "start_time": datetime.now().isoformat(),
+        "start_time": utc_now_iso(),
         "jira_assets": [],
         "summary": {}
     }
     
     try:
-        # Get content plan data first
-        content_plan_results = await read_content_plan_data_flow(
-            target_month=target_month,
-            client_numbers=client_numbers,
-            client_names=client_names,
-            credentials_block_name=credentials_block_name
-        )
-        
+        # Reuse pre-computed content plan data when supplied by the parent flow;
+        # otherwise read it once here (standalone behavior).
+        if content_plan_results is None:
+            content_plan_results = await read_content_plan_data_flow(
+                target_month=target_month,
+                client_numbers=client_numbers,
+                client_names=client_names,
+                credentials_block_name=credentials_block_name
+            )
+
         if "error" in content_plan_results:
             results["error"] = f"Failed to get content plan data: {content_plan_results['error']}"
             return results
@@ -731,7 +752,7 @@ async def convert_content_plan_to_jira_assets_flow(
                 "metadata": {
                     "client_name": client_name,
                     "content_plan_id": client_data.get("content_plan_id"),
-                    "converted_at": datetime.now().isoformat() + "Z",
+                    "converted_at": utc_now_iso(),
                     "total_assets": client_data["asset_count"],
                     "target_month": target_month,
                     "jira_format": "issue_type_10009_asset"
@@ -753,7 +774,7 @@ async def convert_content_plan_to_jira_assets_flow(
         # Also save combined file for reference
         combined_output_data = {
             "metadata": {
-                "converted_at": datetime.now().isoformat() + "Z",
+                "converted_at": utc_now_iso(),
                 "total_clients_processed": len([c for c in content_plan_results["content_plans"] if "data" in c]),
                 "total_assets_created": total_assets_created,
                 "target_month": target_month,
@@ -779,13 +800,13 @@ async def convert_content_plan_to_jira_assets_flow(
             "combined_file_path": combined_saved_path
         }
         
-        results["end_time"] = datetime.now().isoformat()
+        results["end_time"] = utc_now_iso()
         return results
         
     except Exception as e:
         logger.error(f"Jira asset conversion flow failed: {str(e)}")
         results["error"] = str(e)
-        results["end_time"] = datetime.now().isoformat()
+        results["end_time"] = utc_now_iso()
         return results
 
 
@@ -827,7 +848,7 @@ async def bulk_create_jira_issues_per_client_flow(
         )
     
     results = {
-        "start_time": datetime.now().isoformat(),
+        "start_time": utc_now_iso(),
         "client_results": [],
         "summary": {}
     }
@@ -910,11 +931,11 @@ async def bulk_create_jira_issues_per_client_flow(
                 
                 results["client_results"].append(client_result)
                 total_clients_processed += 1
-                
-                # Add delay between clients to avoid rate limiting
-                if len(client_files) > 1:
-                    await asyncio.sleep(2)
-                
+
+                # Inter-client pacing is handled adaptively by the shared Jira
+                # rate limiter inside create_issues_bulk (widens on HTTP 429),
+                # so no fixed sleep is needed here.
+
             except Exception as e:
                 results["client_results"].append({
                     "client_name": client_name,
@@ -932,13 +953,13 @@ async def bulk_create_jira_issues_per_client_flow(
             "validate_only": validate_only
         }
         
-        results["end_time"] = datetime.now().isoformat()
+        results["end_time"] = utc_now_iso()
         return results
         
     except Exception as e:
         logger.error(f"Bulk issue creation per client flow failed: {str(e)}")
         results["error"] = str(e)
-        results["end_time"] = datetime.now().isoformat()
+        results["end_time"] = utc_now_iso()
         return results
 
 
@@ -981,7 +1002,7 @@ async def bulk_create_jira_issues_flow(
         )
     
     results = {
-        "start_time": datetime.now().isoformat(),
+        "start_time": utc_now_iso(),
         "json_file_path": json_file_path,
         "max_issues": max_issues,
         "validate_only": validate_only,
@@ -1043,7 +1064,7 @@ async def bulk_create_jira_issues_flow(
         
         # If validation only, return here
         if validate_only:
-            results["end_time"] = datetime.now().isoformat()
+            results["end_time"] = utc_now_iso()
             results["summary"] = {
                 "mode": "validation_only",
                 "total_issues_in_file": json_data["total_issues"],
@@ -1076,7 +1097,7 @@ async def bulk_create_jira_issues_flow(
         output_data = {
             "metadata": {
                 "workflow": "bulk-create-jira-issues",
-                "executed_at": datetime.now().isoformat() + "Z",
+                "executed_at": utc_now_iso(),
                 "source_file": json_file_path,
                 "max_issues_limit": max_issues,
                 "validate_only": validate_only
@@ -1088,7 +1109,7 @@ async def bulk_create_jira_issues_flow(
         saved_path = save_to_json(output_data, output_path)
         
         results["output_file"] = saved_path
-        results["end_time"] = datetime.now().isoformat()
+        results["end_time"] = utc_now_iso()
         
         # Create summary
         if bulk_result["status"] == "success":
@@ -1116,12 +1137,177 @@ async def bulk_create_jira_issues_flow(
     except Exception as e:
         logger.error(f"Bulk issue creation flow failed: {str(e)}")
         results["error"] = str(e)
-        results["end_time"] = datetime.now().isoformat()
+        results["end_time"] = utc_now_iso()
         return results
 
 
+@flow(name="content-plan-to-jira-pipeline",
+      description="End-to-end: read content plans from Google Sheets and create Jira issues")
+async def content_plan_to_jira_pipeline(
+    target_month: Optional[str] = None,
+    validate_only: bool = True,
+    client_names: Optional[List[str]] = None,
+    max_issues: int = 45,
+    credentials_block_name_google: str = "google-creds",
+    credentials_block_name_jira: str = "jira-creds",
+) -> Dict[str, Any]:
+    """
+    Orchestrate the full content-plan -> Jira pipeline as a single flow.
+
+    Each stage runs once and threads its output into the next (no redundant
+    re-reads of the client spreadsheet or Drive folders). A step returning an
+    ``error`` raises, so the flow run surfaces as Failed in the Prefect UI
+    instead of silently completing.
+
+    Args:
+        target_month: Target month as "Month YYYY" (e.g. "Juli 2026"). None = next month.
+        validate_only: If True (default), validate Jira issues without creating them.
+        client_names: Optional subset of client names to process (case-insensitive
+            partial match). None = all clients.
+        max_issues: Max Jira issues per client per run.
+        credentials_block_name_google: Google credentials block name.
+        credentials_block_name_jira: Jira credentials block name.
+
+    Returns:
+        Result dict with per-step summaries, output directory and overall summary.
+    """
+    logger = get_run_logger()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = run_output_dir(OUTPUT_DIR, timestamp)
+
+    results: Dict[str, Any] = {
+        "start_time": utc_now_iso(),
+        "params": {
+            "target_month": target_month or "next month (auto)",
+            "validate_only": validate_only,
+            "client_names": client_names or "all clients",
+        },
+        "output_dir": out_dir,
+        "summary": {},
+    }
+    logger.info(
+        f"Pipeline start | month={results['params']['target_month']} | "
+        f"validate_only={validate_only} | clients={results['params']['client_names']}"
+    )
+
+    def _fail(step: str, message: str) -> None:
+        """Record and raise so the flow run is marked Failed."""
+        results["error"] = f"{step}: {message}"
+        results["end_time"] = utc_now_iso()
+        logger.error(results["error"])
+        raise RuntimeError(results["error"])
+
+    # Step 1: Read client data from the main spreadsheet (once).
+    logger.info("[1/8] Reading client data from main spreadsheet")
+    step1 = await read_content_plan_flow(credentials_block_name=credentials_block_name_google)
+    if "error" in step1:
+        _fail("step1_read_clients", step1["error"])
+    save_to_json(step1, os.path.join(out_dir, "step1_client_data.json"))
+    clients = step1["data"]
+    logger.info(f"[1/8] Read {step1.get('total_rows', 0)} clients")
+
+    # Step 2: Search each client's Drive folder for the target month's plan
+    # (reusing the already-read client list).
+    logger.info("[2/8] Searching Drive folders for content plan files")
+    step2 = await search_content_plan_files_flow(
+        target_month=target_month,
+        credentials_block_name=credentials_block_name_google,
+        clients=clients,
+    )
+    if "error" in step2:
+        _fail("step2_search", step2["error"])
+    save_to_json(step2, os.path.join(out_dir, "step2_content_plan_search.json"))
+
+    # Step 3: Filter to the requested clients (reusing step 2 search results).
+    logger.info("[3/8] Filtering content plan results")
+    step3 = await filter_content_plan_results_flow(
+        target_month=target_month,
+        client_names=client_names,
+        credentials_block_name=credentials_block_name_google,
+        search_results=step2,
+    )
+    if "error" in step3:
+        _fail("step3_filter", step3["error"])
+    save_to_json(step3, os.path.join(out_dir, "step3_filtered_results.json"))
+
+    # Step 4: Read each content plan spreadsheet (reusing the filtered list).
+    logger.info("[4/8] Reading content plan spreadsheets")
+    step4 = await read_content_plan_data_flow(
+        credentials_block_name=credentials_block_name_google,
+        content_plan_list=step3["filtered_output"],
+    )
+    if "error" in step4:
+        _fail("step4_read_data", step4["error"])
+    save_to_json(step4, os.path.join(out_dir, "step4_content_plan_data.json"))
+
+    # Step 5: Format a sample uniformly (observability/debugging artifact).
+    logger.info("[5/8] Formatting sample data uniformly")
+    await format_data_processor_flow(
+        max_rows=3,
+        output_filename="step5_formatted_data.json",
+        timestamp=timestamp,
+        credentials_block_name=credentials_block_name_google,
+    )
+
+    # Step 6: Convert content plan rows to Jira issue payloads (reusing step 4 data).
+    logger.info("[6/8] Converting content plan rows to Jira issues")
+    step6 = await convert_content_plan_to_jira_assets_flow(
+        target_month=target_month,
+        client_names=client_names,
+        timestamp=timestamp,
+        credentials_block_name=credentials_block_name_google,
+        content_plan_results=step4,
+    )
+    if "error" in step6:
+        _fail("step6_convert", step6["error"])
+    save_to_json(step6, os.path.join(out_dir, "step6_jira_assets.json"))
+    client_files = step6.get("output_files", {}).get("client_files", [])
+
+    # Step 7: Validate the Jira payloads per client (always a dry run).
+    logger.info("[7/8] Validating Jira issues (dry run)")
+    step7 = await bulk_create_jira_issues_per_client_flow(
+        client_files=client_files,
+        max_issues=max_issues,
+        validate_only=True,
+        credentials_block_name=credentials_block_name_jira,
+        timestamp=timestamp,
+    )
+    if "error" in step7:
+        _fail("step7_validate", step7["error"])
+    save_to_json(step7, os.path.join(out_dir, "step7_validation_per_client.json"))
+
+    # Step 8: Create issues per client unless validate_only.
+    issues_created = 0
+    if validate_only:
+        logger.info("[8/8] Skipped issue creation (validate_only=True)")
+    else:
+        logger.info("[8/8] Creating Jira issues in bulk per client")
+        step8 = await bulk_create_jira_issues_per_client_flow(
+            client_files=client_files,
+            max_issues=max_issues,
+            validate_only=False,
+            credentials_block_name=credentials_block_name_jira,
+            timestamp=timestamp,
+        )
+        if "error" in step8:
+            _fail("step8_create", step8["error"])
+        save_to_json(step8, os.path.join(out_dir, "step8_bulk_creation_per_client.json"))
+        issues_created = step8.get("summary", {}).get("total_issues_created", 0)
+
+    results["end_time"] = utc_now_iso()
+    results["summary"] = {
+        "clients_read": step1.get("total_rows", 0),
+        "content_plans_found": step2.get("summary", {}).get("clients_with_content_plans", 0),
+        "assets_converted": step6.get("summary", {}).get("total_assets_created", 0),
+        "clients_validated": step7.get("summary", {}).get("clients_processed", 0),
+        "validate_only": validate_only,
+        "issues_created": issues_created,
+    }
+    logger.info(f"Pipeline complete | {results['summary']}")
+    return results
+
+
 if __name__ == "__main__":
-    import asyncio
     import argparse
 
     # Parse command-line arguments
@@ -1133,20 +1319,16 @@ Examples:
   # Process for next month (default)
   python content_plan_spreadsheet_to_jira_issue.py
 
-  # Process for specific month in Indonesian format
-  python content_plan_spreadsheet_to_jira_issue.py --month "Januari 2026"
+  # Process for a specific month (Indonesian or English)
+  python content_plan_spreadsheet_to_jira_issue.py --month "Juli 2026"
+  python content_plan_spreadsheet_to_jira_issue.py --month-name Juli --year 2026
 
-  # Process for specific month in English format
-  python content_plan_spreadsheet_to_jira_issue.py --month "January 2026"
-
-  # Process with specific month and year separately
-  python content_plan_spreadsheet_to_jira_issue.py --month-name Januari --year 2026
-
-  # Run for a single client only
+  # Run for a single client
   python content_plan_spreadsheet_to_jira_issue.py --single "Klinik Utama Gresik"
 
-  # Single client with specific month and dry run
-  python content_plan_spreadsheet_to_jira_issue.py --single "Klinik Utama Gresik" --month "Juni 2026" --validate-only
+  # Run for several clients (validate only)
+  python content_plan_spreadsheet_to_jira_issue.py --month "Juli 2026" --validate-only \\
+    --clients "Klinik Utama Gresik" "Klinik Mata Jogja" "Klinik Mata Boyolali"
         """
     )
 
@@ -1154,35 +1336,38 @@ Examples:
         "--month",
         type=str,
         default=None,
-        help='Target month in "Month YYYY" format (e.g., "Januari 2026", "January 2026"). If not provided, uses next month.'
+        help='Target month in "Month YYYY" format (e.g., "Juli 2026"). If not provided, uses next month.'
     )
-
     parser.add_argument(
         "--month-name",
         type=str,
         default=None,
-        help='Month name only (e.g., "Januari", "January"). Must be used with --year.'
+        help='Month name only (e.g., "Juli"). Must be used with --year.'
     )
-
     parser.add_argument(
         "--year",
         type=int,
         default=None,
         help='Year (e.g., 2026). Must be used with --month-name.'
     )
-
     parser.add_argument(
         "--validate-only",
         action="store_true",
         help="Only validate Jira issues without creating them (dry run)"
     )
-
     parser.add_argument(
         "--single",
         type=str,
         default=None,
         metavar="CLIENT_NAME",
-        help='Run for a single client by name, including spaces (e.g., "Klinik Utama Gresik"). Matches case-insensitively against the Clients sheet.'
+        help='Run for a single client by name (alias for one --clients value).'
+    )
+    parser.add_argument(
+        "--clients",
+        nargs="+",
+        default=None,
+        metavar="CLIENT_NAME",
+        help='One or more client names to process (space-separated, quote names with spaces).'
     )
 
     args = parser.parse_args()
@@ -1196,167 +1381,14 @@ Examples:
     elif args.month_name or args.year:
         parser.error("--month-name and --year must be used together")
 
-    single_client = [args.single] if args.single else None
+    # Merge --single and --clients into a single list (None = all clients)
+    selected_clients = list(args.clients) if args.clients else []
+    if args.single:
+        selected_clients.append(args.single)
+    client_names = selected_clients or None
 
-    async def main():
-        """
-        Complete Content Plan to Jira Issues Workflow
-        Numbered steps for clear execution tracking
-        """
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        # Create run-specific output directory
-        run_output_dir = os.path.join(OUTPUT_DIR, timestamp)
-        os.makedirs(run_output_dir, exist_ok=True)
-
-        # Log execution parameters
-        execution_params = {
-            "timestamp": timestamp,
-            "target_month": target_month or "Next month (auto)",
-            "validate_only": args.validate_only,
-            "single_client": args.single or "All clients"
-        }
-        print(f"\n{'='*60}")
-        print(f"Content Plan to Jira Issues Workflow")
-        print(f"{'='*60}")
-        print(f"Target Month: {execution_params['target_month']}")
-        print(f"Validate Only: {execution_params['validate_only']}")
-        print(f"Single Client: {execution_params['single_client']}")
-        print(f"Output Directory: {run_output_dir}")
-        print(f"{'='*60}\n")
-
-        # Step 1: Read client data from main spreadsheet
-        print("[Step 1/8] Reading client data from main spreadsheet...")
-        step1_result = await read_content_plan_flow()
-
-        if "error" not in step1_result:
-            output_path1 = os.path.join(run_output_dir, "step1_client_data.json")
-            save_to_json(step1_result, output_path1)
-            print(f"✓ Successfully read {step1_result.get('total_rows', 0)} clients")
-        else:
-            print(f"✗ Error: {step1_result['error']}")
-            return
-
-        # Step 2: Search for content plan files in client folders
-        print(f"\n[Step 2/8] Searching for content plan files (target: {target_month or 'next month'})...")
-        step2_result = await search_content_plan_files_flow(
-            target_month=target_month
-        )
-
-        if "error" not in step2_result:
-            output_path2 = os.path.join(run_output_dir, "step2_content_plan_search.json")
-            save_to_json(step2_result, output_path2)
-            summary = step2_result.get("summary", {})
-            print(f"✓ Found {summary.get('clients_with_content_plans', 0)} content plans out of {summary.get('total_clients', 0)} clients")
-        else:
-            print(f"✗ Error: {step2_result['error']}")
-            return
-
-        # Step 3: Filter results for all clients (or single client)
-        print(f"\n[Step 3/8] Filtering content plan results...")
-        step3_result = await filter_content_plan_results_flow(
-            target_month=target_month,
-            client_names=single_client
-        )
-
-        if "error" not in step3_result:
-            output_path3 = os.path.join(run_output_dir, "step3_filtered_results.json")
-            save_to_json(step3_result, output_path3)
-            summary = step3_result.get("summary", {})
-            print(f"✓ Filtered {summary.get('filtered_total', 0)} clients")
-        else:
-            print(f"✗ Error: {step3_result['error']}")
-            return
-
-        # Step 4: Read content plan data with delays
-        print(f"\n[Step 4/8] Reading content plan data with rate limiting...")
-        step4_result = await read_content_plan_data_flow(
-            target_month=target_month,
-            client_names=single_client,
-            min_delay_seconds=2,
-            max_delay_seconds=4
-        )
-
-        if "error" not in step4_result:
-            output_path4 = os.path.join(run_output_dir, "step4_content_plan_data.json")
-            save_to_json(step4_result, output_path4)
-            summary = step4_result.get("summary", {})
-            print(f"✓ Successfully processed {summary.get('successfully_processed', 0)} content plans")
-        else:
-            print(f"✗ Error: {step4_result['error']}")
-            return
-
-        # Step 5: Format data uniformly
-        print(f"\n[Step 5/8] Formatting data uniformly...")
-        step5_result = await format_data_processor_flow(
-            max_rows=3,
-            output_filename="step5_formatted_data.json",
-            timestamp=timestamp
-        )
-        print(f"✓ Data formatting complete")
-
-        # Step 6: Convert content plan to Jira assets
-        print(f"\n[Step 6/8] Converting content plans to Jira issue format...")
-        step6_result = await convert_content_plan_to_jira_assets_flow(
-            target_month=target_month,
-            client_names=single_client,
-            timestamp=timestamp
-        )
-
-        if "error" not in step6_result:
-            output_path6 = os.path.join(run_output_dir, "step6_jira_assets.json")
-            save_to_json(step6_result, output_path6)
-            summary = step6_result.get("summary", {})
-            print(f"✓ Created {summary.get('total_assets_created', 0)} Jira assets for {summary.get('total_clients_processed', 0)} clients")
-        else:
-            print(f"✗ Error: {step6_result['error']}")
-            return
-
-        # Step 7: Validate Jira issues per client (dry run)
-        if "error" not in step6_result and "output_files" in step6_result:
-            client_files = step6_result["output_files"]["client_files"]
-
-            print(f"\n[Step 7/8] Validating Jira issues (dry run)...")
-            step7_result = await bulk_create_jira_issues_per_client_flow(
-                client_files=client_files,
-                max_issues=45,
-                validate_only=True,
-                timestamp=timestamp
-            )
-
-            if "error" not in step7_result:
-                output_path7 = os.path.join(run_output_dir, "step7_validation_per_client.json")
-                save_to_json(step7_result, output_path7)
-                summary = step7_result.get("summary", {})
-                print(f"✓ Validation complete: {summary.get('clients_processed', 0)} clients validated")
-            else:
-                print(f"✗ Validation error: {step7_result['error']}")
-
-            # Step 8: Create Jira issues in bulk per client (production)
-            if not args.validate_only:
-                print(f"\n[Step 8/8] Creating Jira issues in bulk...")
-                step8_result = await bulk_create_jira_issues_per_client_flow(
-                    client_files=client_files,
-                    max_issues=45,
-                    validate_only=False,
-                    timestamp=timestamp
-                )
-
-                if "error" not in step8_result:
-                    output_path8 = os.path.join(run_output_dir, "step8_bulk_creation_per_client.json")
-                    save_to_json(step8_result, output_path8)
-                    summary = step8_result.get("summary", {})
-                    print(f"✓ Successfully created {summary.get('total_issues_created', 0)} Jira issues")
-                    print(f"  Successful clients: {summary.get('successful_clients', 0)}")
-                    print(f"  Failed clients: {summary.get('failed_clients', 0)}")
-                else:
-                    print(f"✗ Creation error: {step8_result['error']}")
-            else:
-                print(f"\n[Step 8/8] Skipped (validate-only mode)")
-
-        print(f"\n{'='*60}")
-        print(f"Workflow Complete!")
-        print(f"Results saved to: {run_output_dir}")
-        print(f"{'='*60}\n")
-
-    asyncio.run(main())
+    asyncio.run(content_plan_to_jira_pipeline(
+        target_month=target_month,
+        validate_only=args.validate_only,
+        client_names=client_names,
+    ))

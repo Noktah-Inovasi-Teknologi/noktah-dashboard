@@ -15,6 +15,8 @@ RUN rm -rf .venv && uv sync --frozen --no-dev --no-install-project
 COPY flows/ ./flows/
 COPY tasks/ ./tasks/
 COPY blocks/ ./blocks/
+COPY shared/ ./shared/
+COPY prefect.yaml bootstrap.sh ./
 COPY *.py ./
 
 # Final sync to complete installation

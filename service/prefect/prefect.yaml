@@ -1,0 +1,31 @@
+# Prefect deployment definitions for the Noktah workflow service.
+#
+# Deployments are registered with `prefect deploy --all` (see bootstrap.sh) and
+# run manually from the UI or with `prefect deployment run`. Add a new workflow
+# by appending another entry under `deployments:` pointing at its @flow entrypoint.
+
+name: noktah-prefect
+prefect-version: 3.6.9
+
+# No build/push/pull steps: the process work pool runs flow code from the code
+# baked into the image (WORKDIR /app), so deployments reference local paths.
+build: null
+push: null
+pull: null
+
+deployments:
+  - name: content-plan-to-jira
+    entrypoint: flows/content_plan_spreadsheet_to_jira_issue.py:content_plan_to_jira_pipeline
+    description: >-
+      Read monthly content plans from Google Sheets and create Jira issues.
+      Triggered manually; defaults to validate-only (no issues created).
+    work_pool:
+      name: noktah-pool
+    parameters:
+      validate_only: true
+    tags:
+      - content-plan
+      - jira
+      - google-sheets
+    # Manual only -- content-plan finalization timing varies month to month.
+    schedules: []

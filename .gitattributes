@@ -1,0 +1,6 @@
+# Keep shell scripts and container-consumed files LF so they work inside the
+# Linux images regardless of the checkout platform (avoids CRLF shebang breakage).
+*.sh    text eol=lf
+Dockerfile text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
