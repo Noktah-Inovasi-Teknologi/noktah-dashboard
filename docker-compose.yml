@@ -45,6 +45,37 @@ services:
       retries: 3
       start_period: 40s
 
+  # Client Knowledge Base MCP tool server
+  knowledge-base:
+    build:
+      context: ./service/knowledge-base
+      dockerfile: Dockerfile
+    container_name: knowledge-base
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - KB_DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - KB_MCP_API_KEY=${KB_MCP_API_KEY}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REFRESH_TOKEN=${GOOGLE_REFRESH_TOKEN}
+    depends_on:
+      - postgres
+    networks:
+      - dashboard-networks
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "512M"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
   # AI Chat / RAG Platform
   anythingllm:
     image: mintplexlabs/anythingllm:latest

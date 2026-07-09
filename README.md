@@ -39,6 +39,7 @@ docker-compose logs -f prefect
 | Prefect | 4200 | Workflow orchestration |
 | PostgreSQL | 5432 | State persistence |
 | AnythingLLM | 3001 | AI chat / RAG platform |
+| Knowledge Base | 8080 (in-cluster only) | MCP tool server for the Client Knowledge Base |
 
 ## Configuration
 
@@ -60,6 +61,9 @@ GOOGLE_REFRESH_TOKEN=your_refresh_token
 JIRA_URL=https://your-domain.atlassian.net
 JIRA_USERNAME=your_email
 JIRA_API_TOKEN=your_token
+
+# Client Knowledge Base (MCP server auth)
+KB_MCP_API_KEY=generate_with_openssl_rand_hex_32
 ```
 
 ## Development
@@ -75,3 +79,4 @@ uv run python flows/content_plan_spreadsheet_to_jira_issue.py
 
 - [Prefect Service README](service/prefect/README.md) - Detailed workflow documentation
 - [Prefect Development Rules](.claude/rules/backend/prefect.md) - Development guidelines
+- [Knowledge Base Service README](service/knowledge-base/README.md) - MCP tool server for client knowledge

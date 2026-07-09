@@ -1,22 +1,8 @@
--- Initialize databases
--- Note: Main database is created automatically from POSTGRES_DB env var
+-- Migration: 001_knowledge_records
+-- Feature: 001-client-knowledge-base
+-- Idempotent — safe to run against an existing database that predates this feature.
+-- Run with: docker exec -i postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" < 001_knowledge_records.sql
 
--- Create additional databases using environment variables
--- Use psql variables to get environment variable values
-\set dev_db `echo "$POSTGRES_DB_DEV"`
-\set prefect_db `echo "$POSTGRES_DB_PREFECT"`
-
--- Create databases
-CREATE DATABASE :dev_db;
-CREATE DATABASE :prefect_db;
-
--- Grant privileges to main user
-\set main_user `echo "$POSTGRES_USER"`
-GRANT ALL PRIVILEGES ON DATABASE :dev_db TO :main_user;
-GRANT ALL PRIVILEGES ON DATABASE :prefect_db TO :main_user;
-
--- Client Knowledge Base (feature 001-client-knowledge-base)
--- Extensions: pgcrypto (gen_random_uuid), pg_trgm (fuzzy client/subject matching)
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
@@ -42,21 +28,17 @@ CREATE TABLE IF NOT EXISTS knowledge_records (
     )
 );
 
--- At most one current record per client+subject (enforces FR-010 supersession invariant)
 CREATE UNIQUE INDEX IF NOT EXISTS uq_current_client_subject
     ON knowledge_records (client_key, subject_key)
     WHERE superseded_by IS NULL;
 
--- Fast current-record lookups per client
 CREATE INDEX IF NOT EXISTS ix_client_current
     ON knowledge_records (client_key)
     WHERE superseded_by IS NULL;
 
--- Historical / time-range queries
 CREATE INDEX IF NOT EXISTS ix_client_timestamp
     ON knowledge_records (client_key, "timestamp" DESC);
 
--- Fuzzy client + subject + information matching (pg_trgm) for FR-003b and retrieval ranking
 CREATE INDEX IF NOT EXISTS ix_client_key_trgm
     ON knowledge_records USING gin (client_key gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS ix_subject_trgm
