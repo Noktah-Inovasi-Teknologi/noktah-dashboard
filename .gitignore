@@ -111,6 +111,7 @@ logs
 data
 log
 secret
+secrets
 
 # AnythingLLM persistent storage
 service/anythingllm/storage/*

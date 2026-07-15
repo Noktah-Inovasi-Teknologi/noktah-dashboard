@@ -1,0 +1,102 @@
+# Prefect deployment manifest for the Noktah Dashboard flows.
+#
+# Deploy from inside the prefect container (code lives at /app):
+#   docker exec prefect prefect deploy --all
+#
+# Runs are executed by the `prefect-worker` container polling the `noktah-pool`
+# process work pool. These deployments have NO schedule — trigger them manually
+# (Prefect UI "Run", or `prefect deployment run ... --param profiles=[...]`).
+# Both ship with empty `profiles`; pass real profile URLs at run time.
+
+name: prefect-noktah
+prefect-version: 3.6.9
+
+deployments:
+  - name: social-harvest-recent
+    entrypoint: flows/social_harvest_recent.py:social_harvest_recent_flow
+    work_pool:
+      name: noktah-pool
+    schedules: []
+    parameters:
+      profiles: []
+      n: 10
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
+  - name: social-harvest-window
+    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
+    work_pool:
+      name: noktah-pool
+    schedules: []
+    parameters:
+      profiles: []
+      # Relative window (last N days). For a manual backfill, pass
+      # start_date/end_date at run time instead (they override days).
+      days: 7
+      start_date: null
+      end_date: null
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
+  # Social harvest — Sheet→DB sync. Reconciles harvested_signals + detail sheets
+  # from the canonical Account Social Harvest sheets (reviewer-edited `advertisement`
+  # flag). Scheduled daily; tighten the cron if staff edits need to reflect sooner.
+  - name: social-harvest-sync
+    entrypoint: flows/social_harvest_sync.py:social_harvest_sync_flow
+    work_pool:
+      name: noktah-pool
+    schedules:
+      - cron: "0 3 * * *"
+        timezone: "Asia/Jakarta"
+    parameters: {}
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
+  # Social harvest — Stories only (ephemeral, ~24h). NO schedule for now — trigger
+  # manually or add a frequent schedule later. Uses roach's fast Stories listing.
+  - name: social-harvest-stories
+    entrypoint: flows/social_harvest_stories.py:social_harvest_stories_flow
+    work_pool:
+      name: noktah-pool
+    schedules: []
+    parameters:
+      profiles: []
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
+  # Songbird — monthly content plan (feature 003). Runs on a schedule; pass the
+  # client + month at run time (the empty defaults below force an explicit run).
+  - name: songbird-monthly-plan
+    entrypoint: flows/songbird_monthly_plan.py:songbird_monthly_plan_flow
+    work_pool:
+      name: noktah-pool
+    schedules:
+      # 06:00 on the 1st of every month. Trigger per-client runs manually or via
+      # separate scheduled deployments; this default run must be given a client/month.
+      - cron: "0 6 1 * *"
+        timezone: "Asia/Jakarta"
+    parameters:
+      client: ""
+      month: ""
+      target: draft
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
+  # Songbird — on-demand incidental content (feature 003). NO schedule — trigger
+  # manually; pass client + quantity at run time.
+  - name: songbird-generate
+    entrypoint: flows/songbird_generate.py:songbird_generate_flow
+    work_pool:
+      name: noktah-pool
+    schedules: []
+    parameters:
+      client: ""
+      quantity: 3
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app

@@ -24,11 +24,20 @@ services:
       - JIRA_URL=${JIRA_URL}
       - JIRA_USERNAME=${JIRA_USERNAME}
       - JIRA_TOKEN=${JIRA_API_TOKEN}
+      - ROACH_API_URL=http://roach:8080
+      - ROACH_API_KEY=${ROACH_API_KEY}
+      - HARVEST_DB_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - HARVEST_DRIVE_PARENT_ID=${HARVEST_DRIVE_PARENT_ID}
+      # Songbird content generation (feature 003)
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-xiaomi/mimo-v2.5}
+      - SONGBIRD_DRIVE_PARENT_ID=${SONGBIRD_DRIVE_PARENT_ID}
     volumes:
       - ./service/prefect/flows:/app/flows
       - ./service/prefect/tasks:/app/tasks
       - ./service/prefect/blocks:/app/blocks
       - ./service/prefect/data:/app/data
+      - social_data:/data
     depends_on:
       - postgres
     networks:
@@ -44,6 +53,56 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # Prefect worker — executes scheduled/deployed flow runs from the noktah-pool
+  # work pool (e.g. social-harvest-recent / social-harvest-window schedules).
+  prefect-worker:
+    build:
+      context: ./service/prefect
+      dockerfile: Dockerfile
+    container_name: prefect-worker
+    restart: unless-stopped
+    command: ["uv", "run", "prefect", "worker", "start", "--pool", "noktah-pool"]
+    # The image HEALTHCHECK probes the server API on :4200, which the worker does
+    # not run — disable it so the worker is not reported unhealthy. Liveness is
+    # covered by `restart: unless-stopped`.
+    healthcheck:
+      disable: true
+    env_file:
+      - .env
+    environment:
+      - PREFECT_API_URL=http://prefect:4200/api
+      - PREFECT_LOGGING_LEVEL=INFO
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REFRESH_TOKEN=${GOOGLE_REFRESH_TOKEN}
+      - JIRA_URL=${JIRA_URL}
+      - JIRA_USERNAME=${JIRA_USERNAME}
+      - JIRA_TOKEN=${JIRA_API_TOKEN}
+      - ROACH_API_URL=http://roach:8080
+      - ROACH_API_KEY=${ROACH_API_KEY}
+      - HARVEST_DB_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - HARVEST_DRIVE_PARENT_ID=${HARVEST_DRIVE_PARENT_ID}
+      # Songbird content generation (feature 003)
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-xiaomi/mimo-v2.5}
+      - SONGBIRD_DRIVE_PARENT_ID=${SONGBIRD_DRIVE_PARENT_ID}
+    volumes:
+      - ./service/prefect/flows:/app/flows
+      - ./service/prefect/tasks:/app/tasks
+      - ./service/prefect/blocks:/app/blocks
+      - ./service/prefect/data:/app/data
+      - social_data:/data
+    depends_on:
+      - prefect
+      - postgres
+    networks:
+      - dashboard-networks
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1G"
 
   # Client Knowledge Base MCP tool server
   knowledge-base:
@@ -62,6 +121,35 @@ services:
       - GOOGLE_REFRESH_TOKEN=${GOOGLE_REFRESH_TOKEN}
     depends_on:
       - postgres
+    networks:
+      - dashboard-networks
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "512M"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # Instagram/TikTok content scraping and OpenRouter-based content analysis
+  roach:
+    build:
+      context: ./service/roach
+      dockerfile: Dockerfile
+    container_name: roach
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    env_file:
+      - ./service/roach/.env
+    volumes:
+      - ./service/roach/data:/app/data
+      - ./service/roach/secrets:/app/secrets
+      - social_data:/data
     networks:
       - dashboard-networks
     deploy:
@@ -162,6 +250,7 @@ services:
 
 volumes:
   postgres_data:
+  social_data:
 
 networks:
   dashboard-networks:

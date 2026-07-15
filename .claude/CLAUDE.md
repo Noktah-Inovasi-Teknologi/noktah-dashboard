@@ -26,6 +26,55 @@ docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --val
 docker-compose logs -f prefect
 ```
 
+### Prefect Deployments
+```bash
+# Deployments are defined in service/prefect/prefect.yaml and run on the
+# noktah-pool process work pool, executed by the prefect-worker container.
+# The social-harvest-* deployments have NO schedule — trigger them manually.
+
+# (Re)register all deployments after editing prefect.yaml or flow code
+docker exec prefect prefect deploy --all
+
+# List deployments / trigger an ad-hoc run of a deployment
+docker exec prefect prefect deployment ls
+docker exec prefect prefect deployment run 'social-harvest-recent/social-harvest-recent' \
+  --param profiles='["https://www.tiktok.com/@name"]' --param n=5
+
+# Stories-only harvest (ephemeral ~24h; run frequently, unscheduled for now)
+docker exec prefect python flows/social_harvest_stories.py --profiles "https://www.instagram.com/lasikasyik/"
+
+# Sheet→DB sync: reconcile harvested_signals + detail sheets from the canonical
+# Account Social Harvest sheets (reviewer-edited `advertisement` flag). Scheduled daily.
+docker exec prefect python flows/social_harvest_sync.py
+
+# Worker logs (deployed run execution)
+docker-compose logs -f prefect-worker
+```
+Note: the `social-harvest-*` deployments ship with empty `profiles` — pass real
+profile URLs at run time (via the Prefect UI "Run" form or the `--param` above).
+`social-harvest-stories` collects only currently-active Stories (Instagram + TikTok)
+via roach's `stories_only` listing — it's unscheduled; run it often to catch stories
+before they expire.
+
+### Songbird Content Generation
+```bash
+# Monthly content plan → reviewable draft (default)
+docker exec prefect python flows/songbird_monthly_plan.py --client "Ecky Dental Center" --month "Agustus 2026"
+
+# Monthly plan appended straight into the live content-plan worksheet
+docker exec prefect python flows/songbird_monthly_plan.py --client "Ecky Dental Center" --month "Agustus 2026" --target live
+
+# On-demand incidental content (standalone, draft-only, no dates)
+docker exec prefect python flows/songbird_generate.py --client "Ecky Dental Center" --quantity 3 --platform instagram
+
+# Deployments: songbird-monthly-plan (monthly cron) + songbird-generate (manual)
+docker exec prefect prefect deploy --all
+docker exec prefect prefect deployment run 'songbird-generate/songbird-generate' \
+  --param client="Ecky Dental Center" --param quantity=3
+```
+Monthly quantity per client is read from the Clients worksheet; competitor/own handles come from
+`hashmap.py::CLIENT_SOCIAL`. See `.claude/rules/backend/songbird.md`.
+
 ### Docker Environment
 ```bash
 # Start all services
@@ -102,9 +151,18 @@ service/prefect/
 |---------|------|-----|
 | Prefect UI | 4200 | http://localhost:4200 |
 | PostgreSQL | 5432 | localhost:5432 |
+| roach API | 8081 (host) → 8080 (container) | http://localhost:8081 |
 
 ### Health Check Endpoints
 - **Prefect API**: http://localhost:4200/api/health
+- **roach API**: http://localhost:8081/health (host); `http://roach:8080/health` on the internal Docker network
+
+> ⚠️ **roach + Instagram/TikTok: always impersonate a browser.** Every request to these platforms
+> (yt-dlp, gallery-dl, and any direct API call such as the IG Reels/clips endpoint) MUST use a real
+> browser TLS fingerprint (`curl_cffi` / gallery-dl `browser=`) — a bare `requests`/`httpx` call is
+> `429`/`403`-flagged even with valid cookies. roach's `/list` also merges the IG Reels tab and enriches
+> Reel **views**/comments from the Reels-grid API. Editing roach source requires an image rebuild
+> (`docker-compose up -d --build roach`); it is NOT volume-mounted. See `.claude/rules/backend/roach.md`.
 
 ## Configuration
 
@@ -128,6 +186,20 @@ GOOGLE_REFRESH_TOKEN=your_google_refresh_token
 JIRA_URL=https://your-domain.atlassian.net
 JIRA_USERNAME=your_email@domain.com
 JIRA_API_TOKEN=your_jira_api_token
+
+# Social Content Harvest (roach + social-harvest flows)
+ROACH_API_KEY=your_roach_api_key           # must match service/roach/.env's ROACH_API_KEY
+HARVEST_DRIVE_PARENT_ID=your_google_drive_parent_folder_id
+# ROACH_API_URL and HARVEST_DB_URL are set automatically in docker-compose.yml
+# (http://roach:8080 and a DSN built from POSTGRES_USER/PASSWORD/DB above) — no need to set here
+
+# Songbird content generation (songbird-* flows)
+OPENROUTER_API_KEY=your_openrouter_api_key  # now needed by the Prefect services (was roach-only)
+OPENROUTER_MODEL=xiaomi/mimo-v2.5           # optional; house generation model
+SONGBIRD_DRIVE_PARENT_ID=your_drive_folder_id_for_draft_content_plans
+# Optional Clients-sheet / live-target overrides (defaults target the content-plan workbook):
+# SONGBIRD_CLIENTS_SPREADSHEET_ID, SONGBIRD_CLIENTS_TAB, SONGBIRD_CLIENTS_NAME_COLUMN,
+# SONGBIRD_QUANTITY_COLUMN, SONGBIRD_LIVE_SPREADSHEET_ID, SONGBIRD_LIVE_TAB
 ```
 
 ### Required External Services
