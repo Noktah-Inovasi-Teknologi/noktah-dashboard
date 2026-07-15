@@ -4,10 +4,12 @@ Utility Tasks for Prefect workflows
 This module contains reusable utility tasks for various operations.
 """
 import logging
+import random
 import re
 import json
 import os
 import asyncio
+from collections import deque
 from datetime import datetime, timedelta
 from typing import Literal, Optional, Dict, List, Any
 from prefect import task
@@ -15,6 +17,64 @@ from prefect.logging import get_run_logger
 from hashmap import WORKERS, FIELD_ASSOCIATE, CONTENT_EDITOR, COMPONENTS
 
 logger = logging.getLogger(__name__)
+
+
+async def randomized_item_delay(is_last: bool, min_seconds: float = 5.0, max_seconds: float = 10.0) -> float:
+    """
+    Sleep a random 5-10s interval between item requests (FR-013), omitted after
+    the last item in a sequence (constitution II).
+
+    Args:
+        is_last: True if this is the last item in the current sequence (no delay applied)
+        min_seconds: Lower bound of the randomized delay
+        max_seconds: Upper bound of the randomized delay
+
+    Returns:
+        Seconds actually slept (0.0 if omitted)
+    """
+    if is_last:
+        return 0.0
+    delay = random.uniform(min_seconds, max_seconds)
+    await asyncio.sleep(delay)
+    return delay
+
+
+class RateWindow:
+    """
+    Rolling-window limiter enforcing at most `limit` collected items within any
+    `window_seconds` window (FR-011: <=100 items/hour). In-memory only — a run
+    is a single flow execution, so no cross-process state is needed.
+    """
+
+    def __init__(self, limit: int = 100, window_seconds: float = 3600.0):
+        self.limit = limit
+        self.window_seconds = window_seconds
+        self._timestamps: "deque[float]" = deque()
+
+    def _evict_expired(self, now: float) -> None:
+        while self._timestamps and now - self._timestamps[0] >= self.window_seconds:
+            self._timestamps.popleft()
+
+    def seconds_until_slot(self, now: Optional[float] = None) -> float:
+        """Seconds to wait before the window has room for one more item (0.0 if room now)."""
+        now = now if now is not None else datetime.now().timestamp()
+        self._evict_expired(now)
+        if len(self._timestamps) < self.limit:
+            return 0.0
+        return max(0.0, self.window_seconds - (now - self._timestamps[0]))
+
+    def record(self, now: Optional[float] = None) -> None:
+        """Record one collected item at `now` (defaults to current time)."""
+        now = now if now is not None else datetime.now().timestamp()
+        self._evict_expired(now)
+        self._timestamps.append(now)
+
+    async def wait_for_slot(self) -> float:
+        """Sleep until the window has room, then return the seconds waited."""
+        wait_seconds = self.seconds_until_slot()
+        if wait_seconds > 0:
+            await asyncio.sleep(wait_seconds)
+        return wait_seconds
 
 
 @task(name="wait-seconds")

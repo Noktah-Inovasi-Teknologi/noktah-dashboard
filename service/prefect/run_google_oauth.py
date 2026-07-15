@@ -40,13 +40,7 @@ async def main():
 
     # Create credentials block with client_secret file
     print("\n[INIT] Creating Google Credentials block...")
-    google_creds = GoogleCredentials(
-        credentials_file=str(client_secret_file),
-        scopes=[
-            'https://www.googleapis.com/auth/spreadsheets',
-            'https://www.googleapis.com/auth/drive.readonly'
-        ]
-    )
+    google_creds = GoogleCredentials(credentials_file=str(client_secret_file))
 
     print("\n[OAUTH] Starting OAuth flow...")
     print("   This will open your browser for authentication.")

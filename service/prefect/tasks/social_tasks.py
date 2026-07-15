@@ -1,0 +1,399 @@
+"""
+Social Content Harvest tasks for Prefect workflows
+
+Thin wrappers around the roach internal HTTP API (list/download/analyze
+primitives) and the harvested_items de-dup ledger. Pacing, the hourly cap,
+back-off, and the collection loop live in flows/common/social_harvest.py
+(constitution I) — these tasks are single-responsibility API/DB calls that
+raise on failure so Prefect's retry mechanism can handle transient errors.
+"""
+import logging
+import os
+from typing import Any, Dict, List, Optional
+
+import asyncpg
+import httpx
+from prefect import task
+
+try:
+    from ..blocks.google_credentials import GoogleCredentials
+except ImportError:
+    import sys
+    sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+    from blocks.google_credentials import GoogleCredentials
+
+logger = logging.getLogger(__name__)
+
+# Truthy spellings a reviewer might type in the sheet's advertisement column.
+_ADVERT_TRUE = {"true", "1", "yes", "ya", "y", "t", "x", "✓", "ada", "iklan"}
+
+
+def _parse_advert(value: Any) -> bool:
+    return str(value).strip().lower() in _ADVERT_TRUE
+
+
+def _col_letter(i: int) -> str:
+    """0-based column index -> A1 letter (A, B, … Z, AA)."""
+    s = ""
+    i += 1
+    while i:
+        i, r = divmod(i - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+class RoachRateLimitedError(Exception):
+    """Roach reported a rate-limit or verification-challenge response."""
+
+    def __init__(self, message: str, code: str = "rate_limited"):
+        super().__init__(message)
+        self.code = code
+
+
+class RoachNotFoundError(Exception):
+    """Roach reported the profile/content as missing, private, or gone."""
+
+
+def _roach_client() -> httpx.Client:
+    base_url = os.environ["ROACH_API_URL"]
+    api_key = os.environ["ROACH_API_KEY"]
+    return httpx.Client(base_url=base_url, headers={"X-API-KEY": api_key}, timeout=200.0)
+
+
+def _raise_for_roach_error(resp: httpx.Response) -> None:
+    if resp.status_code == 429:
+        body = resp.json()
+        raise RoachRateLimitedError(body.get("reason", "rate limited"), code=body.get("code", "rate_limited"))
+    if resp.status_code == 404:
+        body = resp.json()
+        raise RoachNotFoundError(body.get("reason", "not found"))
+    resp.raise_for_status()
+
+
+@task(name="social.profile.list", retries=1, retry_delay_seconds=120)
+async def social_profile_list(
+    profile_url: str, platform: str, max_items: int = 30, stories_only: bool = False
+) -> Dict[str, Any]:
+    """
+    List every publicly visible content item for a profile via roach.
+
+    Args:
+        profile_url: Public profile URL
+        platform: "instagram" or "tiktok"
+        max_items: How deep the non-video (gallery-dl) listing pages — raise it
+            to reach older content for date-range backfills
+        stories_only: When True, return only the account's currently-active
+            Stories (a fast single-endpoint call for frequent story checks)
+
+    Returns:
+        Dict with "profile" metadata and "items" list (may be empty)
+
+    Raises:
+        RoachNotFoundError: profile is private/non-existent
+        RoachRateLimitedError: rate-limit or verification-challenge response
+    """
+    with _roach_client() as client:
+        # TikTok listing is deliberately paced (sleep between per-post requests
+        # to stay under the platform throttle), so deep listings are slow by
+        # design — give the roach call a generous read timeout.
+        resp = client.post(
+            "/list",
+            json={
+                "profile_url": profile_url, "platform": platform,
+                "max_items": max_items, "stories_only": stories_only,
+            },
+            timeout=1500.0,
+        )
+        _raise_for_roach_error(resp)
+        body = resp.json()
+        logger.info(f"Listed {len(body.get('items', []))} items for {profile_url}")
+        return body
+
+
+@task(name="social.item.download", retries=1, retry_delay_seconds=30)
+async def social_item_download(
+    content_id: str, source_url: str, is_video: bool, content_type: str
+) -> Dict[str, Any]:
+    """
+    Download a single content item via roach.
+
+    Returns:
+        Dict with "local_paths" (list of downloaded file paths) and
+        "content_type" — the content_type re-derived by roach from the actual
+        downloaded files (authoritative; may correct the listing's guess, e.g. a
+        single Reel listed as "image"/"carousel" resolves to "video").
+
+    Raises:
+        RoachNotFoundError: item is gone (e.g. expired story)
+        RoachRateLimitedError: rate-limit or verification-challenge response
+    """
+    with _roach_client() as client:
+        resp = client.post(
+            "/download",
+            json={
+                "content_id": content_id,
+                "source_url": source_url,
+                "is_video": is_video,
+                "content_type": content_type,
+            },
+        )
+        _raise_for_roach_error(resp)
+        body = resp.json()
+        return {
+            "local_paths": body["local_paths"],
+            "content_type": body.get("content_type", content_type),
+        }
+
+
+@task(name="social.item.analyze", retries=1, retry_delay_seconds=30)
+async def social_item_analyze(content_id: str, local_paths: List[str], content_type: str) -> Dict[str, Any]:
+    """
+    Analyze a downloaded content item via roach.
+
+    Model failures are reported as {"status": "failed", "error": ...} in the
+    response body by roach (not raised) so the download is retained and a
+    Sheet row is still written (edge case).
+    """
+    with _roach_client() as client:
+        # Analysis can involve model retries/back-off on the roach side, so allow
+        # a generous read timeout (the engine also tolerates a failure here).
+        resp = client.post(
+            "/analyze",
+            json={"content_id": content_id, "local_paths": local_paths, "content_type": content_type},
+            timeout=600.0,
+        )
+        _raise_for_roach_error(resp)
+        return resp.json()["analysis"]
+
+
+async def _db_pool() -> asyncpg.Pool:
+    return await asyncpg.create_pool(os.environ["HARVEST_DB_URL"], min_size=1, max_size=5)
+
+
+@task(name="social.dedup.check", retries=2, retry_delay_seconds=10)
+async def social_dedup_check(platform: str, content_id: str, drive_target: str) -> Optional[Dict[str, Any]]:
+    """
+    Look up a prior harvest of (platform, content_id, drive_target).
+
+    Returns:
+        The existing ledger record as a dict (with `analysis_status` and
+        `drive_file_id`), or None if the item has not been harvested for this
+        target. A `success` record means skip; a `failed` record means the
+        caller should purge it and re-harvest (FR-021 + failed-retry).
+    """
+    pool = await _db_pool()
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT analysis_status, drive_file_id FROM harvested_items "
+                "WHERE platform = $1 AND content_id = $2 AND drive_target = $3",
+                platform, content_id, drive_target,
+            )
+            return dict(row) if row is not None else None
+    finally:
+        await pool.close()
+
+
+@task(name="social.dedup.delete", retries=2, retry_delay_seconds=10)
+async def social_dedup_delete(platform: str, content_id: str, drive_target: str) -> None:
+    """Remove a ledger record so a previously-failed item can be re-harvested fresh."""
+    pool = await _db_pool()
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM harvested_items WHERE platform = $1 AND content_id = $2 AND drive_target = $3",
+                platform, content_id, drive_target,
+            )
+    finally:
+        await pool.close()
+
+
+def _coerce_count(value: Any) -> Optional[int]:
+    """Coerce a public-count cell ('' / '1.2K' / int / None) to an int, or None."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip().replace(",", "").upper()
+    try:
+        if text.endswith("K"):
+            return int(float(text[:-1]) * 1_000)
+        if text.endswith("M"):
+            return int(float(text[:-1]) * 1_000_000)
+        return int(float(text))
+    except ValueError:
+        return None
+
+
+@task(name="social.signal.record", retries=2, retry_delay_seconds=10)
+async def social_signal_record(
+    platform: str,
+    profile_key: str,
+    content_id: str,
+    content_type: str,
+    published_at: Optional[str],
+    caption: Optional[str],
+    hashtags: Optional[str],
+    views: Any,
+    likes: Any,
+    comments: Any,
+    subtitle: Optional[str],
+    content_flow: Optional[str],
+    summary: Optional[str],
+) -> None:
+    """
+    Mirror a delivered item's engagement + analysis into the harvested_signals
+    store so songbird can rank top performers by engagement via SQL (feature 003).
+
+    Idempotent per (platform, content_id): a re-harvest upserts the freshest
+    metrics/analysis rather than duplicating the row.
+    """
+    pool = await _db_pool()
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO harvested_signals
+                    (platform, profile_key, content_id, content_type, published_at,
+                     caption, hashtags, views, likes, comments, subtitle, content_flow, summary)
+                VALUES ($1, $2, $3, $4, $5::text::timestamptz, $6, $7, $8, $9, $10, $11, $12, $13)
+                ON CONFLICT (platform, content_id) DO UPDATE SET
+                    profile_key = EXCLUDED.profile_key,
+                    content_type = EXCLUDED.content_type,
+                    published_at = EXCLUDED.published_at,
+                    caption = EXCLUDED.caption,
+                    hashtags = EXCLUDED.hashtags,
+                    views = EXCLUDED.views,
+                    likes = EXCLUDED.likes,
+                    comments = EXCLUDED.comments,
+                    subtitle = EXCLUDED.subtitle,
+                    content_flow = EXCLUDED.content_flow,
+                    summary = EXCLUDED.summary,
+                    harvested_at = now()
+                """,
+                platform, profile_key, content_id, content_type, published_at or None,
+                caption, hashtags,
+                _coerce_count(views), _coerce_count(likes), _coerce_count(comments),
+                subtitle, content_flow, summary,
+            )
+    finally:
+        await pool.close()
+
+
+@task(name="social.signal.accounts", retries=2, retry_delay_seconds=10)
+async def social_signal_distinct_accounts() -> List[Dict[str, str]]:
+    """Distinct (platform, profile_key) with recorded signal — the accounts whose
+    Account Social Harvest sheet is the advertisement source of truth (sync flow)."""
+    pool = await _db_pool()
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT DISTINCT platform, profile_key FROM harvested_signals ORDER BY platform, profile_key"
+            )
+            return [{"platform": r["platform"], "profile_key": r["profile_key"]} for r in rows]
+    finally:
+        await pool.close()
+
+
+@task(name="social.signal.apply-advertisement", retries=2, retry_delay_seconds=10)
+async def social_signal_apply_advertisement(updates: List[List[Any]]) -> int:
+    """Set harvested_signals.advertisement from the canonical account sheets.
+
+    Args:
+        updates: rows of [platform, content_id, bool]. Only rows whose stored value
+            actually differs are written.
+
+    Returns:
+        Number of DB rows changed.
+    """
+    if not updates:
+        return 0
+    pool = await _db_pool()
+    try:
+        async with pool.acquire() as conn:
+            changed = 0
+            for platform, content_id, adv in updates:
+                res = await conn.execute(
+                    "UPDATE harvested_signals SET advertisement = $3 "
+                    "WHERE platform = $1 AND content_id = $2 AND advertisement IS DISTINCT FROM $3",
+                    platform, str(content_id), bool(adv),
+                )
+                changed += int(res.split()[-1]) if isinstance(res, str) and res.startswith("UPDATE") else 0
+            return changed
+    finally:
+        await pool.close()
+
+
+@task(name="social.detail.sync-advertisement", retries=2, retry_delay_seconds=30)
+async def social_detail_sync_advertisement(
+    spreadsheet_id: str, canonical: Dict[str, bool], credentials_block_name: str = "google-creds"
+) -> int:
+    """Correct a per-run detail sheet's `advertisement` column to match the canonical
+    (account-sheet) values, so detail sheets stay consistent with the source of truth.
+
+    Args:
+        spreadsheet_id: A "Social Harvest Detail" workbook id.
+        canonical: {"<platform>|<content_id>": bool} from the account sheets.
+
+    Returns:
+        Number of cells corrected (0 if the sheet predates the column or already matches).
+    """
+    google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
+    client = google_creds.get_client()
+    svc = client.sheets_service
+    info = client.get_spreadsheet_info(spreadsheet_id)
+    tabs = [s["title"] for s in info.get("sheets", [])]
+    if not tabs:
+        return 0
+    tab = tabs[0]
+    values = svc.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=tab).execute().get("values", [])
+    if not values:
+        return 0
+    header = values[0]
+    if not all(c in header for c in ("platform", "content_id", "advertisement")):
+        return 0  # sheet predates the advertisement column
+    pi, ci, ai = header.index("platform"), header.index("content_id"), header.index("advertisement")
+    a_col = _col_letter(ai)
+    data = []
+    for r_idx, row in enumerate(values[1:], start=2):
+        if len(row) <= max(pi, ci):
+            continue
+        key = f"{str(row[pi]).strip()}|{str(row[ci]).strip()}"
+        if key not in canonical:
+            continue
+        want = "TRUE" if canonical[key] else "FALSE"
+        cur = row[ai].strip().upper() if len(row) > ai and row[ai] else ""
+        if cur != want:
+            data.append({"range": f"'{tab}'!{a_col}{r_idx}", "values": [[want]]})
+    if data:
+        svc.spreadsheets().values().batchUpdate(
+            spreadsheetId=spreadsheet_id, body={"valueInputOption": "RAW", "data": data}
+        ).execute()
+    return len(data)
+
+
+@task(name="social.dedup.record", retries=2, retry_delay_seconds=10)
+async def social_dedup_record(
+    platform: str,
+    profile_key: str,
+    content_id: str,
+    drive_target: str,
+    content_type: str,
+    drive_file_id: Optional[str] = None,
+    analysis_status: str = "pending",
+) -> None:
+    """Record a successfully delivered item in the de-dup ledger (FR-021)."""
+    pool = await _db_pool()
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO harvested_items
+                    (platform, profile_key, content_id, drive_target, content_type, drive_file_id, analysis_status)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (platform, content_id, drive_target) DO NOTHING
+                """,
+                platform, profile_key, content_id, drive_target, content_type, drive_file_id, analysis_status,
+            )
+    finally:
+        await pool.close()

@@ -15,6 +15,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaFileUpload
 
 if TYPE_CHECKING:
     from pandas import DataFrame
@@ -60,13 +61,14 @@ class GoogleCredentials(Block):
         description="Path to store/load refresh token"
     )
     
-    # Scopes (only Sheets and Drive are used in this project)
+    # Scopes: Sheets read/write, Drive read + write-own-files (harvest delivery, FR-008/FR-009/FR-010)
     scopes: List[str] = Field(
         default=[
             'https://www.googleapis.com/auth/spreadsheets',
-            'https://www.googleapis.com/auth/drive.readonly'
+            'https://www.googleapis.com/auth/drive.readonly',
+            'https://www.googleapis.com/auth/drive.file'
         ],
-        description="Google API scopes (Sheets read/write, Drive read-only)"
+        description="Google API scopes (Sheets read/write, Drive read-only + write-own-files)"
     )
     
     def get_client(self) -> 'GoogleClient':
@@ -164,7 +166,8 @@ class GoogleClient:
         # Set default scopes (only what's needed)
         self.scopes = scopes or [
             'https://www.googleapis.com/auth/spreadsheets',
-            'https://www.googleapis.com/auth/drive.readonly'
+            'https://www.googleapis.com/auth/drive.readonly',
+            'https://www.googleapis.com/auth/drive.file'
         ]
 
         # Set credentials from parameters or environment variables
@@ -506,5 +509,225 @@ class GoogleClient:
         
         # Create DataFrame
         df = pd.DataFrame(normalized_rows, columns=headers)
-        
+
         return df
+
+    def _find_child(self, name: str, parent_id: str, mime_type: Optional[str] = None) -> Optional[str]:
+        """Return the id of the first non-trashed child named `name` under `parent_id`, or None."""
+        drive_service = self.get_drive_service()
+        escaped_name = name.replace("'", "\\'")
+        query = f"'{parent_id}' in parents and name = '{escaped_name}' and trashed = false"
+        if mime_type:
+            query += f" and mimeType = '{mime_type}'"
+        result = drive_service.files().list(
+            q=query, spaces='drive', fields='files(id,name)',
+            supportsAllDrives=True, includeItemsFromAllDrives=True
+        ).execute()
+        files = result.get('files', [])
+        return files[0]['id'] if files else None
+
+    def ensure_folder(self, name: str, parent_id: str) -> str:
+        """
+        Get or create a folder named `name` directly under `parent_id` (idempotent).
+
+        Args:
+            name: Folder name
+            parent_id: Id of the parent Drive folder
+
+        Returns:
+            The folder's Drive file id
+        """
+        existing = self._find_child(name, parent_id, mime_type='application/vnd.google-apps.folder')
+        if existing:
+            return existing
+        folder = self.get_drive_service().files().create(
+            body={
+                'name': name,
+                'mimeType': 'application/vnd.google-apps.folder',
+                'parents': [parent_id],
+            },
+            fields='id',
+            supportsAllDrives=True,
+        ).execute()
+        return folder['id']
+
+    def ensure_folder_path(self, names: List[str], parent_id: str) -> str:
+        """Ensure a nested folder chain under `parent_id`, returning the deepest folder's id."""
+        current = parent_id
+        for name in names:
+            current = self.ensure_folder(name, current)
+        return current
+
+    def delete_file(self, file_id: str) -> None:
+        """Permanently delete a Drive file (best-effort; ignores already-gone files)."""
+        try:
+            self.get_drive_service().files().delete(fileId=file_id, supportsAllDrives=True).execute()
+        except HttpError as e:
+            if e.resp.status not in (403, 404):
+                raise
+
+    def upload_file(self, local_path: str, folder_id: str, mime_type: Optional[str] = None) -> str:
+        """
+        Upload a local file into a Drive folder.
+
+        Args:
+            local_path: Path to the local file to upload
+            folder_id: Destination Drive folder id
+            mime_type: Optional MIME type override (auto-detected by MediaFileUpload if omitted)
+
+        Returns:
+            The uploaded file's Drive file id
+        """
+        drive_service = self.get_drive_service()
+        media = MediaFileUpload(local_path, mimetype=mime_type, resumable=True)
+        file_name = os.path.basename(local_path)
+        uploaded = drive_service.files().create(
+            body={'name': file_name, 'parents': [folder_id]},
+            media_body=media,
+            fields='id',
+            supportsAllDrives=True,
+        ).execute()
+        return uploaded['id']
+
+    def create_spreadsheet(self, title: str, parent_id: str, header_row: Optional[List[str]] = None) -> str:
+        """
+        Create a new Google Sheet under `parent_id`, optionally seeding a header row.
+
+        Args:
+            title: Spreadsheet title
+            parent_id: Id of the stable parent Drive folder to place it in
+            header_row: Optional list of column headers to write to row 1
+
+        Returns:
+            The new spreadsheet's id
+        """
+        spreadsheet = self.sheets_service.spreadsheets().create(
+            body={'properties': {'title': title}}
+        ).execute()
+        spreadsheet_id = spreadsheet['spreadsheetId']
+
+        drive_service = self.get_drive_service()
+        file = drive_service.files().get(
+            fileId=spreadsheet_id, fields='parents', supportsAllDrives=True
+        ).execute()
+        previous_parents = ','.join(file.get('parents', []))
+        drive_service.files().update(
+            fileId=spreadsheet_id,
+            addParents=parent_id,
+            removeParents=previous_parents,
+            fields='id, parents',
+            supportsAllDrives=True,
+        ).execute()
+
+        if header_row:
+            self.append_rows(spreadsheet_id, [header_row])
+
+        return spreadsheet_id
+
+    def append_rows(self, spreadsheet_id: str, rows: List[List[Any]], sheet_name: str = 'Sheet1') -> Dict[str, Any]:
+        """
+        Append rows to the end of a sheet.
+
+        Args:
+            spreadsheet_id: Google Spreadsheet id
+            rows: List of row value lists to append
+            sheet_name: Target sheet/tab name (defaults to the sheet's default tab)
+
+        Returns:
+            The Sheets API append response
+        """
+        return self.sheets_service.spreadsheets().values().append(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{sheet_name}'",
+            valueInputOption='RAW',
+            insertDataOption='INSERT_ROWS',
+            body={'values': rows},
+        ).execute()
+
+    def ensure_spreadsheet(self, title: str, parent_id: str) -> str:
+        """
+        Find (by name, under `parent_id`) or create a Google Sheet; return its id.
+
+        Unlike create_spreadsheet, this is idempotent — used for the per-account
+        "{username} - Social Harvest" workbook that persists across runs.
+        """
+        existing = self._find_child(title, parent_id, mime_type='application/vnd.google-apps.spreadsheet')
+        if existing:
+            return existing
+        return self.create_spreadsheet(title, parent_id)
+
+    def _get_tabs(self, spreadsheet_id: str) -> Dict[str, int]:
+        """Return {tab_title: sheetId} for all tabs in a spreadsheet."""
+        meta = self.sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+        return {s['properties']['title']: s['properties']['sheetId'] for s in meta.get('sheets', [])}
+
+    def ensure_tab(self, spreadsheet_id: str, tab_name: str, header_row: List[str]) -> None:
+        """Ensure a tab named `tab_name` exists with `header_row` in row 1 (idempotent).
+
+        Also removes the default empty 'Sheet1' left over from spreadsheet
+        creation, so a per-account workbook contains only quarter tabs.
+        """
+        tabs = self._get_tabs(spreadsheet_id)
+        if tab_name not in tabs:
+            self.sheets_service.spreadsheets().batchUpdate(
+                spreadsheetId=spreadsheet_id,
+                body={'requests': [{'addSheet': {'properties': {'title': tab_name}}}]},
+            ).execute()
+            self.sheets_service.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range=f"'{tab_name}'!A1",
+                valueInputOption='RAW',
+                body={'values': [header_row]},
+            ).execute()
+            tabs = self._get_tabs(spreadsheet_id)
+
+        # Drop a leftover empty default 'Sheet1' (never the last remaining tab).
+        if 'Sheet1' in tabs and 'Sheet1' != tab_name and len(tabs) > 1:
+            existing = self.sheets_service.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id, range="'Sheet1'"
+            ).execute().get('values', [])
+            if not existing:
+                self.sheets_service.spreadsheets().batchUpdate(
+                    spreadsheetId=spreadsheet_id,
+                    body={'requests': [{'deleteSheet': {'sheetId': tabs['Sheet1']}}]},
+                ).execute()
+
+    def tab_data_row_count(self, spreadsheet_id: str, tab_name: str) -> int:
+        """Number of data rows (excluding the header) currently in `tab_name`."""
+        result = self.sheets_service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id, range=f"'{tab_name}'!A:A"
+        ).execute()
+        return max(0, len(result.get('values', [])) - 1)
+
+    def delete_rows_by_content_id(self, spreadsheet_id: str, content_id: str, content_id_col: int) -> int:
+        """
+        Delete every data row whose `content_id_col` (0-based) equals `content_id`,
+        across all tabs. Returns the number of rows deleted.
+
+        Used to purge a previously-FAILED item's row before re-harvesting it.
+        """
+        deleted = 0
+        for tab_name, sheet_id in self._get_tabs(spreadsheet_id).items():
+            result = self.sheets_service.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id, range=f"'{tab_name}'"
+            ).execute()
+            rows = result.get('values', [])
+            # Collect 0-based row indices to delete (skip header at index 0), high to low.
+            targets = [
+                idx for idx, row in enumerate(rows)
+                if idx > 0 and len(row) > content_id_col and row[content_id_col] == content_id
+            ]
+            if not targets:
+                continue
+            requests = [
+                {'deleteDimension': {'range': {
+                    'sheetId': sheet_id, 'dimension': 'ROWS',
+                    'startIndex': idx, 'endIndex': idx + 1,
+                }}}
+                for idx in sorted(targets, reverse=True)
+            ]
+            self.sheets_service.spreadsheets().batchUpdate(
+                spreadsheetId=spreadsheet_id, body={'requests': requests}
+            ).execute()
+            deleted += len(targets)
+        return deleted

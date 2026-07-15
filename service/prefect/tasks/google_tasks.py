@@ -332,3 +332,198 @@ async def google_filter_files_in_folder(
         raise
 
 
+@task(name="drive.folder.ensure", retries=2, retry_delay_seconds=30)
+async def drive_folder_ensure(
+    name: str,
+    parent_id: str,
+    credentials_block_name: str = "google-creds"
+) -> str:
+    """
+    Get or create a Drive folder named `name` directly under `parent_id`.
+
+    Idempotent — safe to call every run for the same profile; returns the
+    existing folder's id rather than creating a duplicate.
+
+    Args:
+        name: Folder name (e.g., the profile's account handle)
+        parent_id: Id of the stable parent Drive folder (HARVEST_DRIVE_PARENT_ID)
+        credentials_block_name: Name of the Google credentials block
+
+    Returns:
+        The folder's Drive file id
+    """
+    try:
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
+        client = google_creds.get_client()
+        folder_id = client.ensure_folder(name, parent_id)
+        logger.info(f"Ensured Drive folder '{name}' -> {folder_id}")
+        return folder_id
+    except Exception as e:
+        logger.error(f"Failed to ensure Drive folder '{name}': {str(e)}")
+        raise
+
+
+@task(name="drive.file.upload", retries=2, retry_delay_seconds=30)
+async def drive_file_upload(
+    local_path: str,
+    folder_id: str,
+    mime_type: Optional[str] = None,
+    credentials_block_name: str = "google-creds"
+) -> str:
+    """
+    Upload a local file into a Drive folder.
+
+    Args:
+        local_path: Path to the local file to upload
+        folder_id: Destination Drive folder id
+        mime_type: Optional MIME type override
+        credentials_block_name: Name of the Google credentials block
+
+    Returns:
+        The uploaded file's Drive file id
+    """
+    try:
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
+        client = google_creds.get_client()
+        file_id = client.upload_file(local_path, folder_id, mime_type)
+        logger.info(f"Uploaded '{local_path}' to folder {folder_id} -> {file_id}")
+        return file_id
+    except Exception as e:
+        logger.error(f"Failed to upload '{local_path}': {str(e)}")
+        raise
+
+
+@task(name="sheets.create", retries=2, retry_delay_seconds=30)
+async def sheets_create(
+    title: str,
+    parent_id: str,
+    header_row: Optional[List[str]] = None,
+    credentials_block_name: str = "google-creds"
+) -> str:
+    """
+    Create a new Google Sheet under `parent_id`, optionally seeding a header row.
+
+    Args:
+        title: Spreadsheet title
+        parent_id: Id of the stable parent Drive folder (HARVEST_DRIVE_PARENT_ID)
+        header_row: Optional list of column headers to write to row 1
+        credentials_block_name: Name of the Google credentials block
+
+    Returns:
+        The new spreadsheet's id
+    """
+    try:
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
+        client = google_creds.get_client()
+        spreadsheet_id = client.create_spreadsheet(title, parent_id, header_row)
+        logger.info(f"Created spreadsheet '{title}' -> {spreadsheet_id}")
+        return spreadsheet_id
+    except Exception as e:
+        logger.error(f"Failed to create spreadsheet '{title}': {str(e)}")
+        raise
+
+
+@task(name="sheets.rows.append", retries=2, retry_delay_seconds=30)
+async def sheets_rows_append(
+    spreadsheet_id: str,
+    rows: List[List[Any]],
+    sheet_name: str = "Sheet1",
+    credentials_block_name: str = "google-creds"
+) -> Dict[str, Any]:
+    """
+    Append rows to the end of a sheet.
+
+    Args:
+        spreadsheet_id: Google Spreadsheet id
+        rows: List of row value lists to append
+        sheet_name: Target sheet/tab name
+        credentials_block_name: Name of the Google credentials block
+
+    Returns:
+        The Sheets API append response
+    """
+    try:
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
+        client = google_creds.get_client()
+        return client.append_rows(spreadsheet_id, rows, sheet_name)
+    except Exception as e:
+        logger.error(f"Failed to append rows to spreadsheet {spreadsheet_id}: {str(e)}")
+        raise
+
+
+@task(name="drive.file.delete", retries=2, retry_delay_seconds=30)
+async def drive_file_delete(file_id: str, credentials_block_name: str = "google-creds") -> None:
+    """Permanently delete a Drive file (best-effort). Used to purge failed-run media."""
+    try:
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
+        client = google_creds.get_client()
+        client.delete_file(file_id)
+        logger.info(f"Deleted Drive file {file_id}")
+    except Exception as e:
+        logger.error(f"Failed to delete Drive file {file_id}: {str(e)}")
+        raise
+
+
+@task(name="sheets.spreadsheet.ensure", retries=2, retry_delay_seconds=30)
+async def sheets_spreadsheet_ensure(
+    title: str, parent_id: str, credentials_block_name: str = "google-creds"
+) -> str:
+    """Find (by name under parent) or create a Google Sheet; return its id (idempotent)."""
+    try:
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
+        client = google_creds.get_client()
+        spreadsheet_id = client.ensure_spreadsheet(title, parent_id)
+        logger.info(f"Ensured spreadsheet '{title}' -> {spreadsheet_id}")
+        return spreadsheet_id
+    except Exception as e:
+        logger.error(f"Failed to ensure spreadsheet '{title}': {str(e)}")
+        raise
+
+
+@task(name="sheets.tab.ensure", retries=2, retry_delay_seconds=30)
+async def sheets_tab_ensure(
+    spreadsheet_id: str, tab_name: str, header_row: List[str],
+    credentials_block_name: str = "google-creds"
+) -> None:
+    """Ensure a tab named `tab_name` exists with the given header row (idempotent)."""
+    try:
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
+        client = google_creds.get_client()
+        client.ensure_tab(spreadsheet_id, tab_name, header_row)
+    except Exception as e:
+        logger.error(f"Failed to ensure tab '{tab_name}' in {spreadsheet_id}: {str(e)}")
+        raise
+
+
+@task(name="sheets.tab.row-count", retries=2, retry_delay_seconds=30)
+async def sheets_tab_row_count(
+    spreadsheet_id: str, tab_name: str, credentials_block_name: str = "google-creds"
+) -> int:
+    """Return the number of data rows (excluding header) in a tab."""
+    try:
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
+        client = google_creds.get_client()
+        return client.tab_data_row_count(spreadsheet_id, tab_name)
+    except Exception as e:
+        logger.error(f"Failed to count rows in '{tab_name}' of {spreadsheet_id}: {str(e)}")
+        raise
+
+
+@task(name="sheets.rows.delete-by-content-id", retries=2, retry_delay_seconds=30)
+async def sheets_rows_delete_by_content_id(
+    spreadsheet_id: str, content_id: str, content_id_col: int,
+    credentials_block_name: str = "google-creds"
+) -> int:
+    """Delete all rows across all tabs whose content_id column matches; return count deleted."""
+    try:
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
+        client = google_creds.get_client()
+        deleted = client.delete_rows_by_content_id(spreadsheet_id, content_id, content_id_col)
+        if deleted:
+            logger.info(f"Deleted {deleted} row(s) for content_id {content_id} in {spreadsheet_id}")
+        return deleted
+    except Exception as e:
+        logger.error(f"Failed to delete rows for content_id {content_id}: {str(e)}")
+        raise
+
+

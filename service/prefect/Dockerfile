@@ -16,6 +16,7 @@ COPY flows/ ./flows/
 COPY tasks/ ./tasks/
 COPY blocks/ ./blocks/
 COPY *.py ./
+COPY prefect.yaml ./
 
 # Final sync to complete installation
 RUN uv sync --frozen --no-dev
