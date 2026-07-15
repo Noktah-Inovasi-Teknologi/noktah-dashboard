@@ -96,3 +96,19 @@ FIELD_ASSOCIATE = {
     "Gudang Karung Jumbo Sidoarjo": "Muhammad Rozzan Abdillah",
     "Klinik Mata SMEC Bitung": "Muhammad Rozzan Abdillah",
 }
+
+# Client social accounts mapping (feature 003-songbird-content-generation).
+# Maps a client name to the profile handles whose harvested "what hits" signal
+# feeds songbird content generation:
+#   "own"         - the client's own account handles (past-post performance)
+#   "competitors" - competitor handles to learn winning patterns from
+# Handles are matched against harvested_signals.profile_key (the account handle
+# social-harvest stores, i.e. the last path segment of the profile URL).
+# Access via CLIENT_SOCIAL.get(client_name, {}); empty/missing => no signal,
+# and songbird falls back to client-knowledge + marketing params only.
+CLIENT_SOCIAL = {
+    # "Ecky Dental Center": {
+    #     "own": ["eckydentalcenter"],
+    #     "competitors": ["competitor_handle_1", "competitor_handle_2"],
+    # },
+}
