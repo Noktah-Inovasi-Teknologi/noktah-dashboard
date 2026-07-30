@@ -74,7 +74,8 @@ degrade (FR-011).
 ### Content Idea (generation output → one row)
 Model returns per idea (Indonesian, code-mixed per FR-003a):
 `topik`, `bentuk` (content form), `format`, `purpose_theme`, `strategic_application`,
-`visualisasi_konten`, plus rationale fields `adapted_pattern`, `source_exemplar`, `rationale`.
+`shoot_guide` (video/story capture guide, `-` for posts), `reference` (post content/design flow, or
+video reference link), plus rationale fields `adapted_pattern`, `source_exemplar`, `rationale`.
 Engine adds `tanggal` (assigned date, monthly only — FR-004) and the constant hit-note.
 
 ### Plan Deliverable

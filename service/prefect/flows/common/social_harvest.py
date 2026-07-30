@@ -478,7 +478,7 @@ async def run_harvest(
                 rate_window.record()
 
                 try:
-                    analysis = await social_item_analyze(content_id, local_paths, content_type)
+                    analysis = await social_item_analyze(content_id, local_paths, content_type, client=harvest_name)
                 except Exception as e:
                     # A failed analyze (timeout, provider error, …) must never abort the
                     # run — record the item as failed so it's retained + retried next run.

@@ -37,6 +37,11 @@ services:
       - ./service/prefect/tasks:/app/tasks
       - ./service/prefect/blocks:/app/blocks
       - ./service/prefect/data:/app/data
+      # Deployment manifest — mounted so `prefect deploy` inside the container
+      # sees edits without an image rebuild (it is baked in by the Dockerfile).
+      - ./service/prefect/prefect.yaml:/app/prefect.yaml
+      # Sheet-backed hashmap loader — mounted for the same reason.
+      - ./service/prefect/hashmap.py:/app/hashmap.py
       - social_data:/data
     depends_on:
       - postgres
@@ -46,7 +51,9 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: "1G"
+          # 1G left the server sitting at ~92% steady-state (it holds flow/task
+          # run state for the harvest runs, which emit ~10 task runs per item).
+          memory: "2G"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health')\" || exit 1"]
       interval: 30s
@@ -92,6 +99,8 @@ services:
       - ./service/prefect/tasks:/app/tasks
       - ./service/prefect/blocks:/app/blocks
       - ./service/prefect/data:/app/data
+      # Sheet-backed hashmap loader — mounted so edits apply without an image rebuild.
+      - ./service/prefect/hashmap.py:/app/hashmap.py
       - social_data:/data
     depends_on:
       - prefect
@@ -102,7 +111,13 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: "1G"
+          # Each flow run is a subprocess inside THIS container, and a harvest
+          # flow's footprint grows with the number of items it processes (~10
+          # Prefect task runs per item). A 90-day harvest (30-45 items) blew
+          # past 1G and the kernel SIGKILL'd the run process mid-item
+          # (flow run reported as Crashed, "exited with status code -9").
+          # 4G holds a long harvest plus an overlapping second run.
+          memory: "4G"
 
   # Client Knowledge Base MCP tool server
   knowledge-base:

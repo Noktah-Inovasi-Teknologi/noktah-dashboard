@@ -51,11 +51,11 @@ def test_derive_content_type_ignores_audio_track():
 
 def test_tiktok_counts_maps_stats():
     meta = {"stats": {"diggCount": "12", "commentCount": 3, "playCount": 400, "shareCount": 1}}
-    assert collect._tiktok_counts(meta) == {"likes": 12, "comments": 3, "views": 400}
+    assert collect._tiktok_counts(meta) == {"likes": 12, "comments": 3, "views": 400, "shares": 1}
 
 
 def test_tiktok_counts_missing_stats():
-    assert collect._tiktok_counts({}) == {"likes": None, "comments": None, "views": None}
+    assert collect._tiktok_counts({}) == {"likes": None, "comments": None, "views": None, "shares": None}
 
 
 def test_tiktok_photo_overrides_mislabeled_ytdlp_video(monkeypatch):
@@ -134,6 +134,64 @@ def test_list_profile_prefers_url_handle_over_secuid(monkeypatch):
 
     profile_meta, items = collect.list_profile("https://www.tiktok.com/@rsmatadryap", "tiktok")
     assert profile_meta["handle"] == "rsmatadryap"
+
+
+class _FakeIGResp:
+    def __init__(self, payload, status_code=200):
+        self._payload = payload
+        self.status_code = status_code
+
+    def json(self):
+        return self._payload
+
+
+def _fake_ig_session(payload, status_code=200, seen=None):
+    """Stand in for _instagram_api_session with a canned web_profile_info reply."""
+
+    class FakeCreq:
+        @staticmethod
+        def get(url, **kwargs):
+            if seen is not None:
+                seen["url"] = url
+                seen["impersonate"] = kwargs.get("impersonate")
+            return _FakeIGResp(payload, status_code)
+
+    return FakeCreq, {"csrftoken": "t"}, {}, "chrome"
+
+
+def test_instagram_profile_info_reads_follower_count(monkeypatch):
+    """Instagram's follower count is the denominator engagement rate needs."""
+    seen = {}
+    payload = {"data": {"user": {
+        "id": "12345",
+        "edge_followed_by": {"count": 8421},
+        "edge_follow": {"count": 310},
+        "edge_owner_to_timeline_media": {"count": 194},
+    }}}
+    monkeypatch.setattr(
+        collect, "_instagram_api_session",
+        lambda handle, fp, referer_path="": _fake_ig_session(payload, seen=seen),
+    )
+    info = collect._instagram_profile_info("lasikasyik", {"browser": "chrome"})
+    assert info == {
+        "user_id": "12345", "follower_count": 8421,
+        "following_count": 310, "post_count": 194,
+    }
+    # Rule #1: the call must impersonate a browser, never go out bare.
+    assert seen["impersonate"] == "chrome"
+    assert "lasikasyik" in seen["url"]
+
+
+def test_instagram_profile_info_is_best_effort(monkeypatch):
+    """A stats hiccup returns {} — it must never break the listing."""
+    monkeypatch.setattr(collect, "_instagram_api_session", lambda h, fp, referer_path="": None)
+    assert collect._instagram_profile_info("acct", {}) == {}
+
+    monkeypatch.setattr(
+        collect, "_instagram_api_session",
+        lambda h, fp, referer_path="": _fake_ig_session({}, status_code=429),
+    )
+    assert collect._instagram_profile_info("acct", {}) == {}
 
 
 # --- Anti-detection: fingerprint rotation, proxy plumbing, cookie pool, 403 escalation ---

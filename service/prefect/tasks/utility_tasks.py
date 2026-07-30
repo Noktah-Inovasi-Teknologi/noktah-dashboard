@@ -11,7 +11,7 @@ import os
 import asyncio
 from collections import deque
 from datetime import datetime, timedelta
-from typing import Literal, Optional, Dict, List, Any
+from typing import Literal, Optional, Dict, Any
 from prefect import task
 from prefect.logging import get_run_logger
 from hashmap import WORKERS, FIELD_ASSOCIATE, CONTENT_EDITOR, COMPONENTS
@@ -465,22 +465,23 @@ def process_row_uniform(row: Dict[str, Any], row_index: int) -> Dict[str, Any]:
 def convert_content_plan_row_to_jira_issue(
     row: Dict[str, Any], 
     client_name: str,
-    component_hashmap: Optional[Dict[str, str]] = COMPONENTS
+    component_hashmap: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
     """
     Convert a content plan row to Jira issue type 10009 (Asset) format
-    
+
     Args:
         row: Content plan row data
         client_name: Client name for component mapping
-        component_hashmap: Mapping of client names to component IDs
-        
+        component_hashmap: Override for the client -> component ID mapping;
+            defaults to the sheet-backed COMPONENTS hashmap
+
     Returns:
         Formatted Jira issue data for type 10009
     """
     logger = get_run_logger()
-    
-    # Default component hashmap based on issue_type_10009_fields.json
+
+    # Falls back to the "Hashmaps" worksheet (hashmap.py), resolved on first access
     if component_hashmap is None:
         component_hashmap = COMPONENTS
     
@@ -605,13 +606,27 @@ def convert_content_plan_row_to_jira_issue(
                         {
                             "type": "paragraph",
                             "content": [
-                                {"type": "text", "text": "Visualisasi Konten: ", "marks": [{"type": "strong"}]},
+                                {"type": "text", "text": "Shoot Guide: ", "marks": [{"type": "strong"}]},
                             ]
                         },
                         {
                             "type": "paragraph",
                             "content": [
-                                {"type": "text", "text": format_text_field_uniform(row.get('Visualisasi Konten', ''))}
+                                # Renamed from "Visualisasi Konten"; fall back to the old
+                                # column name so pre-rename (Jan–Jul) sheets still process.
+                                {"type": "text", "text": format_text_field_uniform(row.get('Shoot Guide') or row.get('Visualisasi Konten', ''))}
+                            ]
+                        },
+                        {
+                            "type": "paragraph",
+                            "content": [
+                                {"type": "text", "text": "Reference: ", "marks": [{"type": "strong"}]},
+                            ]
+                        },
+                        {
+                            "type": "paragraph",
+                            "content": [
+                                {"type": "text", "text": format_text_field_uniform(row.get('Reference', ''))}
                             ]
                         },
                         {

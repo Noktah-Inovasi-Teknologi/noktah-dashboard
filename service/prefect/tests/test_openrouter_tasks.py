@@ -56,3 +56,46 @@ def test_build_payload_includes_provider_and_response_format():
     assert [m["role"] for m in payload["messages"]] == ["system", "user"]
     if ot.PROVIDER_ORDER:
         assert payload["provider"]["order"] == ot.PROVIDER_ORDER
+
+
+def test_build_payload_requests_usage_accounting():
+    """Without opting in, the response carries no resolved `cost`."""
+    payload = ot._build_payload(None, "usr", "some/model", 1000, None, 0.7)
+    assert payload["usage"] == {"include": True}
+
+
+class _CapturingLogger:
+    def __init__(self):
+        self.lines = []
+
+    def info(self, message):
+        self.lines.append(message)
+
+    warning = info
+
+
+def test_log_usage_records_tokens_cost_call_site_and_client():
+    log = _CapturingLogger()
+    body = {
+        "model": "xiaomi/mimo-v2.5",
+        "usage": {"prompt_tokens": 3100, "completion_tokens": 780, "total_tokens": 3880, "cost": 0.0042},
+    }
+    ot._log_usage(body, "songbird.generate[Post]", "requested/model", "Klinik Mata Sampang", log)
+    line = log.lines[0]
+    assert "prompt_tokens=3100" in line
+    assert "completion_tokens=780" in line
+    assert "call_site=songbird.generate[Post]" in line
+    assert "client=Klinik Mata Sampang" in line
+    assert "cost_usd=0.0042" in line
+    # The model that actually served the call, not the one requested.
+    assert "model=xiaomi/mimo-v2.5" in line
+
+
+def test_log_usage_is_best_effort():
+    """Accounting must never break a generation run."""
+    log = _CapturingLogger()
+    ot._log_usage({}, "x", "m", None, log)          # no usage object at all
+    ot._log_usage({"usage": {}}, "x", "m", None, log)
+    assert log.lines == []
+    ot._log_usage({"usage": {"prompt_tokens": 1}}, "x", "m", None, object())  # logger without .info
+    # No exception escaped.

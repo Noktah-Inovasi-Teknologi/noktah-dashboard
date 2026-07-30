@@ -146,20 +146,29 @@ async def social_item_download(
 
 
 @task(name="social.item.analyze", retries=1, retry_delay_seconds=30)
-async def social_item_analyze(content_id: str, local_paths: List[str], content_type: str) -> Dict[str, Any]:
+async def social_item_analyze(
+    content_id: str, local_paths: List[str], content_type: str, client: Optional[str] = None
+) -> Dict[str, Any]:
     """
     Analyze a downloaded content item via roach.
 
     Model failures are reported as {"status": "failed", "error": ...} in the
     response body by roach (not raised) so the download is retained and a
     Sheet row is still written (edge case).
+
+    `client` labels whose harvest is spending the tokens. roach is stateless and
+    can't know, so it is passed in and echoed into roach's token-usage log —
+    otherwise analysis spend can only be seen as one undifferentiated total.
     """
-    with _roach_client() as client:
+    with _roach_client() as http_client:
         # Analysis can involve model retries/back-off on the roach side, so allow
         # a generous read timeout (the engine also tolerates a failure here).
-        resp = client.post(
+        resp = http_client.post(
             "/analyze",
-            json={"content_id": content_id, "local_paths": local_paths, "content_type": content_type},
+            json={
+                "content_id": content_id, "local_paths": local_paths,
+                "content_type": content_type, "client": client,
+            },
             timeout=600.0,
         )
         _raise_for_roach_error(resp)

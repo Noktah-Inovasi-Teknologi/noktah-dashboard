@@ -29,17 +29,29 @@ story checks; IG via the Stories extractor). Stories are ephemeral (~24h) and ca
 Response `200`:
 ```json
 { "ok": true,
-  "profile": { "handle": "name", "platform": "tiktok", "public_metadata": { } },
+  "profile": { "handle": "name", "platform": "tiktok",
+               "public_metadata": { "follower_count": 8421, "following_count": 310, "post_count": 194 } },
   "items": [
     { "content_id": "7630040448702385429", "content_type": "video", "is_video": true,
       "source_url": "https://...", "published_at": "2026-07-10T04:12:00Z",
-      "caption": "…", "hashtags": ["#x"], "public_counts": { "likes": 12, "comments": 3, "views": 900 } }
+      "caption": "…", "hashtags": ["#x"],
+      "public_counts": { "likes": 12, "comments": 3, "views": 900, "shares": 47 } }
   ] }
 ```
 Errors: `404 {"ok":false,"code":"profile_not_found"}` (private/non-existent — flow skips, continues);
 `429 {"ok":false,"code":"rate_limited"|"challenge","reason":"…"}` (flow backs off + defers profile).
 Items list MAY be empty (zero-content profile → empty folder, logged note, run continues).
-`public_counts` MUST never include reach/impressions/saves (FR-003).
+`public_counts` MUST never include reach/impressions/saves (FR-003). `shares` is public (visible on
+any post) and therefore allowed: TikTok `shareCount` / yt-dlp `repost_count`; Instagram exposes no
+public share count, so IG items carry `"shares": null` — the key is always present so `null` reads as
+"not available on this platform", not "this listing forgot to look".
+
+`public_metadata` is best-effort account-level data and MAY be `{}`. TikTok fills `follower_count`
+from yt-dlp. Instagram queries `web_profile_info` (cookie session + browser impersonation, one request
+per listing, `user_id` shared with the Reels-grid pass); the follower count is the **denominator** —
+without it IG engagement can only be compared in absolute terms, which ranks account size rather than
+content. Failures are logged with their HTTP status so an empty `public_metadata` can be told apart
+from an expired cookie session, a throttle, and an Instagram-side outage.
 
 ## POST /download
 Download a single item to the shared volume using the path implied by `is_video` (yt-dlp for video,
@@ -63,8 +75,14 @@ summary with `subtitle` empty (no spoken audio).
 
 Request:
 ```json
-{ "content_id": "7630…", "local_paths": ["/data/7630….mp4"], "content_type": "video" }
+{ "content_id": "7630…", "local_paths": ["/data/7630….mp4"], "content_type": "video",
+  "client": "Ecky Dental Center" }
 ```
+`client` is optional and used for **attribution only** — roach is stateless and cannot know whose
+harvest it is analyzing, so the caller labels the call and roach echoes it into its OpenRouter
+token-usage log (`[openrouter] usage call_site=… client=… prompt_tokens=… cost_usd=…`). The harvest
+engine passes the run's `harvest_name`.
+
 Response `200`:
 ```json
 { "ok": true, "content_id": "7630…",
@@ -77,3 +95,11 @@ row still written — edge case), so the flow does not treat analysis failure as
 All error bodies use `{ "ok": false, "code": "<slug>", "reason": "<human text>" }`. HTTP status
 carries the class (`404` gone/not-found, `429` throttle/challenge, `500` internal). Secrets are
 never echoed in `reason` (FR-019).
+
+The envelope describes **platform** failures only. A bug inside roach (`TypeError`, `AttributeError`,
+`NameError`, `ImportError`) is deliberately NOT caught — it propagates, logging a traceback, rather
+than being returned as a well-formed `500 *_failed`. The flow branches on this classification (`404`
+⇒ skip the profile, `429` ⇒ back off and rotate egress), so a bug wearing a platform-failure envelope
+is indistinguishable from the real thing; that is exactly how a `list_profile` signature drift
+surfaced as three tests asserting `500 == 200`/`404`/`429`. Genuine failures still log their full
+traceback before returning the envelope — `reason` alone is often one unattributable line.

@@ -39,6 +39,9 @@ async def songbird_generate_flow(
     tone: str = "",
     content_pillars: Optional[List[str]] = None,
     signal_window_days: int = 180,
+    signal_half_life_days: float = 90.0,
+    exemplar_limit: Optional[int] = None,
+    allocation_seed: Optional[int] = None,
     credentials_block_name: str = "google-creds",
 ):
     """
@@ -49,6 +52,9 @@ async def songbird_generate_flow(
         quantity: Number of standalone ideas to generate.
         platform, audience, goal, tone, content_pillars: marketing parameters.
         signal_window_days: Rolling recency window for top performers (default 180).
+        signal_half_life_days: Half-life of the recency tilt on exemplar scores.
+        exemplar_limit: Total exemplars across own + competitor (None ⇒ auto-scale).
+        allocation_seed: Seed for theme sampling; set to make a run reproducible.
         credentials_block_name: Google credentials block name.
 
     Returns:
@@ -66,6 +72,9 @@ async def songbird_generate_flow(
         tone=tone,
         content_pillars=content_pillars,
         signal_window_days=signal_window_days,
+        signal_half_life_days=signal_half_life_days,
+        exemplar_limit=exemplar_limit,
+        allocation_seed=allocation_seed,
         credentials_block_name=credentials_block_name,
     )
 
@@ -80,6 +89,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--tone", default="")
     parser.add_argument("--content-pillars", nargs="*", default=None)
     parser.add_argument("--signal-window-days", type=int, default=180)
+    parser.add_argument("--signal-half-life-days", type=float, default=90.0,
+                        help="Half-life of the recency tilt on exemplar scores")
+    parser.add_argument("--exemplar-limit", type=int, default=None,
+                        help="Total exemplars across own + competitor (default: scales with quantity)")
+    parser.add_argument("--allocation-seed", type=int, default=None,
+                        help="Seed for theme sampling; set to make a run reproducible")
     parser.add_argument("--credentials-block-name", default="google-creds")
     return parser.parse_args()
 
@@ -91,6 +106,8 @@ if __name__ == "__main__":
             client=args.client, quantity=args.quantity,
             platform=args.platform, audience=args.audience, goal=args.goal, tone=args.tone,
             content_pillars=args.content_pillars, signal_window_days=args.signal_window_days,
+            signal_half_life_days=args.signal_half_life_days,
+            exemplar_limit=args.exemplar_limit, allocation_seed=args.allocation_seed,
             credentials_block_name=args.credentials_block_name,
         )
     )

@@ -16,7 +16,7 @@ service/prefect/
 ├── blocks/
 │   ├── google_credentials.py  # GoogleCredentials block (OAuth refresh token)
 │   └── jira_credentials.py    # JiraCredentials block (Basic auth: email + API token)
-├── hashmap.py              # Static mappings: WORKERS, COMPONENTS, CONTENT_EDITOR, FIELD_ASSOCIATE
+├── hashmap.py              # Sheet-backed mappings: WORKERS, COMPONENTS, CONTENT_EDITOR, FIELD_ASSOCIATE, CLIENT_SOCIAL
 ├── main.py                 # CLI entry point
 ├── run_google_oauth.py     # One-time Google OAuth setup (local dev)
 ├── pyproject.toml / uv.lock
@@ -94,7 +94,7 @@ uv run python run_google_oauth.py
 1. **Search** client Drive folders for the target month's content plan spreadsheet.
 2. **Read** each spreadsheet's rows via the Google Sheets API.
 3. **Format** rows uniformly (dates, text, numeric fields).
-4. **Convert** rows into Jira issue-type payloads (issue type `10009`), using `hashmap.py` to resolve worker/component/editor/associate assignments per client.
+4. **Convert** rows into Jira issue-type payloads (issue type `10009`), using `hashmap.py` to resolve worker/component/editor/associate assignments per client. Those mappings are read from the **"Hashmaps" worksheet** of the Clients workbook at runtime (cached, with a `data/hashmap_cache.json` fallback) — update the sheet, not the code. Inspect with `docker exec prefect python hashmap.py`.
 5. **Validate or create** issues in Jira in bulk (max 45 per request), per client.
 
 Each run writes a timestamped directory under `data/` (e.g. `data/20260702_191619/`) containing a step-by-step JSON trace (`step1_client_data.json`, `step4_content_plan_data.json`, `step7_validation_per_client.json`, etc.) for debugging and auditing.

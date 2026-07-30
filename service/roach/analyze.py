@@ -44,6 +44,12 @@ PROVIDER_ORDER = [
 ]
 ALLOW_FALLBACKS = os.environ.get("OPENROUTER_ALLOW_FALLBACKS", "true").strip().lower() not in {"0", "false", "no"}
 
+# OpenRouter attributes spend on its own activity dashboard by these two headers.
+# Without them every call from this stack arrives as one undifferentiated app, so
+# roach's analysis spend can't be told apart from songbird's generation spend.
+APP_TITLE = os.environ.get("OPENROUTER_APP_TITLE", "noktah-roach")
+APP_REFERER = os.environ.get("OPENROUTER_APP_URL", "https://github.com/noktah/noktah-dashboard")
+
 # Token budgets. Video needs headroom for a full transcript; images don't.
 VIDEO_MAX_TOKENS = int(os.environ.get("ANALYZE_VIDEO_MAX_TOKENS", "8000"))
 IMAGE_MAX_TOKENS = int(os.environ.get("ANALYZE_IMAGE_MAX_TOKENS", "3000"))
@@ -120,11 +126,39 @@ def _build_payload(prompt: str, content_parts: list[dict], model: str, keys: lis
         # token budget before writing the answer (the empty-content failure).
         "reasoning": {"enabled": False},
         "response_format": _response_format(keys),
+        # Usage accounting: opting in adds the resolved USD `cost` to the usage
+        # object alongside the token counts, so spend is read off the response
+        # rather than estimated from a price list.
+        "usage": {"include": True},
         "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}, *content_parts]}],
     }
     if PROVIDER_ORDER:
         payload["provider"] = {"order": PROVIDER_ORDER, "allow_fallbacks": ALLOW_FALLBACKS}
     return payload
+
+
+def _log_usage(body: dict, call_site: str, model: str, client: str | None) -> None:
+    """Record the token usage OpenRouter returns on every call.
+
+    The counts (and, with usage accounting on, the cost) ride on every response
+    and used to be discarded with the rest of the envelope — which left analysis
+    spend unmeasurable. Best-effort: never let accounting break an analysis.
+    """
+    try:
+        usage = body.get("usage") or {}
+        if not usage:
+            return
+        cost = usage.get("cost")
+        print(
+            f"[openrouter] usage call_site={call_site} model={body.get('model') or model} "
+            f"client={client or '-'} prompt_tokens={usage.get('prompt_tokens')} "
+            f"completion_tokens={usage.get('completion_tokens')} "
+            f"total_tokens={usage.get('total_tokens')}"
+            + (f" cost_usd={cost}" if cost is not None else ""),
+            flush=True,
+        )
+    except Exception:
+        pass
 
 
 def _extract_json(content: str) -> dict:
@@ -141,14 +175,21 @@ def _extract_json(content: str) -> dict:
     raise json.JSONDecodeError("no JSON object found", text, 0)
 
 
-def _call_model(prompt: str, content_parts: list[dict], model: str, keys: list[str], max_tokens: int) -> dict:
+def _call_model(
+    prompt: str, content_parts: list[dict], model: str, keys: list[str], max_tokens: int,
+    call_site: str = "analyze", client: str | None = None,
+) -> dict:
     api_key = os.environ["OPENROUTER_API_KEY"]
 
     last_error: Exception = RuntimeError("unreachable")
     for attempt in range(MAX_ATTEMPTS):
         resp = requests.post(
             OPENROUTER_URL,
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "X-Title": APP_TITLE,
+                "HTTP-Referer": APP_REFERER,
+            },
             json=_build_payload(prompt, content_parts, model, keys, max_tokens),
             timeout=180,
         )
@@ -167,7 +208,9 @@ def _call_model(prompt: str, content_parts: list[dict], model: str, keys: list[s
             # Other 4xx/5xx (e.g. provider 422/502) won't improve on retry —
             # surface the provider's error body so the failure is diagnosable.
             raise RuntimeError(f"OpenRouter {model} HTTP {resp.status_code}: {resp.text[:400]}")
-        content = resp.json()["choices"][0]["message"]["content"]
+        body = resp.json()
+        _log_usage(body, call_site, model, client)
+        content = body["choices"][0]["message"]["content"]
         if not content:
             # Reasoning disabled above, but guard the empty-content case anyway.
             last_error = RuntimeError(f"empty content on attempt {attempt + 1}")
@@ -232,7 +275,7 @@ def _compress_image(src: Path) -> tuple[Path, bool]:
     return src, False
 
 
-def analyze_video(video_path: Path) -> dict:
+def analyze_video(video_path: Path, client: str | None = None) -> dict:
     clip, is_temp = _compress_video(video_path)
     try:
         video_b64 = base64.b64encode(clip.read_bytes()).decode()
@@ -243,13 +286,15 @@ def analyze_video(video_path: Path) -> dict:
             MODEL,
             keys=["subtitle", "flow", "summary"],
             max_tokens=VIDEO_MAX_TOKENS,
+            call_site="analyze.video",
+            client=client,
         )
     finally:
         if is_temp:
             clip.unlink(missing_ok=True)
 
 
-def analyze_images(image_paths: list[Path]) -> dict:
+def analyze_images(image_paths: list[Path], client: str | None = None) -> dict:
     parts = []
     temps: list[Path] = []
     try:
@@ -260,7 +305,10 @@ def analyze_images(image_paths: list[Path]) -> dict:
             mime_type = "image/jpeg" if is_temp else (mimetypes.guess_type(str(small))[0] or "image/jpeg")
             image_b64 = base64.b64encode(small.read_bytes()).decode()
             parts.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}})
-        result = _call_model(IMAGE_PROMPT, parts, IMAGE_MODEL, keys=["flow", "summary"], max_tokens=IMAGE_MAX_TOKENS)
+        result = _call_model(
+            IMAGE_PROMPT, parts, IMAGE_MODEL, keys=["flow", "summary"],
+            max_tokens=IMAGE_MAX_TOKENS, call_site="analyze.images", client=client,
+        )
         result.setdefault("subtitle", "")
         return result
     finally:
@@ -272,12 +320,15 @@ VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".m4v"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".gif"}
 
 
-def analyze_item(local_paths: list[str], content_type: str) -> dict:
+def analyze_item(local_paths: list[str], content_type: str, client: str | None = None) -> dict:
     """Analyze one downloaded item, branching by the *actual* files on disk.
 
     The branch is decided by file extension, not just the content_type label:
     sending an .mp4 to the image model (which happens if a Reel is mislabeled)
     produces a provider error, so any video file always goes to analyze_video.
+
+    `client` is an attribution label only (roach is stateless); it is echoed
+    into the token-usage log so spend can be split per client.
 
     Returns {subtitle, flow, summary, status, error}. On model failure the
     download is NOT touched — this returns status="failed" with the error
@@ -292,18 +343,18 @@ def analyze_item(local_paths: list[str], content_type: str) -> dict:
     try:
         if videos and not images:
             # Single video or all-video carousel — analyze the (first) video.
-            result = analyze_video(videos[0])
+            result = analyze_video(videos[0], client)
             result.setdefault("subtitle", "")
         elif images and not videos:
-            result = analyze_images(images)
+            result = analyze_images(images, client)
         elif videos and images:
             # Mixed carousel: analyze the image(s); the video model only takes one.
-            result = analyze_images(images)
+            result = analyze_images(images, client)
         elif content_type == "video":
-            result = analyze_video(paths[0])
+            result = analyze_video(paths[0], client)
             result.setdefault("subtitle", "")
         else:
-            result = analyze_images(paths)
+            result = analyze_images(paths, client)
         # The model may return flow/subtitle as a JSON array; flatten to text
         # so downstream consumers (e.g. Google Sheets cells) get scalar strings.
         return {

@@ -35,6 +35,45 @@ def test_build_payload_has_provider_reasoning_and_schema(monkeypatch):
     assert payload["max_tokens"] == 3000
     schema = payload["response_format"]["json_schema"]["schema"]
     assert set(schema["required"]) == {"flow", "summary"}
+    # Usage accounting must be requested, or the response carries no `cost`.
+    assert payload["usage"] == {"include": True}
+
+
+def test_call_model_sends_attribution_headers_and_logs_usage(monkeypatch, capsys):
+    """OpenRouter returns token usage on every call; it must be written down.
+
+    Also asserts the X-Title/HTTP-Referer attribution headers, without which
+    OpenRouter's dashboard cannot split roach's spend from songbird's.
+    """
+    captured = {}
+
+    class UsageResp(FakeResp):
+        def json(self):
+            return {
+                "model": "xiaomi/mimo-v2.5",
+                "choices": [{"message": {"content": '{"flow": "f", "summary": "s"}'}}],
+                "usage": {"prompt_tokens": 1200, "completion_tokens": 340, "total_tokens": 1540, "cost": 0.0021},
+            }
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["headers"] = headers
+        return UsageResp("")
+
+    monkeypatch.setattr(analyze.requests, "post", fake_post)
+    result = analyze._call_model(
+        "prompt", [], "xiaomi/mimo-v2.5", ["flow", "summary"], 3000,
+        call_site="analyze.images", client="Ecky Dental Center",
+    )
+    assert result == {"flow": "f", "summary": "s"}
+    assert captured["headers"]["X-Title"] == analyze.APP_TITLE
+    assert captured["headers"]["HTTP-Referer"] == analyze.APP_REFERER
+
+    logged = capsys.readouterr().out
+    assert "prompt_tokens=1200" in logged
+    assert "completion_tokens=340" in logged
+    assert "call_site=analyze.images" in logged
+    assert "client=Ecky Dental Center" in logged
+    assert "cost_usd=0.0021" in logged
 
 
 def test_provider_order_defaults_to_xiaomi_first():
@@ -101,14 +140,19 @@ def test_analyze_images_caps_and_cleans_temps(monkeypatch, tmp_path):
     monkeypatch.setattr(analyze.shutil, "which", lambda name: None)
     captured = {}
 
-    def fake_call(prompt, parts, model, keys, max_tokens):
+    def fake_call(prompt, parts, model, keys, max_tokens, call_site="analyze", client=None):
         captured["n_parts"] = len(parts)
+        captured["call_site"] = call_site
+        captured["client"] = client
         return {"flow": "f", "summary": "s"}
 
     monkeypatch.setattr(analyze, "_call_model", fake_call)
-    result = analyze.analyze_images(imgs)
+    result = analyze.analyze_images(imgs, client="Ecky Dental Center")
     assert captured["n_parts"] == 2  # capped
     assert result["subtitle"] == ""  # image path has no transcript
+    # Attribution reaches the call so token usage can be logged per client/call site.
+    assert captured["call_site"] == "analyze.images"
+    assert captured["client"] == "Ecky Dental Center"
 
 
 def test_analyze_item_never_raises_on_model_failure(monkeypatch, tmp_path):

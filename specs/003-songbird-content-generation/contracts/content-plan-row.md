@@ -1,49 +1,64 @@
 # Contract: Content-Plan Row (draft + live)
 
 Defines how one generated Content Idea maps to worksheet columns, for both the draft deliverable and the
-live content-plan worksheet. The **authoritative downstream contract** is
-`service/prefect/tasks/utility_tasks.py::convert_content_plan_row_to_jira_issue` — songbird must emit
-columns that function reads. Verify that function before changing this contract.
+live content-plan worksheet.
 
-## Content-plan columns (consumed downstream)
+Two authorities constrain this contract, and both must be checked before changing it:
 
-| Column (header) | Source | Required downstream | Notes |
-|-----------------|--------|---------------------|-------|
-| `Topik` | model `topik` | yes (issue summary) | the content topic/title |
-| `Tanggal` | engine-assigned (monthly) | yes (dates) | `YYYY-MM-DD`; distributed across month (FR-004). Empty for on-demand. |
-| `Bentuk` | model `bentuk` | yes (content form) | e.g. Reels, Feed, Story, Carousel |
-| `Format` | model `format` | no | description field |
-| `Purpose/Theme` | model `purpose_theme` | no | description field |
-| `Strategic Application` | model `strategic_application` | no | description field |
-| `Visualisasi Konten` | model `visualisasi_konten` | no | execution/visual note |
+1. **The content-plan layout ("DRAFT v5")** — the draft must be the same sheet reviewers already work in,
+   column-for-column and in order.
+2. **`service/prefect/tasks/utility_tasks.py::convert_content_plan_row_to_jira_issue`** — the downstream
+   Jira converter; songbird must emit the columns that function reads.
 
-Columns the downstream converter also reads but songbird leaves for humans/scheduler:
-`Waktu`, `Creator`, `Kebutuhan Personil`, `Asset` (omitted → empty; not invented by the model).
+## The v5 layout (20 columns, in order)
 
-## Draft-only rationale columns (reviewer aid — FR-016a)
+`No.`, `Tanggal`, `Waktu`, `Bentuk`, `Topik`, `Creator`, `Format`, `Purpose/Theme`,
+`Strategic Application`, `Kebutuhan Personil`, `Known Facts`, `Shoot Guide`, `Reference`,
+`Asset`, `Caption`, `Keterangan`, `Approval`, `Link Referensi`, `TicketID`, `Key`
 
-Appended **after** the content-plan columns in the draft sheet; **excluded** from the live worksheet.
+### Columns songbird fills (`GENERATED_COLUMNS`)
 
-| Column | Source | Purpose |
-|--------|--------|---------|
-| `Adapted Pattern` | model `adapted_pattern` | which winning pattern/hook this idea adapts |
-| `Source Exemplar` | model `source_exemplar` | reference to the top-performer it learned from (handle/content_id or short desc) |
-| `Rationale` | model `rationale` | why this idea fits the client + goal |
-| `Hit Note` | constant | "Performa audiens adalah bias dari pola historis dan tidak dijamin." (FR-006) |
+| Column | Source | Required downstream | Notes |
+|--------|--------|---------------------|-------|
+| `No.` | engine | no | 1-based row sequence |
+| `Tanggal` | engine-assigned (monthly) | yes (dates) | `YYYY-MM-DD`, distributed across the month (FR-004). Empty for on-demand. |
+| `Bentuk` | **engine** | yes (content form) | `Post` / `Story` / `Short Video`. Set by the engine because generation is per content type — the model is not asked for it and so cannot get it wrong. |
+| `Topik` | model `topik` | yes (issue summary) | specific, descriptive title |
+| `Creator` | constant `Brand` | no | content originates from the brand |
+| `Format` | **derived** = `Bentuk` | no | v5 mirrors Bentuk into Format rather than using a separate vocabulary |
+| `Purpose/Theme` | model `purpose_theme` | no | 1–2 sentences on the content's aim |
+| `Strategic Application` | model `strategic_application` | no | `Awareness` / `Consideration` / `Conversion` |
+| `Shoot Guide` | model `shoot_guide` | no | Post → `-`; Story/Short Video → scene-by-scene real-footage plan (shot, angle, blocking, ambience), hook in the first 3 seconds |
+| `Reference` | model `reference` | no | Post → slide-by-slide carousel design (`SLIDE n:` + Visual/Headline/Body/CTA, slide 2 a standalone hook); Video → reference link or flow; Story → frame flow + interactive elements |
+| `Caption` | model `caption` | no | ready-to-post caption: hook first line, concise body, CTA, hashtags last |
+
+### Columns left blank (production workflow owns them)
+
+`Waktu`, `Kebutuhan Personil`, `Known Facts`, `Asset`, `Keterangan`, `Approval`, `Link Referensi`,
+`TicketID`, `Key` — scheduling, personnel, assets, approval and ticketing are human/downstream
+concerns and are never invented by the model.
+
+## Rationale + disclaimer (FR-005 / FR-006)
+
+The v5 layout has **no rationale columns**, so the draft has none either. `adapted_pattern`,
+`source_exemplar` and `rationale` are still generated, and along with the hit disclaimer are recorded
+in the **run-outcome JSON** (`result["data"][i]` and `summary.hit_disclaimer`). The audit trail is
+preserved without deviating from the plan format.
 
 ## Alignment rules
 
-- **Draft**: songbird creates the sheet with header = content-plan columns + rationale columns, in the
-  order above, and appends rows positionally against that known header.
-- **Live**: songbird reads the target worksheet's existing header row (`google_read_sheet_data`) and builds
-  each row by **column-name lookup** — a value is placed only where its header exists; unmapped generated
-  fields are dropped; rationale columns are never written (FR-016). Missing content-plan columns in the
-  live sheet are logged, not fabricated.
-- Cells must be scalar strings (no lists/dicts); multi-line notes use `\n`.
+- **Draft**: songbird creates the sheet with header = the 20 v5 columns in order, and appends rows
+  positionally against that known header.
+- **Live**: songbird reads the target worksheet's existing header row (`google_read_sheet_data`) and
+  builds each row by **column-name lookup** — a value is placed only where its header exists, and
+  unmapped fields are dropped. Missing columns are logged, never fabricated (FR-016).
+- Cells must be scalar strings (no lists/dicts); multi-line briefs use `\n`.
 
 ## Acceptance checks
 
-- Every produced row has non-empty `Topik` and `Bentuk`; monthly rows also have a valid in-month
-  `Tanggal` (SC-001).
+- Every produced row has non-empty `Topik`, `Bentuk` and `Caption`; monthly rows also have a valid
+  in-month `Tanggal` (SC-001).
+- `Format` equals `Bentuk`; `Creator` equals `Brand`; `No.` runs 1..N.
+- Workflow columns listed above are empty.
 - Live append: 100% of written cells land under an existing header of matching name; zero new columns
   created (SC-003).

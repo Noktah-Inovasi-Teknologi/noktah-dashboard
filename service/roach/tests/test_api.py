@@ -35,14 +35,14 @@ def test_list_rejects_wrong_api_key():
 
 
 def test_list_success_shape_and_no_owner_only_analytics(monkeypatch):
-    def fake_list_profile(profile_url, platform, max_items=30):
+    def fake_list_profile(profile_url, platform, max_items=30, stories_only=False):
         return (
-            {"handle": "x", "platform": "tiktok", "public_metadata": {}},
+            {"handle": "x", "platform": "tiktok", "public_metadata": {"follower_count": 900}},
             [{
                 "content_id": "123", "content_type": "video", "is_video": True,
                 "source_url": "https://tiktok.com/@x/video/123", "published_at": "2026-07-10T04:12:00Z",
                 "caption": "hi", "hashtags": ["x"],
-                "public_counts": {"likes": 5, "comments": 1, "views": 10},
+                "public_counts": {"likes": 5, "comments": 1, "views": 10, "shares": 2},
             }],
         )
 
@@ -54,20 +54,72 @@ def test_list_success_shape_and_no_owner_only_analytics(monkeypatch):
     assert body["profile"]["handle"] == "x"
     item = body["items"][0]
     counts = item["public_counts"]
-    # FR-003: owner-only analytics (reach/impressions/saves) must never appear
+    # FR-003: owner-only analytics (reach/impressions/saves) must never appear.
+    # Shares are public (visible on any post), so they are allowed.
     assert "reach" not in counts and "impressions" not in counts and "saves" not in counts
-    assert set(counts) <= {"likes", "comments", "views"}
+    assert set(counts) <= {"likes", "comments", "views", "shares"}
+
+
+def test_list_forwards_stories_only(monkeypatch):
+    """The stories_only flag must reach collect.list_profile.
+
+    Regression guard: this argument was added to `list_profile` without the API
+    layer's tests following, and the resulting TypeError was returned as a 500.
+    """
+    seen = {}
+
+    def fake_list_profile(profile_url, platform, max_items=30, stories_only=False):
+        seen["stories_only"] = stories_only
+        return ({"handle": "x", "platform": "instagram", "public_metadata": {}}, [])
+
+    monkeypatch.setattr(collect, "list_profile", fake_list_profile)
+    resp = client.post(
+        "/list",
+        json={"profile_url": "https://www.instagram.com/x/", "platform": "instagram", "stories_only": True},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+    assert seen["stories_only"] is True
+
+
+def test_list_does_not_mask_internal_bugs_as_a_platform_failure(monkeypatch):
+    """A bug inside roach must not be laundered into the `{ok: false}` envelope.
+
+    The harvest flow branches on roach's classification (404 => skip the profile,
+    429 => back off and rotate egress), so a TypeError dressed up as a generic
+    500 is indistinguishable from a genuine platform failure. It has to be loud.
+    """
+    def wrong_signature(profile_url, platform):  # missing max_items/stories_only
+        raise AssertionError("should never be reached")
+
+    monkeypatch.setattr(collect, "list_profile", wrong_signature)
+    with pytest.raises(TypeError):
+        client.post("/list", json={"profile_url": "https://www.tiktok.com/@x", "platform": "tiktok"}, headers=HEADERS)
+
+
+def test_list_platform_failure_still_returns_the_error_envelope(monkeypatch):
+    """Genuine (non-bug) failures keep the documented 500 envelope."""
+    def boom(u, p, m=30, stories_only=False):
+        raise RuntimeError("gallery-dl exploded")
+
+    monkeypatch.setattr(collect, "list_profile", boom)
+    resp = client.post("/list", json={"profile_url": "https://www.tiktok.com/@x", "platform": "tiktok"}, headers=HEADERS)
+    assert resp.status_code == 500
+    assert resp.json()["code"] == "list_failed"
 
 
 def test_list_empty_items_for_zero_content_profile(monkeypatch):
-    monkeypatch.setattr(collect, "list_profile", lambda u, p, m=30: ({"handle": "x", "platform": "tiktok"}, []))
+    monkeypatch.setattr(
+        collect, "list_profile",
+        lambda u, p, m=30, stories_only=False: ({"handle": "x", "platform": "tiktok"}, []),
+    )
     resp = client.post("/list", json={"profile_url": "https://www.tiktok.com/@x", "platform": "tiktok"}, headers=HEADERS)
     assert resp.status_code == 200
     assert resp.json()["items"] == []
 
 
 def test_list_profile_not_found(monkeypatch):
-    def raise_not_found(u, p, m=30):
+    def raise_not_found(u, p, m=30, stories_only=False):
         raise collect.ProfileNotFoundError("private account")
 
     monkeypatch.setattr(collect, "list_profile", raise_not_found)
@@ -77,7 +129,7 @@ def test_list_profile_not_found(monkeypatch):
 
 
 def test_list_rate_limited(monkeypatch):
-    def raise_rate_limited(u, p, m=30):
+    def raise_rate_limited(u, p, m=30, stories_only=False):
         raise collect.RateLimitedError("challenge", code="challenge")
 
     monkeypatch.setattr(collect, "list_profile", raise_rate_limited)
@@ -119,7 +171,7 @@ def test_analyze_success_shape(monkeypatch):
 
     monkeypatch.setattr(
         analyze_mod, "analyze_item",
-        lambda paths, ct: {"subtitle": "hi", "flow": "1. hook", "summary": "a video", "status": "success", "error": None},
+        lambda paths, ct, client=None: {"subtitle": "hi", "flow": "1. hook", "summary": "a video", "status": "success", "error": None},
     )
     resp = client.post(
         "/analyze",
@@ -136,7 +188,7 @@ def test_analyze_image_leaves_subtitle_empty(monkeypatch):
 
     monkeypatch.setattr(
         analyze_mod, "analyze_item",
-        lambda paths, ct: {"subtitle": "", "flow": "1. shows a chart", "summary": "a chart", "status": "success", "error": None},
+        lambda paths, ct, client=None: {"subtitle": "", "flow": "1. shows a chart", "summary": "a chart", "status": "success", "error": None},
     )
     resp = client.post(
         "/analyze",
@@ -145,3 +197,26 @@ def test_analyze_image_leaves_subtitle_empty(monkeypatch):
     )
     assert resp.status_code == 200
     assert resp.json()["analysis"]["subtitle"] == ""
+
+
+def test_analyze_forwards_client_attribution(monkeypatch):
+    """The caller-supplied client label reaches analyze_item (token-usage logging)."""
+    import analyze as analyze_mod
+
+    seen = {}
+
+    def fake_analyze(paths, ct, client=None):
+        seen["client"] = client
+        return {"subtitle": "", "flow": "", "summary": "", "status": "success", "error": None}
+
+    monkeypatch.setattr(analyze_mod, "analyze_item", fake_analyze)
+    resp = client.post(
+        "/analyze",
+        json={
+            "content_id": "789", "local_paths": ["/data/789.mp4"],
+            "content_type": "video", "client": "Ecky Dental Center",
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+    assert seen["client"] == "Ecky Dental Center"

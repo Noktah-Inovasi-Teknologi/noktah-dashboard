@@ -36,7 +36,8 @@ Root object with an `items` array; each item has exactly these string keys:
       "format": "…",
       "purpose_theme": "…",
       "strategic_application": "…",
-      "visualisasi_konten": "…",
+      "shoot_guide": "… (video/story: how to shoot real footage; '-' for posts)",
+      "reference": "… (post: content/design flow; video: reference link)",
       "adapted_pattern": "which winning pattern/hook this adapts (or 'umum' if no signal)",
       "source_exemplar": "handle/content_id or short description (empty if no signal)",
       "rationale": "why this fits the client + goal"

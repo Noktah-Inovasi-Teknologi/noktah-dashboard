@@ -444,6 +444,10 @@ def _list_tiktok(profile_url: str, max_items: int, fingerprint: dict | None = No
                 "likes": e.get("like_count"),
                 "comments": e.get("comment_count"),
                 "views": e.get("view_count"),
+                # yt-dlp names TikTok's shareCount `repost_count`. Videos are the
+                # bulk of a TikTok account, so without this the share signal would
+                # only ever exist on the gallery-dl photo-post path.
+                "shares": e.get("repost_count"),
             },
         })
 
@@ -536,6 +540,9 @@ def _tiktok_counts(meta: dict) -> dict:
         "likes": _int(stats.get("diggCount")),
         "comments": _int(stats.get("commentCount")),
         "views": _int(stats.get("playCount")),
+        # Shares are the closest public proxy to the distribution signal the
+        # platforms actually reward, and they sit in the same stats object.
+        "shares": _int(stats.get("shareCount")),
     }
 
 
@@ -557,6 +564,93 @@ def _shortcode_from_url(url: str | None) -> str | None:
     return m.group(1) if m else None
 
 
+def _instagram_api_session(handle: str, fingerprint: dict, referer_path: str = "") -> tuple | None:
+    """Build an impersonated session for Instagram's private web API.
+
+    Returns `(curl_cffi.requests, cookies, headers, browser)`, or None when the
+    dependency or the cookie session is unavailable. Every IG web-API call needs
+    BOTH the burner cookie session and a real browser TLS fingerprint (rule #1) —
+    a plain `requests` call is 429'd even with valid cookies.
+    """
+    try:
+        from curl_cffi import requests as creq
+    except Exception:
+        return None
+    ck = _cookies_file("instagram", (fingerprint or {}).get("_seed"))
+    if ck is None:
+        return None
+    try:
+        cj = http.cookiejar.MozillaCookieJar(str(ck))
+        cj.load(ignore_discard=True, ignore_expires=True)
+    except OSError:
+        return None
+    cookies = {c.name: c.value for c in cj}
+    headers = {
+        "X-IG-App-ID": IG_APP_ID,
+        "X-CSRFToken": cookies.get("csrftoken", ""),
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": f"https://www.instagram.com/{handle}/{referer_path}",
+        "Accept-Language": (fingerprint or {}).get("accept_language", ACCEPT_LANGUAGE),
+    }
+    return creq, cookies, headers, (fingerprint or {}).get("browser", "chrome")
+
+
+def _instagram_profile_info(handle: str, fingerprint: dict) -> dict:
+    """Best-effort public account stats from IG's `web_profile_info` endpoint.
+
+    Instagram's gallery-dl listing carries no account-level metadata, so IG
+    profiles came back with an empty `public_metadata` while TikTok's carried a
+    follower count. That absence removes the *denominator*: engagement can then
+    only be compared in absolute terms, which ranks account size rather than
+    content, and follower growth can never be tracked retroactively (the counts
+    are only ever observable now — a backfill is impossible).
+
+    Returns {user_id, follower_count, following_count, post_count} or {} on any
+    failure. One request per account, reusing the listing's fingerprint; the
+    resolved `user_id` is handed to `_instagram_clip_stats` so the pair costs one
+    request, not two.
+
+    `web_profile_info` is the only endpoint that still exposes a follower count
+    to a web session — `users/<id>/info/` returns a trimmed object without one,
+    and the profile HTML 302s. Failures are logged rather than swallowed: an
+    empty `public_metadata` otherwise can't be told apart from an expired cookie
+    session, a throttle, or an Instagram-side outage.
+    """
+    if not handle:
+        return {}
+    session = _instagram_api_session(handle, fingerprint)
+    if session is None:
+        print(f"[instagram] {handle}: no cookie session for profile stats", flush=True)
+        return {}
+    creq, cookies, headers, browser = session
+    try:
+        r = creq.get(
+            f"https://www.instagram.com/api/v1/users/web_profile_info/?username={handle}",
+            headers=headers, cookies=cookies, impersonate=browser, timeout=30,
+        )
+        if r.status_code != 200:
+            print(
+                f"[instagram] {handle}: profile stats unavailable "
+                f"(HTTP {r.status_code}: {r.text[:160]})",
+                flush=True,
+            )
+            return {}
+        user = ((r.json().get("data") or {}).get("user")) or {}
+    except Exception as e:
+        print(f"[instagram] {handle}: profile stats request failed: {e}", flush=True)
+        return {}
+    if not user:
+        print(f"[instagram] {handle}: profile stats response carried no user object", flush=True)
+        return {}
+    uid = user.get("id")
+    return {
+        "user_id": str(uid) if uid else None,
+        "follower_count": (user.get("edge_followed_by") or {}).get("count"),
+        "following_count": (user.get("edge_follow") or {}).get("count"),
+        "post_count": (user.get("edge_owner_to_timeline_media") or {}).get("count"),
+    }
+
+
 def _instagram_clip_stats(user_id: str | None, handle: str, fingerprint: dict, max_items: int) -> dict:
     """Best-effort per-account Reel stats from IG's clips endpoint.
 
@@ -567,38 +661,14 @@ def _instagram_clip_stats(user_id: str | None, handle: str, fingerprint: dict, m
     A (paged) request per account; returns {} on any failure so a stats hiccup
     never breaks the listing. Works for any public account (competitors included).
     """
-    try:
-        from curl_cffi import requests as creq
-    except Exception:
+    session = _instagram_api_session(handle, fingerprint, referer_path="reels/")
+    if session is None:
         return {}
-    ck = _cookies_file("instagram", (fingerprint or {}).get("_seed"))
-    if ck is None:
-        return {}
-    try:
-        cj = http.cookiejar.MozillaCookieJar(str(ck))
-        cj.load(ignore_discard=True, ignore_expires=True)
-    except OSError:
-        return {}
-    cookies = {c.name: c.value for c in cj}
-    browser = (fingerprint or {}).get("browser", "chrome")
-    headers = {
-        "X-IG-App-ID": IG_APP_ID,
-        "X-CSRFToken": cookies.get("csrftoken", ""),
-        "X-Requested-With": "XMLHttpRequest",
-        "Referer": f"https://www.instagram.com/{handle}/reels/",
-        "Accept-Language": (fingerprint or {}).get("accept_language", ACCEPT_LANGUAGE),
-    }
-    # Resolve the numeric user id if the listing didn't carry owner_id.
+    creq, cookies, headers, browser = session
+    # Resolve the numeric user id if neither the listing nor the profile pass
+    # supplied one.
     if not user_id:
-        try:
-            r = creq.get(
-                f"https://www.instagram.com/api/v1/users/web_profile_info/?username={handle}",
-                headers=headers, cookies=cookies, impersonate=browser, timeout=30,
-            )
-            if r.status_code == 200:
-                user_id = r.json()["data"]["user"]["id"]
-        except Exception:
-            return {}
+        user_id = _instagram_profile_info(handle, fingerprint).get("user_id")
     if not user_id:
         return {}
 
@@ -694,7 +764,7 @@ def _list_instagram_stories(profile_url: str, fingerprint: dict) -> list[dict]:
             "caption": "",
             "hashtags": [],
             # Stories have no public engagement counts.
-            "public_counts": {"likes": None, "comments": None, "views": None},
+            "public_counts": {"likes": None, "comments": None, "views": None, "shares": None},
         })
     return items
 
@@ -802,6 +872,10 @@ def _list_instagram(profile_url: str, max_items: int, fingerprint: dict | None =
                 "likes": meta.get("likes"),
                 "comments": meta.get("comments"),
                 "views": meta.get("video_view_count") or meta.get("views"),
+                # Instagram exposes no public share count — the key is kept so the
+                # shape is identical across platforms and `None` reads as
+                # "not available here", not "this listing forgot to look".
+                "shares": None,
             },
         })
         if not profile_meta:
@@ -819,10 +893,23 @@ def _list_instagram(profile_url: str, max_items: int, fingerprint: dict | None =
         else:
             raise ProfileNotFoundError(f"could not resolve profile metadata for {profile_url}")
 
+    # Account-level public metadata (follower count + friends). Best-effort — an
+    # empty result leaves public_metadata as it was, and never breaks the listing.
+    profile_info = _instagram_profile_info(profile_meta.get("handle") or handle, fingerprint)
+    if profile_info:
+        profile_meta["public_metadata"] = {
+            "follower_count": profile_info.get("follower_count"),
+            "following_count": profile_info.get("following_count"),
+            "post_count": profile_info.get("post_count"),
+        }
+        print(f"[instagram] {handle}: follower_count={profile_info.get('follower_count')}", flush=True)
+
     # Enrich Reels with the view (play) count + comment count that IG's Reels grid
     # shows but the feed/gallery-dl listing omits — from the same endpoint the grid
     # uses. Best-effort, one paged request per account; failures leave counts as-is.
-    clip_stats = _instagram_clip_stats(_owner_id_from_entries(entries), handle, fingerprint, max_items)
+    # The user id resolved above is reused so the two passes cost one lookup.
+    owner_id = _owner_id_from_entries(entries) or profile_info.get("user_id")
+    clip_stats = _instagram_clip_stats(owner_id, handle, fingerprint, max_items)
     if clip_stats:
         matched = 0
         for it in items:

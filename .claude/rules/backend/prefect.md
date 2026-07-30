@@ -12,7 +12,7 @@ The service follows a modular structure:
 - **flows/** - Workflow definitions using @flow decorator for orchestration
 - **tasks/** - Atomic, reusable operations using @task decorator
 - **blocks/** - Prefect Blocks for secure credential storage
-- **hashmap.py** - Static data mappings (workers, components, role assignments)
+- **hashmap.py** - Sheet-backed data mappings (workers, components, role assignments, client social)
 - **pyproject.toml** - UV package manager configuration
 - **uv.lock** - Locked dependencies for reproducible builds
 - **Dockerfile** - Container configuration using UV
@@ -85,13 +85,41 @@ The service follows a modular structure:
 
 ### Hashmap Pattern
 
-Static mappings stored in hashmap.py include:
-- WORKERS - maps worker names to IDs
-- COMPONENTS - maps client names to component IDs
-- CONTENT_EDITOR - maps client names to assigned editor names
-- FIELD_ASSOCIATE - maps client names to assigned associate names
+Mappings are **sheet-backed, not hardcoded** — they live in the "Hashmaps" tab of the Clients
+workbook (`1-aV46TIn4m_zs3vtCNeS_Bvl3Tt-tgg09uuG_NqgNNY`) and `hashmap.py` reads them at runtime:
 
-Access hashmap data by importing and using dictionary .get() method with fallback values.
+- WORKERS - maps worker names to Jira account IDs (sheet cols B/C)
+- COMPONENTS - maps client names to Jira component IDs (cols F/G)
+- CONTENT_EDITOR - maps client names to assigned editor names (cols J/K)
+- FIELD_ASSOCIATE - maps client names to assigned associate names (cols N/O)
+- CLIENT_SOCIAL - maps client names to `{own[], competitors[], competitor_profiles[]}` for
+  songbird (cols R/S/T; one row per competitor, grouped by client)
+
+Access is unchanged — import the name and use `.get()` with a fallback. The exported objects are
+lazy read-only `Mapping`s, so `import hashmap` does **no** network I/O; the sheet is read on first
+*access* and cached for `HASHMAP_TTL_SECONDS` (default 300).
+
+**Rows are dynamic; columns are fixed.** Adding/removing rows needs no code change. If the sheet's
+horizontal layout changes, update `SHEET_LAYOUT` / `CLIENT_SOCIAL_LAYOUT` in `hashmap.py`.
+
+Resilience: each successful read is snapshotted to `data/hashmap_cache.json` (bind-mounted, and
+gitignored). If the Sheets API is unreachable the snapshot is used with a warning; if neither is
+available `load_hashmaps()` raises rather than returning empty mappings — an empty COMPONENTS would
+silently create Jira issues with no component or assignees.
+
+Do not pass a lazy mapping as a `@task` parameter default (Prefect validates task params with
+pydantic). Default to `None` and resolve inside the body, as
+`convert_content_plan_row_to_jira_issue` does.
+
+Inspect or force a refresh:
+
+```bash
+docker exec prefect python hashmap.py                      # entry counts per block
+docker exec prefect python hashmap.py --block CLIENT_SOCIAL  # one block as JSON
+```
+
+Env overrides: `HASHMAP_SPREADSHEET_ID`, `HASHMAP_TAB`, `HASHMAP_TTL_SECONDS`,
+`HASHMAP_CACHE_PATH`, `HASHMAP_CREDENTIALS_BLOCK`.
 
 ### Data Formatting Standards
 
@@ -552,7 +580,7 @@ Update dependencies quarterly and test thoroughly
 
 Monitor Prefect UI for failed runs and error patterns
 
-Review and update hashmap data as team changes
+Review and update hashmap data as team changes — edit the "Hashmaps" worksheet, not `hashmap.py`
 
 Clean output directory and archive old results
 

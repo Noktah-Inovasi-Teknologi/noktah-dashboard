@@ -44,6 +44,18 @@ browser:
   `_list_instagram_stories`); returns only currently-active stories (ephemeral ~24h, no public counts).
   Regular feed listings do NOT include stories — they're collected by the dedicated
   `social-harvest-stories` flow, meant to run frequently.
+- **Account metadata (follower count).** `_instagram_profile_info` queries `web_profile_info` through
+  `_instagram_api_session` (the shared cookie + impersonation helper) and fills `public_metadata`;
+  the `user_id` it resolves is passed to `_instagram_clip_stats` so the two passes cost one lookup.
+  The follower count is the **denominator** — without it IG engagement is only comparable in
+  absolute terms, which ranks account size rather than content, and it can never be backfilled
+  (counts are only ever observable *now*). It is the last web-reachable source: `users/<id>/info/`
+  returns a trimmed object with no counts, and the profile HTML `302`s. Failures print their HTTP
+  status — an empty `public_metadata` must be distinguishable from an expired cookie, a throttle, and
+  an Instagram-side outage. **Known upstream breakage (2026-07-31):** `web_profile_info` returns
+  `400 "Asset asset://laser.provider/ig_business_category_subvertical has been deleted"` for *every*
+  account — a Meta serializer regression, not auth or throttling. The code path is correct and starts
+  populating when that clears; do not "fix" it by swapping endpoints without re-probing first.
 - **Cookies** (`secrets/cookies.txt`, gitignored) are required for IG depth; pools live in
   `secrets/cookies.d/<platform>/*.txt`.
 
@@ -52,6 +64,18 @@ browser:
 - **Stateless per call** — no DB in roach; persistence + orchestration are on the Prefect side.
 - **Error contract** — `429` → `rate_limited`/`challenge`; `404` → not-found; analysis failures return
   `{status: "failed"}` in the body rather than raising.
+- **The error envelope is for platform failures, not roach's own bugs.** `api.py`'s catch-alls
+  re-raise `INTERNAL_BUG_ERRORS` (`TypeError`/`AttributeError`/`NameError`/`ImportError`) instead of
+  returning `500 *_failed`. The harvest flow *branches* on roach's classification (404 ⇒ skip the
+  profile, 429 ⇒ back off + rotate egress), so a bug dressed in a platform-failure envelope is
+  indistinguishable from the real thing — that is how adding `stories_only` to `list_profile` turned
+  into tests asserting `500 == 404` and `500 == 429`. Everything else goes through `_failure()`,
+  which prints the full traceback before returning the (unchanged) envelope.
+- **Token usage is logged, not discarded.** `_call_model` sends `X-Title`/`HTTP-Referer` (OpenRouter
+  attributes dashboard spend by these) and requests `usage: {include: true}` so the response carries a
+  resolved USD `cost`; `_log_usage` prints `call_site`, `model`, `client`, and the token counts. The
+  `client` label comes in on the `/analyze` request — roach can't know it. Best-effort: accounting
+  never breaks an analysis.
 - **Best-effort enrichment/side calls must never break the primary listing/download** (wrap in
   try/except → return partial, log).
 - **Editing `collect.py`/`api.py`/`analyze.py` requires an image rebuild** (`docker-compose up -d
@@ -75,7 +99,11 @@ print('with views:', sum(1 for x in i if (x.get('public_counts') or {}).get('vie
 
 Expect a mix of `video`/`carousel`/`image`, and views populated on video items.
 
+Probe sparingly. Each of these is a real request from your egress IP, and a handful of exploratory
+calls in a row is enough to earn `"Please wait a few minutes before you try again."` — at which point
+the next scheduled harvest pays for the debugging session.
+
 ---
 
-**Last Updated:** 2026-07-16
+**Last Updated:** 2026-07-31
 **Service:** roach (feature 002-social-content-harvest)

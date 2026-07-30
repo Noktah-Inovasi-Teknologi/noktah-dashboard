@@ -104,7 +104,8 @@ clarifications settled language, quantity source, on-demand shape, signal window
 
 - **Decision**: The generated idea maps to the content-plan columns the downstream flow reads
   (`convert_content_plan_row_to_jira_issue`): at minimum `Topik`, `Tanggal`, `Bentuk`, plus `Format`,
-  `Purpose/Theme`, `Strategic Application`, `Visualisasi Konten`. The **draft** sheet uses these columns
+  `Purpose/Theme`, `Strategic Application`, `Shoot Guide` (video/story capture guide, `-` for posts;
+  renamed from `Visualisasi Konten`), `Reference` (post content flow / video reference link). The **draft** sheet uses these columns
   **plus** reviewer-only rationale columns (`Adapted Pattern`, `Source Exemplar`, `Rationale`, `Hit Note`)
   (FR-016a). The **live** target reads the existing worksheet header via `google_read_sheet_data`, then
   appends rows aligned by column name — unmapped generated fields omitted, rationale columns excluded

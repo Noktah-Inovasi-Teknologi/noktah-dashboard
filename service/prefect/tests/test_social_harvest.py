@@ -132,8 +132,9 @@ def patched_engine(monkeypatch):
         calls["download"].append(content_id)
         return {"local_paths": [f"/data/{content_id}.mp4"], "content_type": content_type}
 
-    async def fake_analyze(content_id, local_paths, content_type):
+    async def fake_analyze(content_id, local_paths, content_type, client=None):
         calls["analyze"].append(content_id)
+        calls["analyze_client"] = client
         return {"subtitle": "s", "flow": "f", "summary": "sum", "status": "success", "error": None}
 
     monkeypatch.setattr(engine, "sheets_create", fake_sheets_create)
