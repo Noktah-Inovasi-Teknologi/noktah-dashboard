@@ -1,0 +1,150 @@
+# Database Schema Development Rules
+
+## Overview
+
+The application schema lives in two places that must always agree:
+
+- `config/postgres/init.sql` — the **greenfield path**, applied once at first container boot.
+- `config/postgres/migrations/*.sql` — the **upgrade path**, applied by hand to a running database.
+
+Before feature 004-relational-spine, `harvested_items` and `harvested_signals` existed only in
+`init.sql`, with no migration file — there was no supported way to change them on a running
+database. That defect is what this file exists to prevent from recurring.
+
+## The migration contract
+
+Every migration under `config/postgres/migrations/` MUST be:
+
+- **Idempotent** — `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`,
+  `ADD COLUMN IF NOT EXISTS`, and a `DO $$ ... IF NOT EXISTS (SELECT 1 FROM pg_constraint ...) $$`
+  guard for named constraints (Postgres has no `ADD CONSTRAINT IF NOT EXISTS`). Re-running a
+  migration must be harmless — an operator cannot always know what has already been applied.
+- **Additive** — no `DROP COLUMN`, no `ALTER … TYPE`, no `SET NOT NULL` on a populated table, no
+  tightening of an existing constraint that could reject an existing row.
+- **Transactional** — wrapped in `BEGIN; … COMMIT;` so a failure leaves nothing half-applied.
+- **Self-recording** — ends with
+  `INSERT INTO schema_migrations (version) VALUES ('NNN_name') ON CONFLICT (version) DO NOTHING;`.
+- **Reversible** — a matching `NNN_name.down.sql` exists.
+
+Applied with:
+```bash
+docker exec -i postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" < config/postgres/migrations/NNN_name.sql
+```
+
+**Never glob the migrations directory.** `NNN_*.sql` also matches `NNN_name.down.sql` — applying a
+migration and its own reversal back-to-back silently undoes what you just did. Always apply an
+explicit, ordered list of filenames.
+
+## Baseline migrations
+
+`001_knowledge_records`, `002_harvested_items`, and `003_harvested_signals` reproduce tables that
+already existed in production before this feature. On an existing database they introduce
+**nothing**. Their `.down.sql` is therefore an intentionally empty no-op with an explanatory
+comment — `DROP TABLE` would destroy data that predates the migration, which the reversibility
+contract explicitly forbids.
+
+If a table gets an audit finding like "exists only in `init.sql`, no migration" again, the fix is
+the same shape: write a baseline migration that `CREATE TABLE IF NOT EXISTS`-reproduces it exactly,
+give it a no-op down script, and mirror it into `init.sql`.
+
+## Making a column mandatory without a destructive migration
+
+`SET NOT NULL` on a populated table takes an `ACCESS EXCLUSIVE` lock and a full table rewrite, and
+is awkward to reverse. Instead:
+
+1. Add the column **nullable** in one migration.
+2. Backfill it (a flow, not a migration — SQL cannot read Google Sheets).
+3. In a later migration, add a named `CHECK (col IS NOT NULL) NOT VALID`, then immediately
+   `VALIDATE CONSTRAINT`. `NOT VALID` skips checking existing rows at add-time; `VALIDATE`
+   (a `SHARE UPDATE EXCLUSIVE` lock, not `ACCESS EXCLUSIVE`) checks them without blocking reads
+   or writes, and **fails loudly if any row is still unlinked** — which is the point. Reverses
+   with a single `DROP CONSTRAINT`.
+
+See `config/postgres/migrations/006_enforce_account_link.sql` for the reference implementation,
+and `flows/spine_backfill.py` for the backfill it depends on running first.
+
+**A `NOT VALID` → `VALIDATE` constraint and a plain `CHECK` constraint on an empty table produce
+byte-identical `pg_constraint` entries once validated** — `pg_get_constraintdef()` only shows a
+`NOT VALID` suffix while `convalidated = false`. This is why `init.sql` can declare the equivalent
+constraint directly (the table starts empty, so it validates immediately) and still stay in parity
+with the migrated path.
+
+## Mirroring into `init.sql`
+
+Every migration must also be reflected in `init.sql`, in the same order, so a database built from
+scratch matches one built by applying the full migration chain. Two traps:
+
+- **Match constraint names exactly.** A migration written as `ALTER TABLE t ADD CONSTRAINT
+  fk_thing FOREIGN KEY (...) REFERENCES ...` and an `init.sql` copy written as an inline
+  `col UUID REFERENCES other(id)` produce **different** auto-generated vs. explicit constraint
+  names — a parity mismatch. When a migration adds a constraint by explicit ALTER with a name,
+  mirror it the same way in `init.sql`, not as an inline column-level `REFERENCES`.
+- **Match nullability semantics, not just the end state.** A column enforced `NOT NULL` via a
+  named `CHECK` constraint (because the enforcement had to be added after the column, per the
+  pattern above) is **not** the same as a column declared `NOT NULL` at creation —
+  `information_schema.columns.is_nullable` reflects only the attribute-level `NOT NULL`, not an
+  arbitrary `CHECK`. If the migration path produces `is_nullable = 'YES'` (enforced via `CHECK`
+  instead), `init.sql` must declare the column the same way, or the parity check fails.
+
+## Proving the two paths agree
+
+```bash
+script/verify_schema_parity.sh
+```
+
+Builds two throwaway databases — one from `init.sql`, one from the full migration chain — and
+diffs `information_schema.tables`, `information_schema.columns`, `pg_indexes`, and `pg_constraint`.
+Exits non-zero on any difference. Also available as
+`service/prefect/tests/test_schema_parity.py::test_init_sql_and_migration_chain_are_structurally_identical`
+(marked `@pytest.mark.schema`, real Postgres required — see below).
+
+**Run this after any edit to `init.sql` or to a migration.** The two files are hand-written in
+parallel and will drift the moment one is edited alone — which is exactly how `harvested_items`
+and `harvested_signals` came to have no migration at all.
+
+## Testing against a real database, not mocks
+
+Schema and constraint tests (`test_spine_schema.py`, `test_account_resolution.py`,
+`test_roster_sync.py`, `test_roster_alias.py`, `test_spine_backfill.py`, `test_run_records.py`,
+`test_schema_parity.py`) run against a real disposable PostgreSQL database, following the
+knowledge-base service's precedent (`.claude/rules/backend/knowledge-base.md`): partial unique
+indexes, the `NOT VALID` → `VALIDATE` sequence, and cross-source name reconciliation are exactly
+the class of bug that passes against a mock and fails against Postgres.
+
+All such tests carry `pytestmark = pytest.mark.schema`. `service/prefect/tests/conftest.py`'s
+`pytest_collection_modifyitems` auto-skips only `schema`-marked tests when no database is
+reachable at `SPINE_TEST_DATABASE_URL` — every other (mocked) test in the suite is unaffected.
+
+```bash
+# From the host, against the postgres container's published port:
+cd service/prefect
+./.venv/Scripts/python.exe -m pytest tests/ -m schema -v
+```
+
+The `spine_db` fixture creates and migrates a fresh throwaway database (`spine_test` by default)
+per test — no manual setup required beyond a reachable Postgres server.
+
+## Rehearsing against real data before touching production
+
+```bash
+script/db_rehearsal.sh create   # clones noktah_dashboard into spine_rehearsal
+script/db_rehearsal.sh drop     # tears it down
+```
+
+Apply migrations, run `roster-sync`/`spine-backfill` (via `SPINE_DB_URL` pointing at the
+rehearsal clone), and verify row counts and headline queries **before** running any of it against
+`noktah_dashboard` directly. Applying schema changes to the live database is a deliberate,
+separate step — never the default path while iterating.
+
+## Naming
+
+Flows: `roster-sync`, `spine-backfill` — kebab-case (constitution I).
+Tasks: `roster.client.upsert`, `roster.alias.upsert`, `roster.account.upsert`, `roster.role.upsert`,
+`roster.account.record-rename`, `roster.alias.reassign`, `spine.signal.link`, `spine.item.link`,
+`spine.knowledge.link`, `social.account.resolve`, `social.account.record-followers`,
+`run.record.start`, `run.record.finish` — `api-group.resource.action`.
+
+---
+
+**Last Updated:** 2026-08-01
+**Feature:** 004-relational-spine

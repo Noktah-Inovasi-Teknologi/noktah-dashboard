@@ -118,6 +118,26 @@ def patched_engine(monkeypatch):
     async def fake_file_delete(file_id, credentials_block_name=None):
         calls["deleted_files"].append(file_id)
 
+    async def fake_account_resolve(platform, handle):
+        calls.setdefault("account_resolve", []).append((platform, handle))
+        # Feature 004: resolved-by-default so existing happy-path tests are
+        # unaffected; tests exercising unregistered/inactive override this.
+        return {"outcome": "resolved", "account_id": "acct-1"}
+
+    async def fake_record_followers(account_id, follower_count, run_id=None):
+        calls.setdefault("record_followers", []).append((account_id, follower_count, run_id))
+        return follower_count is not None
+
+    async def fake_signal_record(**kwargs):
+        calls.setdefault("signal_record", []).append(kwargs)
+
+    async def fake_run_record_start(**kwargs):
+        calls.setdefault("run_record_start", []).append(kwargs)
+        return "run-1"
+
+    async def fake_run_record_finish(**kwargs):
+        calls.setdefault("run_record_finish", []).append(kwargs)
+
     async def fake_dedup_check(platform, content_id, drive_target):
         calls["dedup_check"].append((platform, content_id, drive_target))
         return None  # not previously harvested by default
@@ -151,6 +171,11 @@ def patched_engine(monkeypatch):
     monkeypatch.setattr(engine, "social_dedup_delete", fake_dedup_delete)
     monkeypatch.setattr(engine, "social_item_download", fake_download)
     monkeypatch.setattr(engine, "social_item_analyze", fake_analyze)
+    monkeypatch.setattr(engine, "social_account_resolve", fake_account_resolve)
+    monkeypatch.setattr(engine, "social_account_record_followers", fake_record_followers)
+    monkeypatch.setattr(engine, "social_signal_record", fake_signal_record)
+    monkeypatch.setattr(engine, "run_record_start", fake_run_record_start)
+    monkeypatch.setattr(engine, "run_record_finish", fake_run_record_finish)
 
     async def fake_delay(is_last, *a, **kw):
         return 0.0
@@ -195,6 +220,148 @@ async def test_happy_path_single_profile_delivers_and_appends_row(patched_engine
     assert row[16] == "test"  # harvest_name
     # detail row carries the account folder id as the extra trailing column
     assert patched_engine["detail_rows"][0][-1] == "folder-acct"
+    # account_id is threaded into both writes once the account is resolved
+    assert patched_engine["dedup_record"][0]["account_id"] == "acct-1"
+    assert patched_engine["signal_record"][0]["account_id"] == "acct-1"
+
+
+@pytest.mark.asyncio
+async def test_unregistered_account_skips_profile_without_download(patched_engine, monkeypatch):
+    """FR-016a/FR-016c: an unregistered handle skips every item for that profile,
+    classified separately from an ordinary zero, and never reaches download."""
+    async def fake_list(profile_url, platform, max_items=30, stories_only=False):
+        return {"profile": {"handle": "unregistered-acct"}, "items": [_item("1"), _item("2")]}
+
+    async def fake_resolve_unregistered(platform, handle):
+        return {"outcome": "unregistered", "account_id": None}
+
+    monkeypatch.setattr(engine, "social_profile_list", fake_list)
+    monkeypatch.setattr(engine, "social_account_resolve", fake_resolve_unregistered)
+
+    result = await engine.run_harvest(
+        profiles=["https://www.tiktok.com/@unregistered-acct"],
+        depth_selector=engine.make_recent_n_selector(10),
+    )
+
+    assert result["error"] is None
+    assert result["summary"]["items_skipped_unregistered"] == 2
+    assert result["summary"]["items_skipped_inactive"] == 0
+    assert result["summary"]["items_collected"] == 0
+    assert result["summary"]["profiles_processed"] == 1
+    assert patched_engine["download"] == []  # never reached — no wasted request
+    assert patched_engine["dedup_record"] == []
+
+
+@pytest.mark.asyncio
+async def test_inactive_account_skips_profile_and_is_distinguished_from_unregistered(patched_engine, monkeypatch):
+    """FR-016c/FR-023a: inactive must be reported separately from unregistered
+    — the two call for different operator actions."""
+    async def fake_list(profile_url, platform, max_items=30, stories_only=False):
+        return {"profile": {"handle": "deactivated-acct"}, "items": [_item("1")]}
+
+    async def fake_resolve_inactive(platform, handle):
+        return {"outcome": "inactive", "account_id": "acct-inactive"}
+
+    monkeypatch.setattr(engine, "social_profile_list", fake_list)
+    monkeypatch.setattr(engine, "social_account_resolve", fake_resolve_inactive)
+
+    result = await engine.run_harvest(
+        profiles=["https://www.tiktok.com/@deactivated-acct"],
+        depth_selector=engine.make_recent_n_selector(10),
+    )
+
+    assert result["error"] is None
+    assert result["summary"]["items_skipped_inactive"] == 1
+    assert result["summary"]["items_skipped_unregistered"] == 0
+    assert patched_engine["download"] == []
+
+
+@pytest.mark.asyncio
+async def test_follower_count_recorded_when_platform_returns_one(patched_engine, monkeypatch):
+    """TikTok-shaped listing: public_metadata carries a follower_count -> one
+    observation written, nothing added to follower_capture_missed."""
+    async def fake_list(profile_url, platform, max_items=30, stories_only=False):
+        return {
+            "profile": {"handle": "acct", "public_metadata": {"follower_count": 12345}},
+            "items": [_item("1")],
+        }
+
+    monkeypatch.setattr(engine, "social_profile_list", fake_list)
+
+    result = await engine.run_harvest(
+        profiles=["https://www.tiktok.com/@acct"],
+        depth_selector=engine.make_recent_n_selector(10),
+    )
+
+    assert result["error"] is None
+    assert result["summary"]["follower_capture_missed"] == []
+    assert patched_engine["record_followers"] == [("acct-1", 12345, "run-1")]
+
+
+@pytest.mark.asyncio
+async def test_follower_count_missing_is_reported_not_treated_as_error(patched_engine, monkeypatch):
+    """Instagram-shaped listing: no public_metadata -> no observation written,
+    and the miss is classified 'not_returned' — the expected state (research
+    R3), not a bug."""
+    async def fake_list(profile_url, platform, max_items=30, stories_only=False):
+        return {"profile": {"handle": "acct"}, "items": [_item("1")]}  # no public_metadata
+
+    monkeypatch.setattr(engine, "social_profile_list", fake_list)
+
+    result = await engine.run_harvest(
+        profiles=["https://www.instagram.com/acct"],
+        depth_selector=engine.make_recent_n_selector(10),
+    )
+
+    assert result["error"] is None
+    assert result["summary"]["follower_capture_missed"] == [
+        {"platform": "instagram", "handle": "acct", "reason": "not_returned"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_follower_capture_failure_never_aborts_harvest(patched_engine, monkeypatch):
+    async def fake_list(profile_url, platform, max_items=30, stories_only=False):
+        return {"profile": {"handle": "acct", "public_metadata": {"follower_count": 1}}, "items": [_item("1")]}
+
+    async def failing_record_followers(**kwargs):
+        raise RuntimeError("db unreachable")
+
+    monkeypatch.setattr(engine, "social_profile_list", fake_list)
+    monkeypatch.setattr(engine, "social_account_record_followers", failing_record_followers)
+
+    result = await engine.run_harvest(
+        profiles=["https://www.tiktok.com/@acct"],
+        depth_selector=engine.make_recent_n_selector(10),
+    )
+
+    assert result["error"] is None
+    assert result["summary"]["items_collected"] == 1
+    assert result["summary"]["follower_capture_missed"] == [
+        {"platform": "tiktok", "handle": "acct", "reason": "error"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_record_failure_never_aborts_harvest(patched_engine, monkeypatch):
+    """T049: a run-record failure is best-effort — the harvest must still
+    complete successfully with no error."""
+    async def fake_list(profile_url, platform, max_items=30, stories_only=False):
+        return {"profile": {"handle": "acct"}, "items": [_item("1")]}
+
+    async def failing_run_record_start(**kwargs):
+        raise RuntimeError("db unreachable")
+
+    monkeypatch.setattr(engine, "social_profile_list", fake_list)
+    monkeypatch.setattr(engine, "run_record_start", failing_run_record_start)
+
+    result = await engine.run_harvest(
+        profiles=["https://www.tiktok.com/@acct"],
+        depth_selector=engine.make_recent_n_selector(10),
+    )
+
+    assert result["error"] is None
+    assert result["summary"]["items_collected"] == 1
 
 
 @pytest.mark.asyncio

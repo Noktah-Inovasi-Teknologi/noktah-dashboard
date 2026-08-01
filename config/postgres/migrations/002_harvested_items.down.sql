@@ -1,0 +1,9 @@
+-- Migration: 002_harvested_items (down)
+-- Intentionally empty.
+-- 002 is a BASELINE: it reproduces a table that already existed in the running
+-- database (691+ rows at the time of writing). It introduces nothing on an
+-- existing database, so its correct reversal is to do nothing. DROP TABLE here
+-- would destroy data that predates the migration — forbidden by FR-027.
+--
+-- See specs/004-relational-spine/contracts/migrations.md ("Baselines are a
+-- deliberate exception").

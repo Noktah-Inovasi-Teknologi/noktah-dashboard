@@ -45,6 +45,7 @@ try:
         sheets_create,
         sheets_rows_append,
     )
+    from ...tasks.run_tasks import run_record_finish, run_record_start
     from ...hashmap import CLIENT_SOCIAL
 except ImportError:
     import sys
@@ -75,6 +76,7 @@ except ImportError:
         sheets_create,
         sheets_rows_append,
     )
+    from tasks.run_tasks import run_record_finish, run_record_start
     from hashmap import CLIENT_SOCIAL
 
 logger = logging.getLogger(__name__)
@@ -720,6 +722,18 @@ async def run_generation(
     error: Optional[str] = None
     end_time = start_time
 
+    # Relational Spine (feature 004): a durable run identifier, best-effort —
+    # a run-record failure must never abort a generation that would otherwise
+    # succeed (constitution V). client_id is left null: resolving `client`
+    # (a free-text name) to a clients.id would need an alias lookup this
+    # engine does not otherwise perform; briefs (which do carry client_id)
+    # are not populated until S-06.
+    run_record_id: Optional[str] = None
+    try:
+        run_record_id = await run_record_start(kind="generation", flow_name="songbird")
+    except Exception as e:
+        run_logger.warning(f"run-record start failed (non-fatal): {e}")
+
     try:
         # 1. Resolve how much to make (fail fast per FR-003b when unconfigured).
         #    An explicit `quantity` overrides the mix; otherwise the per-type
@@ -933,6 +947,12 @@ async def run_generation(
         error = str(e)
     finally:
         end_time = datetime.now(timezone.utc)
+
+    if run_record_id:
+        try:
+            await run_record_finish(run_id=run_record_id, status="failed" if error else "completed", summary=summary)
+        except Exception as e:
+            run_logger.warning(f"run-record finish failed (non-fatal): {e}")
 
     return {
         "start_time": start_time.isoformat(),

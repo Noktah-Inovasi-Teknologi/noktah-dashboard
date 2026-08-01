@@ -38,7 +38,7 @@ docker-compose logs -f prefect
 # time that mount is added (`docker-compose up -d prefect`).
 docker exec prefect prefect deploy --all
 # Or a subset by name pattern:
-docker exec prefect prefect --no-prompt deploy -n "harvest-3mo-*"
+docker exec prefect prefect --no-prompt deploy -n "harvest-monthly-*"
 
 # List deployments / trigger an ad-hoc run of a deployment
 docker exec prefect prefect deployment ls
@@ -48,19 +48,24 @@ docker exec prefect prefect deployment run 'social-harvest-recent/social-harvest
 # Stories-only harvest (ephemeral ~24h; run frequently, unscheduled for now)
 docker exec prefect python flows/social_harvest_stories.py --profiles "https://www.instagram.com/lasikasyik/"
 
-# Per-client 3-month harvest: harvest-3mo-<client> deployments (one per client in
+# Per-client monthly harvest: harvest-monthly-<client> deployments (one per client in
 # the Clients sheet), monthly cron on the 1st, staggered 30 min apart from 17:30 WIB
-# (slots 14-18 spill onto the 2nd, 00:00-02:00). Window = days: 90.
-docker exec prefect prefect deployment run 'social-harvest-window/harvest-3mo-ecky-dental-center'
+# (slots 14-18 spill onto the 2nd, 00:00-02:00). Window = days: 31 — a run collects the
+# month it just covered. Dedup means the corpus still accumulates month over month, so
+# the window only bounds a single run's reach; a NEW account back-fills one month, not a
+# quarter, so run `social-harvest-window --days 90` once by hand when onboarding one.
+# These deployments pass NO harvest_name — the flow falls back to Prefect's
+# auto-generated flow-run name, so a delivered sheet row traces to the run that made it.
+docker exec prefect prefect deployment run 'social-harvest-window/harvest-monthly-ecky-dental-center'
 
-# Per-competitor 3-month harvest: harvest-3mo-comp-<handle>, one per handle in the
-# CLIENT_SOCIAL block of the Hashmaps sheet. Same shape as the client blocks (days: 90,
+# Per-competitor monthly harvest: harvest-monthly-comp-<handle>, one per handle in the
+# CLIENT_SOCIAL block of the Hashmaps sheet. Same shape as the client blocks (days: 31,
 # monthly) so both sides are measured identically — songbird's ranking is a
 # within-account comparison, which only means anything on symmetric sampling.
 # Runs 02:30-05:00 WIB on the 2nd, clear of the 03:00 social-harvest-sync cron.
 # Adding a competitor row to the sheet does NOT create a deployment — add a block
 # to prefect.yaml too, then redeploy.
-docker exec prefect prefect deployment run 'social-harvest-window/harvest-3mo-comp-kmneyecare'
+docker exec prefect prefect deployment run 'social-harvest-window/harvest-monthly-comp-kmneyecare'
 
 # Sheet→DB sync: reconcile harvested_signals + detail sheets from the canonical
 # Account Social Harvest sheets (reviewer-edited `advertisement` flag). Scheduled daily.
@@ -74,6 +79,36 @@ profile URLs at run time (via the Prefect UI "Run" form or the `--param` above).
 `social-harvest-stories` collects only currently-active Stories (Instagram + TikTok)
 via roach's `stories_only` listing — it's unscheduled; run it often to catch stories
 before they expire.
+
+### Relational Spine (clients, accounts, roles, runs)
+```bash
+# Roster sync: reconcile clients/accounts/roles from the Clients + Hashmaps
+# worksheets into the datastore. Daily cron (03:30 WIB), also triggerable on
+# demand. Nothing gates a harvest on this having run (FR-022a) — an
+# unregistered handle is simply skipped and reported until the next sync.
+docker exec prefect python flows/roster_sync.py
+docker exec prefect python flows/roster_sync.py --validate-only   # preview only, writes nothing
+
+# Spine backfill: one-time link of existing harvested_signals /
+# harvested_items / knowledge_records rows to accounts/clients. Run once,
+# after roster-sync has populated the roster. Safe to re-run.
+docker exec prefect python flows/spine_backfill.py
+docker exec prefect python flows/spine_backfill.py --validate-only
+
+# Ownership answerable in SQL, no spreadsheet — see
+# specs/004-relational-spine/quickstart.md for the full query and expected shape:
+docker exec postgres psql -U noktah -d noktah_dashboard -c "
+  SELECT c.display_name, r.role, ah.handle_text, s.platform, count(*) AS posts
+  FROM harvested_signals s
+  JOIN accounts a ON a.id = s.account_id
+  JOIN account_handles ah ON ah.account_id = a.id AND ah.is_current
+  LEFT JOIN client_account_roles r ON r.account_id = a.id AND r.is_active
+  LEFT JOIN clients c ON c.id = r.client_id
+  GROUP BY 1,2,3,4 ORDER BY 1,2;"
+```
+See `.claude/rules/backend/schema.md` for the migration workflow and
+`docs/roster-maintenance.md` for the two maintainer actions this introduces
+(recording a handle rename, correcting a client name mapping).
 
 ### Songbird Content Generation
 ```bash

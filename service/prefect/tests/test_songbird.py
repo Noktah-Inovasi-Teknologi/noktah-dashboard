@@ -162,6 +162,13 @@ def patched_engine(monkeypatch):
     async def fake_read(spreadsheet_id, sheet_name, credentials_block_name="google-creds", **kw):
         return {"dataframe_info": {"columns": calls["read_header"]}}
 
+    async def fake_run_record_start(**kwargs):
+        calls.setdefault("run_record_start", []).append(kwargs)
+        return "run-1"
+
+    async def fake_run_record_finish(**kwargs):
+        calls.setdefault("run_record_finish", []).append(kwargs)
+
     import logging as _logging
     monkeypatch.setattr(engine, "get_run_logger", lambda: _logging.getLogger("test"))
     monkeypatch.setattr(engine, "songbird_client_context", fake_context)
@@ -175,6 +182,8 @@ def patched_engine(monkeypatch):
     monkeypatch.setattr(engine, "sheets_create", fake_create)
     monkeypatch.setattr(engine, "sheets_rows_append", fake_append)
     monkeypatch.setattr(engine, "google_read_sheet_data", fake_read)
+    monkeypatch.setattr(engine, "run_record_start", fake_run_record_start)
+    monkeypatch.setattr(engine, "run_record_finish", fake_run_record_finish)
     monkeypatch.setattr(engine, "CLIENT_SOCIAL", {"Acme": {"own": ["acme"], "competitors": ["rival"]}})
     return calls
 

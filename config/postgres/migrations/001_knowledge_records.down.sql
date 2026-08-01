@@ -1,0 +1,11 @@
+-- Migration: 001_knowledge_records (down)
+-- Intentionally empty.
+--
+-- 001 is a BASELINE: it reproduces the knowledge_records table that already
+-- existed in the running database when this migration file was written (62
+-- current rows / more historical). It introduces nothing on an existing
+-- database, so its correct reversal is to do nothing. DROP TABLE here would
+-- destroy data that predates the migration — forbidden by FR-027.
+--
+-- See specs/004-relational-spine/contracts/migrations.md ("Baselines are a
+-- deliberate exception").

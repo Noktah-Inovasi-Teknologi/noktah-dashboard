@@ -20,14 +20,16 @@ from prefect import task
 
 try:
     from ..blocks.google_credentials import GoogleCredentials
-    from ..hashmap import profile_handle
+    from ..db import db_pool
+    from ..hashmap import client_name_tokens, is_token_subset_match, normalize_client_key, profile_handle
     from .songbird_ranking import RECENCY_HALF_LIFE_DAYS, rank_performers
 except ImportError:
     # For running as standalone script
     import sys
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from blocks.google_credentials import GoogleCredentials
-    from hashmap import profile_handle
+    from db import db_pool
+    from hashmap import client_name_tokens, is_token_subset_match, normalize_client_key, profile_handle
     from tasks.songbird_ranking import RECENCY_HALF_LIFE_DAYS, rank_performers
 
 logger = logging.getLogger(__name__)
@@ -66,45 +68,18 @@ CONTENT_PLAN_FOLDER_COLUMN = os.environ.get(
 )
 
 
-def _normalize_key(name: str) -> str:
-    """Best-effort client_key candidate: lowercased, collapsed whitespace."""
-    return re.sub(r"\s+", " ", name.strip().lower())
-
-
-def _name_tokens(name: str) -> set:
-    """Word tokens of a client name, for identity comparison."""
-    return {t for t in re.split(r"[^\w]+", _normalize_key(name)) if t}
-
-
-def _is_same_client(requested: str, candidate: str) -> bool:
-    """
-    Decide whether a knowledge-base client is the client we asked for.
-
-    Trigram similarity alone is unsafe for this roster: nearly every client is named
-    "Klinik Mata …" or "Klinik Utama …", so the shared prefix dominates the score.
-    Measured, "klinik mata smec bitung" scored 0.467 against BOTH "klinik mata bireuen"
-    and "klinik mata sampang" — a tie decided arbitrarily, which grounded a Bitung plan
-    in Bireuen's knowledge base.
-
-    The reliable signal is tokens, not characters: one name must be a token-subset of
-    the other, i.e. the KB uses a shorter or longer form of the same name.
-
-        "lasik asyik" ⊆ "lasik asyik by smec tebet"   -> same client
-        "klinik utama gasa" == "klinik utama GASA"     -> same client
-        "klinik mata bireuen" vs "klinik mata smec bitung"
-            -> neither is a subset ('bireuen'/'bitung' are distinctive) -> different
-    """
-    a, b = _name_tokens(requested), _name_tokens(candidate)
-    if not a or not b:
-        return False
-    return a <= b or b <= a
+# Client-name identity lives in hashmap.py so this module and roster
+# reconciliation cannot drift apart — see `is_token_subset_match` there for why
+# the rule is a candidate *proposer* rather than a decider.
+_normalize_key = normalize_client_key
+_name_tokens = client_name_tokens
+_is_same_client = is_token_subset_match
 
 
 async def _db_pool() -> asyncpg.Pool:
     # Reuse the harvest DSN by default (same Postgres database); a dedicated
     # SONGBIRD_DB_URL may override it.
-    dsn = os.environ.get("SONGBIRD_DB_URL") or os.environ["HARVEST_DB_URL"]
-    return await asyncpg.create_pool(dsn, min_size=1, max_size=5)
+    return await db_pool("SONGBIRD_DB_URL")
 
 
 @task(name="songbird.client.context", retries=2, retry_delay_seconds=30)

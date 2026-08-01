@@ -61,13 +61,24 @@ tasks):
    client has competitor rows; those clients fall back to KB + marketing params (FR-011).
 
    **A CLIENT_SOCIAL row is configuration, not collection.** Naming a competitor handle does not
-   harvest it — `harvested_signals` only holds what a `harvest-3mo-*` deployment actually collected.
-   For a while all four configured competitor handles had zero rows, so every "own vs competitor"
-   comparison silently ran on one side of the data. Each competitor now has a
-   `harvest-3mo-comp-<handle>` deployment in `prefect.yaml` with the *same* `days: 90` monthly shape
-   as the client blocks — the ranking is a within-account comparison, which only means something when
-   both sides are sampled identically. **Adding a row to the sheet still requires adding a deployment
+   harvest it — `harvested_signals` only holds what a `harvest-monthly-*` deployment actually
+   collected. For a while all four configured competitor handles had zero rows, so every "own vs
+   competitor" comparison silently ran on one side of the data. Each competitor now has a
+   `harvest-monthly-comp-<handle>` deployment in `prefect.yaml` with the *same* `days: 31` monthly
+   shape as the client blocks — the ranking is a within-account comparison, which only means
+   something when both sides are sampled identically, so **if you change one side's window, change
+   the other in the same commit**. **Adding a row to the sheet still requires adding a deployment
    block**; after editing, `docker exec prefect prefect deploy --all`.
+
+   **Since feature 004-relational-spine, this is queryable without the sheet.**
+   `roster-sync` mirrors `CLIENT_SOCIAL` (and the Clients worksheet's own-handle columns) into
+   `client_account_roles`, so "which accounts are competitors of which client" is now a SQL join
+   (`client_account_roles.role = 'competitor'`), not something that only exists inside a running
+   songbird call. `hashmap.py::CLIENT_SOCIAL` remains the **write path** the sheet is reconciled
+   from — songbird's own retrieval (`songbird_top_performers`, `_resolve_handles`) still reads the
+   sheet-backed hashmap directly and has not been switched onto the new tables; that migration is
+   a later change, not part of 004. See `.claude/rules/backend/schema.md` and
+   `specs/004-relational-spine/quickstart.md` step 7 for the query.
 3. **Marketing params** — platform, audience, goal, tone, content pillars, quantity.
 
 `harvested_signals` is populated **best-effort** by the social-harvest engine (`social.signal.record`)

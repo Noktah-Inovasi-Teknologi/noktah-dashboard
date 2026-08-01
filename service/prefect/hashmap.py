@@ -38,6 +38,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 import time
 from collections.abc import Mapping
@@ -142,6 +143,54 @@ def profile_handle(value: str) -> str:
         segments = [seg for seg in path.split("/") if seg]
         raw = segments[-1] if segments else ""
     return raw.lstrip("@").strip().lower()
+
+
+def normalize_client_key(name: str) -> str:
+    """Lowercased, whitespace-collapsed client name — the lookup key form.
+
+    Lives here beside `profile_handle` because both answer the same question for
+    different columns of the same sheets: what is the canonical form of this
+    identifier? Shared so client_aliases keys and songbird's knowledge lookup
+    can never normalize differently.
+    """
+    return re.sub(r"\s+", " ", (name or "").strip().lower())
+
+
+def client_name_tokens(name: str) -> set:
+    """Word tokens of a client name, for identity comparison."""
+    return {t for t in re.split(r"[^\w]+", normalize_client_key(name)) if t}
+
+
+def is_token_subset_match(a: str, b: str) -> bool:
+    """
+    Whether two client names denote the same client, by token containment.
+
+    Trigram similarity alone is unsafe for this roster: nearly every client is named
+    "Klinik Mata …" or "Klinik Utama …", so the shared prefix dominates the score.
+    Measured, "klinik mata smec bitung" scored 0.467 against BOTH "klinik mata bireuen"
+    and "klinik mata sampang" — a tie decided arbitrarily, which grounded a Bitung plan
+    in Bireuen's knowledge base.
+
+    The reliable signal is tokens, not characters: one name must be a token-subset of
+    the other, i.e. one source uses a shorter or longer form of the same name.
+
+        "lasik asyik" ⊆ "lasik asyik by smec tebet"   -> same client
+        "klinik utama gasa" == "klinik utama GASA"     -> same client
+        "klinik mata bireuen" vs "klinik mata smec bitung"
+            -> neither is a subset ('bireuen'/'bitung' are distinctive) -> different
+
+    **This rule is ambiguous by construction** — a short name can be a subset of
+    two different longer ones (measured: "Nirwana Coffee Space" matches both
+    Nirwana outlets). It is therefore a *candidate proposer*, never a decider:
+    songbird uses it to filter trigram candidates, and roster reconciliation uses
+    it once to seed `client_aliases`, after which the stored alias decides.
+    Feature 004-relational-spine exists because this rule was previously the only
+    answer. Keep it in ONE place so the two callers cannot drift apart.
+    """
+    ta, tb = client_name_tokens(a), client_name_tokens(b)
+    if not ta or not tb:
+        return False
+    return ta <= tb or tb <= ta
 
 
 def _parse_pair_block(rows: List[List[Any]], key_col: str, value_col: str, block: str) -> Dict[str, str]:

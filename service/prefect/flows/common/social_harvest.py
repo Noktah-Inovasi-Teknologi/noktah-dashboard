@@ -21,6 +21,8 @@ try:
     from ...tasks.social_tasks import (
         RoachNotFoundError,
         RoachRateLimitedError,
+        social_account_record_followers,
+        social_account_resolve,
         social_dedup_check,
         social_dedup_delete,
         social_dedup_record,
@@ -29,6 +31,7 @@ try:
         social_profile_list,
         social_signal_record,
     )
+    from ...tasks.run_tasks import run_record_finish, run_record_start
     from ...tasks.google_tasks import (
         drive_file_delete,
         drive_file_upload,
@@ -48,6 +51,8 @@ except ImportError:
     from tasks.social_tasks import (
         RoachNotFoundError,
         RoachRateLimitedError,
+        social_account_record_followers,
+        social_account_resolve,
         social_dedup_check,
         social_dedup_delete,
         social_dedup_record,
@@ -56,6 +61,7 @@ except ImportError:
         social_profile_list,
         social_signal_record,
     )
+    from tasks.run_tasks import run_record_finish, run_record_start
     from tasks.google_tasks import (
         drive_file_delete,
         drive_file_upload,
@@ -343,6 +349,16 @@ async def run_harvest(
         "items_retried_failed": 0,
         "items_failed": 0,
         "profiles_blocked": 0,
+        # Relational Spine (feature 004): classified per contracts/account-resolution.md.
+        # Kept distinct from each other and from an ordinary "nothing new" zero —
+        # nothing gates a harvest on roster-sync (FR-022a), so this pair is the
+        # only place a stale/missing registration surfaces (FR-016c, FR-023a).
+        "items_skipped_unregistered": 0,
+        "items_skipped_inactive": 0,
+        # Follower capture (FR-013): the Principle VII deviation's mitigation —
+        # a miss is recorded HERE, not as a placeholder observation row, since
+        # nothing gates the run on whether a count came back (FR-013b).
+        "follower_capture_missed": [],
         "account_folder_ids": {},
         "detail_sheet_id": None,
     }
@@ -355,6 +371,16 @@ async def run_harvest(
     if len(profiles) > MAX_PROFILES:
         run_logger.warning(f"Run specified {len(profiles)} profiles, truncating to {MAX_PROFILES} (FR-002)")
         profiles = profiles[:MAX_PROFILES]
+
+    # Relational Spine (feature 004): a durable run identifier, best-effort —
+    # a run-record failure must never abort a harvest that would otherwise
+    # succeed (constitution V). client_id is left null: one run can span
+    # several profiles belonging to different (or no) clients.
+    run_record_id: Optional[str] = None
+    try:
+        run_record_id = await run_record_start(kind="collection", flow_name="social-harvest")
+    except Exception as e:
+        run_logger.warning(f"run-record start failed (non-fatal): {e}")
 
     try:
         # Per-run detail sheet (new file per run) under the "Social Harvest Detail" folder.
@@ -388,6 +414,47 @@ async def run_harvest(
             all_items = listing.get("items", [])
             items = depth_selector(all_items)
             run_logger.info(f"{username}: {len(all_items)} items available, {len(items)} selected for this run")
+
+            # Relational Spine (feature 004): resolve the account ONCE per profile
+            # (the outcome is the same for every item in it) before any per-item
+            # download/analyze work, so an unregistered or deactivated handle
+            # never spends a download on content that will be discarded anyway.
+            # The write path never creates an account (FR-016b) — it only skips,
+            # classified, and continues to the next profile (FR-016a/c).
+            resolution = await social_account_resolve(platform, username)
+            if resolution["outcome"] != "resolved":
+                skip_key = "items_skipped_unregistered" if resolution["outcome"] == "unregistered" else "items_skipped_inactive"
+                summary[skip_key] += len(items)
+                run_logger.warning(
+                    f"{username}: account {resolution['outcome']} on {platform} — skipping "
+                    f"{len(items)} item(s) ("
+                    + ("add the handle to the Clients/Hashmaps sheet and run roster-sync"
+                       if resolution["outcome"] == "unregistered"
+                       else "remove the corresponding harvest-monthly-* deployment")
+                    + ")"
+                )
+                summary["profiles_processed"] += 1
+                continue
+            account_id = resolution["account_id"]
+
+            # Follower capture (FR-013a/b): best-effort, never able to fail the
+            # run. `public_metadata` is per-profile (not per-item), so this is
+            # one call per profile. TikTok returns a count today; Instagram
+            # does not (research R3) — that is the expected, correct state,
+            # not a bug, and is why a miss is recorded rather than treated as
+            # an error.
+            try:
+                follower_count = (profile_meta.get("public_metadata") or {}).get("follower_count")
+                wrote = await social_account_record_followers(account_id=account_id, follower_count=follower_count, run_id=run_record_id)
+                if not wrote:
+                    summary["follower_capture_missed"].append(
+                        {"platform": platform, "handle": username, "reason": "not_returned"}
+                    )
+            except Exception as e:
+                run_logger.warning(f"{username}: follower capture failed (non-fatal): {e}")
+                summary["follower_capture_missed"].append(
+                    {"platform": platform, "handle": username, "reason": "error"}
+                )
 
             # Folder hierarchy: {Platform}/{username}
             platform_folder_id = await drive_folder_ensure(_platform_display(platform), parent_id, credentials_block_name=credentials_block_name)
@@ -519,6 +586,8 @@ async def run_harvest(
                     content_type=content_type,
                     drive_file_id=",".join(drive_file_ids) or None,
                     analysis_status=analysis.get("status", "pending"),
+                    account_id=account_id,
+                    run_id=run_record_id,
                 )
 
                 # Mirror engagement + analysis into the songbird "what hits"
@@ -540,6 +609,8 @@ async def run_harvest(
                         subtitle=_cell(analysis.get("subtitle", "")),
                         content_flow=_cell(analysis.get("flow", "")),
                         summary=_cell(analysis.get("summary", "")),
+                        account_id=account_id,
+                        run_id=run_record_id,
                     )
                 except Exception as e:
                     run_logger.warning(f"{username}/{content_id}: signal-store write failed (non-fatal): {e}")
@@ -571,6 +642,12 @@ async def run_harvest(
 
     run_id = f"{harvest_name}-{start_time.strftime('%Y%m%dT%H%M%S')}"
     await _send_completion_notification(run_id, summary, error)
+
+    if run_record_id:
+        try:
+            await run_record_finish(run_id=run_record_id, status="failed" if error else "completed", summary=summary)
+        except Exception as e:
+            run_logger.warning(f"run-record finish failed (non-fatal): {e}")
 
     return {
         "start_time": start_time.isoformat(),

@@ -2,6 +2,10 @@
 -- Feature: 001-client-knowledge-base
 -- Idempotent — safe to run against an existing database that predates this feature.
 -- Run with: docker exec -i postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" < 001_knowledge_records.sql
+--
+-- Records itself in schema_migrations (added by 000, feature 004-relational-spine)
+-- when that tracking table exists, so 001 stays safely runnable standalone on a
+-- database that predates 000 too — the record is just skipped, not required.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
@@ -45,3 +49,11 @@ CREATE INDEX IF NOT EXISTS ix_subject_trgm
     ON knowledge_records USING gin (subject gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS ix_information_trgm
     ON knowledge_records USING gin (information gin_trgm_ops);
+
+DO $$
+BEGIN
+    IF to_regclass('public.schema_migrations') IS NOT NULL THEN
+        INSERT INTO schema_migrations (version) VALUES ('001_knowledge_records')
+        ON CONFLICT (version) DO NOTHING;
+    END IF;
+END $$;

@@ -651,6 +651,77 @@ def _instagram_profile_info(handle: str, fingerprint: dict) -> dict:
     }
 
 
+# Instagram's persisted GraphQL query for a profile, and the Relay feature-flag
+# variables it REQUIRES. Omitting any of the `__relay_internal__pv__*` flags makes
+# the server reject the call with a generic HTTP 200 + {"errors": [... "execution
+# error" ...], "data": null} — which looks exactly like a rotated/dead doc_id or a
+# throttle, and cost two wasted probes before the cause was found. The doc_id has
+# NOT rotated; the variable set is what changed. Keep this list in sync with
+# instaloader's Profile._obtain_metadata if it fails again.
+IG_PROFILE_DOC_ID = "27937681195819736"
+IG_PROFILE_RELAY_FLAGS = {
+    "__relay_internal__pv__PolarisCannesGuardianExperienceEnabledrelayprovider": True,
+    "__relay_internal__pv__PolarisCASB976ProfileEnabledrelayprovider": False,
+    "__relay_internal__pv__PolarisRepostsConsumptionEnabledrelayprovider": False,
+    "__relay_internal__pv__PolarisWebSchoolsEnabledrelayprovider": False,
+    "enable_integrity_filters": True,
+}
+
+
+def _instagram_profile_info_graphql(user_id: str, handle: str, fingerprint: dict) -> dict:
+    """Follower stats via Instagram's authenticated GraphQL profile query.
+
+    Fallback for `_instagram_profile_info` when `web_profile_info` returns no
+    follower count — that endpoint has been intermittently 400ing per-account
+    since 2026-07-31 (a Meta serializer regression), and this route was measured
+    working on 2026-08-01 while it was still failing.
+
+    Needs a `user_id`, which the caller already has from the listing entries
+    (`_owner_id_from_entries`), so this costs no extra lookup.
+
+    Returns {follower_count, following_count, post_count} or {} on any failure.
+    """
+    if not user_id:
+        return {}
+    session = _instagram_api_session(handle, fingerprint)
+    if session is None:
+        return {}
+    creq, cookies, headers, browser = session
+    # The GraphQL endpoint rejects X-Requested-With and wants a plain Accept —
+    # both differ from the REST/web_profile_info headers built above.
+    gql_headers = {k: v for k, v in headers.items() if k != "X-Requested-With"}
+    gql_headers["Accept"] = "*/*"
+    gql_headers["Content-Type"] = "application/x-www-form-urlencoded"
+    try:
+        r = creq.post(
+            "https://www.instagram.com/graphql/query",
+            data={
+                "doc_id": IG_PROFILE_DOC_ID,
+                "variables": json.dumps({"id": str(user_id), "render_surface": "PROFILE", **IG_PROFILE_RELAY_FLAGS}),
+                "server_timestamps": "true",
+            },
+            headers=gql_headers, cookies=cookies, impersonate=browser, timeout=30,
+        )
+        if r.status_code != 200:
+            print(f"[instagram] {handle}: graphql profile stats HTTP {r.status_code}: {r.text[:160]}", flush=True)
+            return {}
+        body = r.json()
+        user = ((body.get("data") or {}).get("user")) or {}
+        if not user:
+            errors = body.get("errors")
+            print(f"[instagram] {handle}: graphql profile stats returned no user ({str(errors)[:200]})", flush=True)
+            return {}
+    except Exception as e:
+        print(f"[instagram] {handle}: graphql profile stats failed: {e}", flush=True)
+        return {}
+    # This query returns flat counts, unlike web_profile_info's edge_* wrappers.
+    return {
+        "follower_count": user.get("follower_count"),
+        "following_count": user.get("following_count"),
+        "post_count": user.get("media_count"),
+    }
+
+
 def _instagram_clip_stats(user_id: str | None, handle: str, fingerprint: dict, max_items: int) -> dict:
     """Best-effort per-account Reel stats from IG's clips endpoint.
 
@@ -896,6 +967,23 @@ def _list_instagram(profile_url: str, max_items: int, fingerprint: dict | None =
     # Account-level public metadata (follower count + friends). Best-effort — an
     # empty result leaves public_metadata as it was, and never breaks the listing.
     profile_info = _instagram_profile_info(profile_meta.get("handle") or handle, fingerprint)
+
+    # The user id comes from the listing entries when available, so it survives a
+    # web_profile_info failure (that endpoint is the only other source for it).
+    owner_id = _owner_id_from_entries(entries) or profile_info.get("user_id")
+
+    # web_profile_info has been intermittently 400ing per-account since 2026-07-31.
+    # When it yields no follower count but we still have a user id, fall back to
+    # the GraphQL profile query, which was measured working while the REST one
+    # was not. Only runs on the failure path, so the normal case still costs one
+    # request. Still best-effort: both failing leaves public_metadata absent,
+    # which is recorded as absence (never as zero) downstream.
+    if not profile_info.get("follower_count") and owner_id:
+        fallback = _instagram_profile_info_graphql(str(owner_id), handle, fingerprint)
+        if fallback.get("follower_count") is not None:
+            print(f"[instagram] {handle}: follower stats via graphql fallback", flush=True)
+            profile_info = {**profile_info, **fallback}
+
     if profile_info:
         profile_meta["public_metadata"] = {
             "follower_count": profile_info.get("follower_count"),
@@ -908,7 +996,6 @@ def _list_instagram(profile_url: str, max_items: int, fingerprint: dict | None =
     # shows but the feed/gallery-dl listing omits — from the same endpoint the grid
     # uses. Best-effort, one paged request per account; failures leave counts as-is.
     # The user id resolved above is reused so the two passes cost one lookup.
-    owner_id = _owner_id_from_entries(entries) or profile_info.get("user_id")
     clip_stats = _instagram_clip_stats(owner_id, handle, fingerprint, max_items)
     if clip_stats:
         matched = 0

@@ -64,6 +64,22 @@ deployments:
       - prefect.deployments.steps.set_working_directory:
           directory: /app
 
+  # Roster sync (feature 004-relational-spine) — reconciles clients/accounts/roles
+  # from the Clients + Hashmaps worksheets into the datastore. Daily, clear of the
+  # 03:00 social-harvest-sync slot. Nothing gates collection/generation on this
+  # (FR-022a) — it is also triggerable on demand for an immediate sheet edit.
+  - name: roster-sync
+    entrypoint: flows/roster_sync.py:roster_sync_flow
+    work_pool:
+      name: noktah-pool
+    schedules:
+      - cron: "30 3 * * *"
+        timezone: "Asia/Jakarta"
+    parameters: {}
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
   # Social harvest — Stories only (ephemeral, ~24h). NO schedule for now — trigger
   # manually or add a frequent schedule later. Uses roach's fast Stories listing.
   - name: social-harvest-stories
@@ -128,7 +144,7 @@ deployments:
           directory: /app
 
   # ---------------------------------------------------------------------------
-  # Per-client 3-month harvest (harvest-3mo-*)
+  # Per-client monthly harvest (harvest-monthly-*)
   #
   # Source of truth for the client list + handles: the "Clients" sheet
   # https://docs.google.com/spreadsheets/d/1-aV46TIn4m_zs3vtCNeS_Bvl3Tt-tgg09uuG_NqgNNY
@@ -139,251 +155,241 @@ deployments:
   # Slots 1-13 land on the 1st (17:30-23:30), slots 14-18 spill to the 2nd
   # (00:00-02:00) — hence the `2` day-of-month on the last five crons.
   #
-  # Window: days: 90 (~3 months back, relative to each run). Already-harvested
-  # items are skipped by dedup (FR-021), so repeat months only pay for new posts.
+  # Window: days: 31 — a monthly run collects the month it just covered. Dedup
+  # (FR-021) skips already-harvested items, so the corpus still accumulates month
+  # over month; the window only bounds how far back a single run reaches. A NEW
+  # account therefore back-fills one month, not a quarter — run
+  # `social-harvest-window --days 90` once by hand when onboarding one.
+  #
+  # No `harvest_name` parameter: _resolve_harvest_name (flows/common/social_harvest.py)
+  # falls back to Prefect's auto-generated flow-RUN name, which is unique per run and
+  # traces a delivered sheet row back to the run that produced it. The client name
+  # was redundant — the sheet is already per-account — and identical across runs.
   #
   # Clients #18 Breko and #19 The StarFit are omitted — the sheet lists no
   # Instagram/TikTok handle for either. Add a block here once they have one.
   # ---------------------------------------------------------------------------
 
-  - name: harvest-3mo-ecky-dental-center
+  - name: harvest-monthly-ecky-dental-center
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "30 17 1 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/eckydentalcenter/"]
-      days: 90
-      harvest_name: "Ecky Dental Center"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-nirwana-coffee-sumenep
+  - name: harvest-monthly-nirwana-coffee-sumenep
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "0 18 1 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/nirwanacoffee_smnp/"]
-      days: 90
-      harvest_name: "Nirwana Coffee Shop Sumenep"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-nirwana-coffee-pamekasan
+  - name: harvest-monthly-nirwana-coffee-pamekasan
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "30 18 1 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/nirwanacoffee_pmks/"]
-      days: 90
-      harvest_name: "Nirwana Coffee Space Pamekasan"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-klinik-utama-gresik
+  - name: harvest-monthly-klinik-utama-gresik
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "0 19 1 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/klinikutamagresik/"]
-      days: 90
-      harvest_name: "Klinik Utama Gresik"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-klinik-mata-boyolali
+  - name: harvest-monthly-klinik-mata-boyolali
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "30 19 1 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/klinikmataboyolali/"]
-      days: 90
-      harvest_name: "Klinik Mata Boyolali"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-lasik-asyik-tebet
+  - name: harvest-monthly-lasik-asyik-tebet
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "0 20 1 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/lasikasyik/"]
-      days: 90
-      harvest_name: "LASIK Asyik by SMEC Tebet"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-klinik-utama-sumenep
+  - name: harvest-monthly-klinik-utama-sumenep
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "30 20 1 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/klinikutama.sumenep/"]
-      days: 90
-      harvest_name: "Klinik Utama Sumenep"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-klinik-mata-sampang
+  - name: harvest-monthly-klinik-mata-sampang
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "0 21 1 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/klinikmatasampang/"]
-      days: 90
-      harvest_name: "Klinik Mata Sampang"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-karung-jumbo-sidoarjo
+  - name: harvest-monthly-karung-jumbo-sidoarjo
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "30 21 1 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.tiktok.com/@karungjumbosidoarjo"]
-      days: 90
-      harvest_name: "Gudang Karung Jumbo Sidoarjo"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-pelita-delapan
+  - name: harvest-monthly-pelita-delapan
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "0 22 1 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/tokopelitadelapan/"]
-      days: 90
-      harvest_name: "Pelita Delapan"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-klinik-mata-jogja
+  - name: harvest-monthly-klinik-mata-jogja
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "30 22 1 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/klinikmatajogja/"]
-      days: 90
-      harvest_name: "Klinik Mata Jogja"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-balakosa-rnp
+  - name: harvest-monthly-balakosa-rnp
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "0 23 1 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/balakosa.rnp/"]
-      days: 90
-      harvest_name: "Balakosa Rewind and Play"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-klinik-spesialis-langsa
+  - name: harvest-monthly-klinik-spesialis-langsa
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "30 23 1 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/klinikspesialislangsa/"]
-      days: 90
-      harvest_name: "Klinik Spesialis Langsa"
+      days: 31
     pull: *app_dir
 
   # --- spills past midnight onto the 2nd ---
 
-  - name: harvest-3mo-klinik-mata-bireuen
+  - name: harvest-monthly-klinik-mata-bireuen
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "0 0 2 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/klinikmatabireuen/"]
-      days: 90
-      harvest_name: "Klinik Mata Bireuen"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-rs-mata-smec-medan
+  - name: harvest-monthly-rs-mata-smec-medan
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "30 0 2 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/rsmatasmec/"]
-      days: 90
-      harvest_name: "RS Mata SMEC Medan"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-klinik-utama-gasa
+  - name: harvest-monthly-klinik-utama-gasa
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "0 1 2 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/klinikutamagasa/"]
-      days: 90
-      harvest_name: "Klinik Utama Gasa"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-klinik-mata-smec-bitung
+  - name: harvest-monthly-klinik-mata-smec-bitung
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "30 1 2 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/klinikmatasmecbitung/"]
-      days: 90
-      harvest_name: "Klinik Mata SMEC Bitung"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-mcafe
+  - name: harvest-monthly-mcafe
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo]
+    tags: [social-harvest, harvest-monthly]
     schedules:
       - cron: "0 2 2 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/mcafespace/"]
-      days: 90
-      harvest_name: "MCafe"
+      days: 31
     pull: *app_dir
 
   # ---------------------------------------------------------------------------
-  # Per-competitor 3-month harvest (harvest-3mo-comp-*)
+  # Per-competitor monthly harvest (harvest-monthly-comp-*)
   #
   # Source of truth for the competitor list: the CLIENT_SOCIAL block of the
   # "Hashmaps" worksheet (cols R/S/T) — the same mapping songbird reads to pick
@@ -396,7 +402,7 @@ deployments:
   # so every "own vs competitor" comparison ran on one side of the data.
   #
   # Same shape as the client blocks above (one deployment == one account == one
-  # run, days: 90, monthly on the 2nd) so competitor and client content are
+  # run, days: 31, monthly on the 2nd) so competitor and client content are
   # measured identically — songbird's ranking is a *within-account* comparison,
   # which only means anything when both sides are sampled the same way.
   # Staggered 02:30-05:00 WIB, clear of the 03:00 social-harvest-sync cron.
@@ -406,55 +412,51 @@ deployments:
   # ---------------------------------------------------------------------------
 
   # LASIK Asyik by SMEC Tebet — 3 competitors
-  - name: harvest-3mo-comp-lasikindonesia
+  - name: harvest-monthly-comp-lasikindonesia
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo, competitor]
+    tags: [social-harvest, harvest-monthly, competitor]
     schedules:
       - cron: "30 2 2 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/lasikindonesia/"]
-      days: 90
-      harvest_name: "Competitor - Ciputra SMG Eye Clinic"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-comp-kmneyecare
+  - name: harvest-monthly-comp-kmneyecare
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo, competitor]
+    tags: [social-harvest, harvest-monthly, competitor]
     schedules:
       - cron: "0 4 2 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/kmneyecare/"]
-      days: 90
-      harvest_name: "Competitor - KMN EyeCare"
+      days: 31
     pull: *app_dir
 
-  - name: harvest-3mo-comp-jeceyehospital
+  - name: harvest-monthly-comp-jeceyehospital
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo, competitor]
+    tags: [social-harvest, harvest-monthly, competitor]
     schedules:
       - cron: "30 4 2 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/jeceyehospital/"]
-      days: 90
-      harvest_name: "Competitor - JEC Eye Hospitals and Clinics"
+      days: 31
     pull: *app_dir
 
   # Ecky Dental Center — 1 competitor
-  - name: harvest-3mo-comp-sebayadental
+  - name: harvest-monthly-comp-sebayadental
     entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-3mo, competitor]
+    tags: [social-harvest, harvest-monthly, competitor]
     schedules:
       - cron: "0 5 2 * *"
         timezone: "Asia/Jakarta"
     parameters:
       profiles: ["https://www.instagram.com/sebayadental/"]
-      days: 90
-      harvest_name: "Competitor - Sebaya Dental"
+      days: 31
     pull: *app_dir

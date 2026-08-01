@@ -17,10 +17,12 @@ from prefect import task
 
 try:
     from ..blocks.google_credentials import GoogleCredentials
+    from ..db import db_pool
 except ImportError:
     import sys
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from blocks.google_credentials import GoogleCredentials
+    from db import db_pool
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +178,7 @@ async def social_item_analyze(
 
 
 async def _db_pool() -> asyncpg.Pool:
-    return await asyncpg.create_pool(os.environ["HARVEST_DB_URL"], min_size=1, max_size=5)
+    return await db_pool()
 
 
 @task(name="social.dedup.check", retries=2, retry_delay_seconds=10)
@@ -249,10 +251,18 @@ async def social_signal_record(
     subtitle: Optional[str],
     content_flow: Optional[str],
     summary: Optional[str],
+    account_id: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> None:
     """
     Mirror a delivered item's engagement + analysis into the harvested_signals
     store so songbird can rank top performers by engagement via SQL (feature 003).
+
+    `account_id`/`run_id` (feature 004-relational-spine) are optional so this
+    task behaves identically with the new columns absent or unpopulated —
+    the caller only has an account_id once `social.account.resolve` has
+    resolved the item, which is why the write path skips (rather than calls
+    this with a null account_id) when a handle is unregistered (FR-016a).
 
     Idempotent per (platform, content_id): a re-harvest upserts the freshest
     metrics/analysis rather than duplicating the row.
@@ -264,8 +274,9 @@ async def social_signal_record(
                 """
                 INSERT INTO harvested_signals
                     (platform, profile_key, content_id, content_type, published_at,
-                     caption, hashtags, views, likes, comments, subtitle, content_flow, summary)
-                VALUES ($1, $2, $3, $4, $5::text::timestamptz, $6, $7, $8, $9, $10, $11, $12, $13)
+                     caption, hashtags, views, likes, comments, subtitle, content_flow, summary,
+                     account_id, run_id)
+                VALUES ($1, $2, $3, $4, $5::text::timestamptz, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                 ON CONFLICT (platform, content_id) DO UPDATE SET
                     profile_key = EXCLUDED.profile_key,
                     content_type = EXCLUDED.content_type,
@@ -278,12 +289,14 @@ async def social_signal_record(
                     subtitle = EXCLUDED.subtitle,
                     content_flow = EXCLUDED.content_flow,
                     summary = EXCLUDED.summary,
+                    account_id = COALESCE(EXCLUDED.account_id, harvested_signals.account_id),
+                    run_id = COALESCE(EXCLUDED.run_id, harvested_signals.run_id),
                     harvested_at = now()
                 """,
                 platform, profile_key, content_id, content_type, published_at or None,
                 caption, hashtags,
                 _coerce_count(views), _coerce_count(likes), _coerce_count(comments),
-                subtitle, content_flow, summary,
+                subtitle, content_flow, summary, account_id, run_id,
             )
     finally:
         await pool.close()
@@ -381,6 +394,79 @@ async def social_detail_sync_advertisement(
     return len(data)
 
 
+@task(name="social.account.resolve", retries=2, retry_delay_seconds=10)
+async def social_account_resolve(platform: str, handle: str) -> Dict[str, Any]:
+    """
+    Resolve a collected handle to an account (feature 004-relational-spine).
+
+    Per specs/004-relational-spine/contracts/account-resolution.md, exactly one
+    of three outcomes:
+      - "resolved":     handle found, account active -> write the item
+      - "unregistered": no account_handles row -> skip, never create one (FR-016b)
+      - "inactive":     handle found, account deactivated -> skip
+
+    Lookup is case-insensitive and matches BOTH current and former handles
+    (FR-011c), so a rename never orphans a historical `profile_key` value.
+    """
+    handle_key = (handle or "").strip().lower()
+    pool = await _db_pool()
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT a.id AS account_id, a.is_active
+                FROM account_handles ah
+                JOIN accounts a ON a.id = ah.account_id
+                WHERE ah.platform = $1 AND ah.handle_key = $2
+                """,
+                platform, handle_key,
+            )
+    finally:
+        await pool.close()
+
+    if row is None:
+        return {"outcome": "unregistered", "account_id": None}
+    if not row["is_active"]:
+        return {"outcome": "inactive", "account_id": row["account_id"]}
+    return {"outcome": "resolved", "account_id": row["account_id"]}
+
+
+# Instagram follower_count works again as of 2026-08-01 (research R3, Resolution).
+# roach's `web_profile_info` route is still broken upstream (Meta-side 400,
+# "ig_business_category_subvertical has been deleted"), but roach now falls back
+# to Instagram's persisted GraphQL profile query when that yields no count —
+# verified live on `lasikasyik`, which went from no count to follower_count=1342.
+# The fallback lives in roach (`_instagram_profile_info_graphql`), so nothing
+# here changed: this task still just records whatever count arrives, and records
+# nothing when none does. TikTok is unaffected and has always been reliable.
+@task(name="social.account.record-followers", retries=2, retry_delay_seconds=10)
+async def social_account_record_followers(
+    account_id: str, follower_count: Optional[int], run_id: Optional[str] = None
+) -> bool:
+    """
+    Append-only follower observation (feature 004-relational-spine, FR-013a).
+
+    Writes a row ONLY when the platform actually returned a count — there is
+    no placeholder/estimated row and no update-in-place; a missed capture
+    results in no row, never a zero (constitution VI/VII).
+
+    Returns:
+        True if an observation was written, False if there was nothing to record.
+    """
+    if follower_count is None:
+        return False
+    pool = await _db_pool()
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO account_follower_observations (account_id, follower_count, run_id) VALUES ($1, $2, $3)",
+                account_id, follower_count, run_id,
+            )
+        return True
+    finally:
+        await pool.close()
+
+
 @task(name="social.dedup.record", retries=2, retry_delay_seconds=10)
 async def social_dedup_record(
     platform: str,
@@ -390,19 +476,27 @@ async def social_dedup_record(
     content_type: str,
     drive_file_id: Optional[str] = None,
     analysis_status: str = "pending",
+    account_id: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> None:
-    """Record a successfully delivered item in the de-dup ledger (FR-021)."""
+    """Record a successfully delivered item in the de-dup ledger (FR-021).
+
+    `account_id`/`run_id` (feature 004-relational-spine) are optional for the
+    same reason as social_signal_record's — see its docstring.
+    """
     pool = await _db_pool()
     try:
         async with pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO harvested_items
-                    (platform, profile_key, content_id, drive_target, content_type, drive_file_id, analysis_status)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    (platform, profile_key, content_id, drive_target, content_type, drive_file_id,
+                     analysis_status, account_id, run_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 ON CONFLICT (platform, content_id, drive_target) DO NOTHING
                 """,
-                platform, profile_key, content_id, drive_target, content_type, drive_file_id, analysis_status,
+                platform, profile_key, content_id, drive_target, content_type, drive_file_id,
+                analysis_status, account_id, run_id,
             )
     finally:
         await pool.close()

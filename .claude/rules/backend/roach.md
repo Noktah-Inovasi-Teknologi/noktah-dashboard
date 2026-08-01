@@ -53,9 +53,22 @@ browser:
   returns a trimmed object with no counts, and the profile HTML `302`s. Failures print their HTTP
   status — an empty `public_metadata` must be distinguishable from an expired cookie, a throttle, and
   an Instagram-side outage. **Known upstream breakage (2026-07-31):** `web_profile_info` returns
-  `400 "Asset asset://laser.provider/ig_business_category_subvertical has been deleted"` for *every*
-  account — a Meta serializer regression, not auth or throttling. The code path is correct and starts
-  populating when that clears; do not "fix" it by swapping endpoints without re-probing first.
+  `400 "Asset asset://laser.provider/ig_business_category_subvertical has been deleted"` — a Meta
+  serializer regression, not auth or throttling. **Still broken as of 2026-08-01** and outside our
+  control.
+- **Follower count: GraphQL fallback (`_instagram_profile_info_graphql`), added 2026-08-01.** When
+  `web_profile_info` yields no follower count but a `user_id` is available (from
+  `_owner_id_from_entries`, which does not depend on the broken endpoint), roach falls back to
+  Instagram's persisted GraphQL profile query. Measured live: `lasikasyik` went from no count at all
+  to `follower_count=1342`, with the primary route still returning its 400 in the same request.
+  **The critical detail — and what cost two wasted probes before it was found:** the doc_id
+  (`27937681195819736`) has NOT rotated. What changed is that the query now **requires** a set of
+  `__relay_internal__pv__*` Relay feature-flag variables. Omit any of them and the server replies
+  `HTTP 200` with `{"errors": [... "execution error", "severity": "CRITICAL" ...], "data": null}` —
+  indistinguishable at a glance from a dead doc_id, an auth failure, or a throttle. If this breaks
+  again, **re-check the variable set against instaloader's `Profile._obtain_metadata` before
+  assuming the doc_id rotated.** Both constants live at the top of `_instagram_profile_info_graphql`.
+  The fallback only runs on the failure path, so a working `web_profile_info` still costs one request.
 - **Cookies** (`secrets/cookies.txt`, gitignored) are required for IG depth; pools live in
   `secrets/cookies.d/<platform>/*.txt`.
 
