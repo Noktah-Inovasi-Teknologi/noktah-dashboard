@@ -37,11 +37,15 @@ FULL_CHAIN = [
     "004_relational_spine",
     "005_link_existing",
     "006_enforce_account_link",
+    "007_signal_field_coverage",
 ]
 
-# `spine_db` stops before 006: it enforces account_id IS NOT NULL and fails by
-# design until a backfill has run, which most tests using the fixture do not do.
-BASE_CHAIN = FULL_CHAIN[:-1]
+# `spine_db` skips 006: it enforces account_id IS NOT NULL and fails by design
+# until a backfill has run, which most tests using the fixture do not do. 007 is
+# additive and safe, so it IS included — feature 005's tests need
+# field_availability / capture_outcomes, and excluding it by taking a tail slice
+# would silently drop every migration after 006 as the chain grows.
+BASE_CHAIN = [m for m in FULL_CHAIN if m != "006_enforce_account_link"]
 
 _db_available_cache = None
 
@@ -107,9 +111,13 @@ def pool_from_connection(conn):
     """
     Returns an ASYNC callable suitable for `monkeypatch.setattr(module, "_db_pool", ...)`
     — every task module's real `_db_pool` is `async def`, called as `await _db_pool()`.
+
+    Strict arity on purpose: every module's `_db_pool` is called with at most an
+    optional env-var name, so a signature mismatch should fail loudly here rather
+    than be absorbed by a permissive factory.
     """
 
-    async def _factory():
+    async def _factory(*_args):
         return _PoolFromConnection(conn)
 
     return _factory
@@ -118,12 +126,15 @@ def pool_from_connection(conn):
 @pytest_asyncio.fixture
 async def spine_db():
     """
-    A disposable database with migrations 000-005 applied, fresh per test.
+    A disposable database with every migration EXCEPT 006 applied, fresh per test.
 
     006 (the NOT VALID -> VALIDATE enforcement) is deliberately not applied here —
     it fails until the harvest tables' account_id columns are fully backfilled,
     which most tests using this fixture do not do. Tests exercising 006 apply it
     explicitly after populating account_id.
+
+    007 (field_availability / capture_outcomes) IS applied: it is purely additive
+    and feature 005's constraint tests depend on it.
     """
     admin = await asyncpg.connect(TEST_DSN.rsplit("/", 1)[0] + "/postgres")
     dbname = TEST_DSN.rsplit("/", 1)[-1]

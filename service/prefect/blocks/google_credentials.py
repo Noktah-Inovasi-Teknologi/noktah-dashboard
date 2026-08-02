@@ -30,6 +30,22 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def col_letter(index: int) -> str:
+    """0-based column index -> A1 letter (A, B, … Z, AA).
+
+    Single definition for the whole service. The >26-column wraparound is the
+    classic off-by-one here, and `ACCOUNT_HEADER` is now 20 columns and growing —
+    a second copy would mean a fix reaching only one of them, and a mislabelled
+    column silently relabels reviewer-entered data.
+    """
+    s = ""
+    index += 1
+    while index:
+        index, r = divmod(index - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
 class GoogleCredentials(Block):
     """
     Prefect Block for storing and managing Google API credentials.
@@ -666,9 +682,30 @@ class GoogleClient:
 
         Also removes the default empty 'Sheet1' left over from spreadsheet
         creation, so a per-account workbook contains only quarter tabs.
+
+        For a tab that ALREADY exists, the header is extended when `header_row`
+        appends new trailing columns (feature 005's `shares`). Before this, the
+        header was written only at tab-creation time, so an existing tab could
+        never gain a column and rows would be appended one cell wider than the
+        header describes. Only *appended* columns are applied — a header whose
+        existing columns disagree is left untouched and reported by
+        `extend_tab_header`, because a mismatch means an assumption is wrong and
+        guessing would corrupt a reviewer surface.
         """
         tabs = self._get_tabs(spreadsheet_id)
-        if tab_name not in tabs:
+        if tab_name in tabs:
+            outcome = self.extend_tab_header(spreadsheet_id, tab_name, header_row)
+            if outcome == "mismatch":
+                # The delivery path is about to append rows shaped to
+                # `header_row` into a tab whose layout contradicts it. The
+                # one-off backfill flow warns about exactly this; the path that
+                # actually writes production data must not stay silent.
+                logger.warning(
+                    f"Tab '{tab_name}' in {spreadsheet_id} has a header that does not match the "
+                    f"expected layout; it was NOT rewritten. Rows appended here may not line up "
+                    f"with its columns — run flows/sheet_header_backfill.py to inspect."
+                )
+        else:
             self.sheets_service.spreadsheets().batchUpdate(
                 spreadsheetId=spreadsheet_id,
                 body={'requests': [{'addSheet': {'properties': {'title': tab_name}}}]},
@@ -691,6 +728,53 @@ class GoogleClient:
                     spreadsheetId=spreadsheet_id,
                     body={'requests': [{'deleteSheet': {'sheetId': tabs['Sheet1']}}]},
                 ).execute()
+
+    def extend_tab_header(
+        self, spreadsheet_id: str, tab_name: str, header_row: List[str]
+    ) -> str:
+        """Bring an existing tab's header up to `header_row` by APPENDING columns.
+
+        Returns one of:
+            "unchanged" — already matches (or is longer; nothing to do)
+            "extended"  — trailing columns were appended
+            "empty"     — the tab has no header row (nothing to extend)
+            "mismatch"  — the existing columns DISAGREE with `header_row`
+
+        `empty` and `mismatch` are reported separately on purpose. Collapsing
+        them into one "skipped" makes a benign untouched scratch tab look
+        identical to a tab whose layout contradicts ours — the same conflation of
+        distinct causes this whole feature exists to remove.
+
+        Touches ONLY row 1. Reviewer-entered data rows are never read or written
+        — a layout migration must not be able to disturb the `advertisement`
+        flags staff have set.
+
+        A prefix mismatch is deliberately NOT repaired. It means the tab is not
+        the layout we think it is, and rewriting its header would silently
+        relabel columns of real data.
+        """
+        existing = self.sheets_service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id, range=f"'{tab_name}'!1:1",
+        ).execute().get('values', [])
+        current = existing[0] if existing else []
+
+        if not current:
+            return "empty"
+        if len(current) >= len(header_row):
+            return "unchanged"
+        if current != header_row[:len(current)]:
+            return "mismatch"
+
+        # Write only the new trailing cells, leaving the existing ones untouched.
+        start = col_letter(len(current))
+        end = col_letter(len(header_row) - 1)
+        self.sheets_service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{tab_name}'!{start}1:{end}1",
+            valueInputOption='RAW',
+            body={'values': [header_row[len(current):]]},
+        ).execute()
+        return "extended"
 
     def tab_data_row_count(self, spreadsheet_id: str, tab_name: str) -> int:
         """Number of data rows (excluding the header) currently in `tab_name`."""

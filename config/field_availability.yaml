@@ -1,0 +1,407 @@
+# Field availability determinations — feature 005-signal-field-coverage
+#
+# THE SOURCE OF TRUTH. Reconciled into the `field_availability` table by
+# `flows/field_availability_sync.py` (FR-001a/FR-001b). Edit here, never in the
+# database — a determination and the evidence behind it must be reviewable as a
+# diff.
+#
+# Lives in config/ and NOT data/ because .gitignore ignores any directory named
+# `data`, which would leave this file untracked and defeat the point entirely.
+#
+# Status vocabulary is CLOSED (FR-002/FR-002a). Exactly five values:
+#   available                   published by the platform for this content type, and collected
+#   unavailable_platform_limit  the platform does not publish it — a fact about the platform
+#   not_collected_by_decision   obtainable, deliberately not collected — a fact about us
+#   inconclusive                investigated, no determination reached
+#   undetermined                not yet investigated
+#
+# Never record `not_collected_by_decision` as `unavailable_platform_limit`. That
+# turns a reversible policy choice into an apparent law of nature.
+#
+# `evidence` is REQUIRED for every status except `undetermined` (the one status
+# that means "we haven't looked", and so has nothing to cite).
+#
+# Baseline coverage measured against noktah_dashboard on 2026-08-02:
+#   instagram/carousel  291 rows | views   0 | likes 291 | comments   0
+#   instagram/image      86 rows | views   0 | likes  86 | comments   0
+#   instagram/story       2 rows | views   0 | likes   0 | comments   0
+#   instagram/video     291 rows | views 291 | likes 291 | comments 291
+#   tiktok/video         26 rows | views  26 | likes  26 | comments  26
+
+version: 1
+
+determinations:
+
+  # =========================================================================
+  # Instagram — video (Reels)
+  # =========================================================================
+  - platform: instagram
+    content_type: video
+    field: likes
+    status: available
+    reason: Present on the gallery-dl post payload and reinforced by the Reels-grid enrichment.
+    evidence: 291/291 instagram video rows carry likes (measured 2026-08-02).
+    determined_on: 2026-08-02
+
+  - platform: instagram
+    content_type: video
+    field: comments
+    status: available
+    reason: >
+      Supplied by the Reels-grid endpoint /api/v1/clips/user/, which the feed
+      listing omits. Fully reliable, not partial.
+    evidence: >
+      291/291 instagram video rows carry comments (measured 2026-08-02);
+      _instagram_clip_stats reads comment_count at collect.py:767.
+    determined_on: 2026-08-02
+
+  - platform: instagram
+    content_type: video
+    field: views
+    status: available
+    reason: Play count from the same Reels-grid endpoint as comments.
+    evidence: 291/291 instagram video rows carry views (measured 2026-08-02).
+    determined_on: 2026-08-02
+
+  - platform: instagram
+    content_type: video
+    field: shares
+    status: unavailable_platform_limit
+    reason: Instagram publishes no share/repost count on any public surface.
+    evidence: >
+      collect.py:949 emits shares=None for every Instagram item with an explicit
+      comment; no Instagram surface in use exposes the field.
+    determined_on: 2026-08-02
+
+  # =========================================================================
+  # Instagram — carousel
+  # =========================================================================
+  - platform: instagram
+    content_type: carousel
+    field: likes
+    status: available
+    reason: Present on the gallery-dl post payload.
+    evidence: 291/291 instagram carousel rows carry likes (measured 2026-08-02).
+    determined_on: 2026-08-02
+
+  - platform: instagram
+    content_type: carousel
+    field: comments
+    status: available
+    reason: >
+      Returned as `comment_count` by /api/v1/feed/user/<id>/ — the same endpoint
+      gallery-dl already calls for the posts listing, on the same media object
+      shape the clips endpoint uses. gallery-dl fetches this payload and then
+      discards the field, mapping only like_count. This was never a platform
+      limit; it was a mapping gap in a third-party library.
+    evidence: >
+      Live probe 2026-08-02 against natgeo (non-client), 4 requests of a 10
+      budget, no throttle: 5/5 carousel items carried comment_count, 5/5 image,
+      2/2 video (which also carried play_count). gallery-dl 1.32.6
+      extractor/instagram.py:1151 routes the listing to this endpoint and :240
+      maps like_count only.
+    determined_on: 2026-08-02
+
+  - platform: instagram
+    content_type: carousel
+    field: views
+    status: unavailable_platform_limit
+    reason: >
+      Instagram publishes no post-level play count for non-video content. A
+      carousel containing a video child exposes per-child plays, but not a
+      post-level number, so there is nothing to store against the item.
+    evidence: 0/291 instagram carousel rows carry views (measured 2026-08-02).
+    determined_on: 2026-08-02
+
+  - platform: instagram
+    content_type: carousel
+    field: shares
+    status: unavailable_platform_limit
+    reason: Instagram publishes no share/repost count on any public surface.
+    evidence: collect.py:949 emits shares=None for every Instagram item.
+    determined_on: 2026-08-02
+
+  # =========================================================================
+  # Instagram — image
+  # =========================================================================
+  - platform: instagram
+    content_type: image
+    field: likes
+    status: available
+    reason: Present on the gallery-dl post payload.
+    evidence: 86/86 instagram image rows carry likes (measured 2026-08-02).
+    determined_on: 2026-08-02
+
+  - platform: instagram
+    content_type: image
+    field: comments
+    status: available
+    reason: >
+      Returned as `comment_count` by /api/v1/feed/user/<id>/, same as
+      instagram/carousel/comments. Not a platform limit — a gallery-dl mapping gap.
+    evidence: >
+      Live probe 2026-08-02 against natgeo (non-client): 5/5 image items carried
+      comment_count. Same probe as instagram/carousel/comments, 4 requests total.
+    determined_on: 2026-08-02
+
+  - platform: instagram
+    content_type: image
+    field: views
+    status: unavailable_platform_limit
+    reason: Instagram publishes no play count for still images — there is nothing to play.
+    evidence: 0/86 instagram image rows carry views (measured 2026-08-02).
+    determined_on: 2026-08-02
+
+  - platform: instagram
+    content_type: image
+    field: shares
+    status: unavailable_platform_limit
+    reason: Instagram publishes no share/repost count on any public surface.
+    evidence: collect.py:949 emits shares=None for every Instagram item.
+    determined_on: 2026-08-02
+
+  # =========================================================================
+  # Instagram — story
+  # ------------------------------------------------------------------------
+  # A case the original brief did not mention. Stories carry NO public counts
+  # at all — not even likes — so without these four rows the two stored story
+  # rows would read as a collection failure forever.
+  # =========================================================================
+  - platform: instagram
+    content_type: story
+    field: likes
+    status: unavailable_platform_limit
+    reason: Instagram publishes no engagement counts on stories; they are ephemeral and unmetered publicly.
+    evidence: >
+      _list_instagram_stories (collect.py:838) sets all four counts to None by
+      construction; 0/2 stored story rows carry likes (measured 2026-08-02).
+    determined_on: 2026-08-02
+
+  - platform: instagram
+    content_type: story
+    field: comments
+    status: unavailable_platform_limit
+    reason: Story replies are private direct messages, not a public comment thread.
+    evidence: collect.py:838 sets comments=None; 0/2 stored story rows carry comments.
+    determined_on: 2026-08-02
+
+  - platform: instagram
+    content_type: story
+    field: views
+    status: unavailable_platform_limit
+    reason: Story view counts are visible only to the account owner, never publicly.
+    evidence: collect.py:838 sets views=None; 0/2 stored story rows carry views.
+    determined_on: 2026-08-02
+
+  - platform: instagram
+    content_type: story
+    field: shares
+    status: unavailable_platform_limit
+    reason: Instagram publishes no share count on any surface, stories included.
+    evidence: collect.py:838 sets shares=None.
+    determined_on: 2026-08-02
+
+  # =========================================================================
+  # TikTok — video
+  # =========================================================================
+  - platform: tiktok
+    content_type: video
+    field: likes
+    status: available
+    reason: diggCount on the gallery-dl stats object; like_count via yt-dlp.
+    evidence: 26/26 tiktok video rows carry likes (measured 2026-08-02).
+    determined_on: 2026-08-02
+
+  - platform: tiktok
+    content_type: video
+    field: comments
+    status: available
+    reason: commentCount on the gallery-dl stats object.
+    evidence: 26/26 tiktok video rows carry comments (measured 2026-08-02).
+    determined_on: 2026-08-02
+
+  - platform: tiktok
+    content_type: video
+    field: views
+    status: available
+    reason: playCount on the gallery-dl stats object.
+    evidence: 26/26 tiktok video rows carry views (measured 2026-08-02).
+    determined_on: 2026-08-02
+
+  - platform: tiktok
+    content_type: video
+    field: shares
+    status: available
+    reason: >
+      shareCount sits in the same already-fetched stats object as the other three
+      counts; yt-dlp exposes it as repost_count. Collected at zero marginal
+      request cost — it was previously parsed and then discarded at the storage
+      boundary.
+    evidence: >
+      _tiktok_counts reads stats.shareCount (collect.py:545) and the yt-dlp path
+      reads repost_count (collect.py:450); both covered by
+      service/roach/tests/test_collect.py.
+    determined_on: 2026-08-02
+
+  # =========================================================================
+  # TikTok — carousel / image / story
+  # ------------------------------------------------------------------------
+  # The code paths exist and parse the same stats object as video, but ZERO rows
+  # of these types have ever been collected. Recording them as `available` on
+  # the strength of an unexercised code path would be an assertion from
+  # unobserved data, which Constitution VIII forbids. They stay `undetermined`
+  # until a row proves otherwise.
+  # =========================================================================
+  - platform: tiktok
+    content_type: carousel
+    field: likes
+    status: undetermined
+    reason: 0 tiktok carousel rows have ever been collected; availability unverified by observation.
+    determined_on: 2026-08-02
+
+  - platform: tiktok
+    content_type: carousel
+    field: comments
+    status: undetermined
+    reason: 0 tiktok carousel rows have ever been collected; availability unverified by observation.
+    determined_on: 2026-08-02
+
+  - platform: tiktok
+    content_type: carousel
+    field: views
+    status: undetermined
+    reason: 0 tiktok carousel rows have ever been collected; availability unverified by observation.
+    determined_on: 2026-08-02
+
+  - platform: tiktok
+    content_type: carousel
+    field: shares
+    status: undetermined
+    reason: 0 tiktok carousel rows have ever been collected; availability unverified by observation.
+    determined_on: 2026-08-02
+
+  - platform: tiktok
+    content_type: image
+    field: likes
+    status: undetermined
+    reason: 0 tiktok image rows have ever been collected; availability unverified by observation.
+    determined_on: 2026-08-02
+
+  - platform: tiktok
+    content_type: image
+    field: comments
+    status: undetermined
+    reason: 0 tiktok image rows have ever been collected; availability unverified by observation.
+    determined_on: 2026-08-02
+
+  - platform: tiktok
+    content_type: image
+    field: views
+    status: undetermined
+    reason: 0 tiktok image rows have ever been collected; availability unverified by observation.
+    determined_on: 2026-08-02
+
+  - platform: tiktok
+    content_type: image
+    field: shares
+    status: undetermined
+    reason: 0 tiktok image rows have ever been collected; availability unverified by observation.
+    determined_on: 2026-08-02
+
+  - platform: tiktok
+    content_type: story
+    field: likes
+    status: undetermined
+    reason: 0 tiktok story rows have ever been collected; availability unverified by observation.
+    determined_on: 2026-08-02
+
+  - platform: tiktok
+    content_type: story
+    field: comments
+    status: undetermined
+    reason: 0 tiktok story rows have ever been collected; availability unverified by observation.
+    determined_on: 2026-08-02
+
+  - platform: tiktok
+    content_type: story
+    field: views
+    status: undetermined
+    reason: 0 tiktok story rows have ever been collected; availability unverified by observation.
+    determined_on: 2026-08-02
+
+  - platform: tiktok
+    content_type: story
+    field: shares
+    status: undetermined
+    reason: 0 tiktok story rows have ever been collected; availability unverified by observation.
+    determined_on: 2026-08-02
+
+  # =========================================================================
+  # Account-level fields
+  # =========================================================================
+  - platform: instagram
+    content_type: account
+    field: follower_count
+    status: available
+    reason: >
+      Resolved via web_profile_info, with an authenticated GraphQL profile query
+      as fallback. The denominator without which engagement rate is uncomputable.
+    evidence: >
+      _instagram_profile_info (collect.py:598) plus
+      _instagram_profile_info_graphql (collect.py:671), the latter measured
+      working on lasikasyik (follower_count=1342) on 2026-08-01 while the
+      primary route was returning its 400.
+    determined_on: 2026-08-02
+
+  - platform: tiktok
+    content_type: account
+    field: follower_count
+    status: available
+    reason: channel_follower_count from the yt-dlp profile listing.
+    evidence: collect.py:426 populates public_metadata.follower_count for TikTok.
+    determined_on: 2026-08-02
+
+  # =========================================================================
+  # Comment text — a decision, not a platform limit
+  # ------------------------------------------------------------------------
+  # Obtainable. Deliberately not collected. Recording this as
+  # `unavailable_platform_limit` would make a reversible policy choice look like
+  # a law of nature (FR-023).
+  # =========================================================================
+  - platform: instagram
+    content_type: video
+    field: comment_text
+    status: not_collected_by_decision
+    reason: >
+      Comment threads are addressed per post and paged, so cost scales with post
+      count rather than account count — roughly 4-10x the current per-account
+      request baseline. That is the shape FR-010 disqualifies by name, and
+      Constitution X forbids the increase. See research.md R6.
+    evidence: >
+      specs/005-signal-field-coverage/research.md R6: ~37-100 requests per
+      account per run at 30 posts, against a ~7-10 baseline.
+    determined_on: 2026-08-02
+
+  - platform: instagram
+    content_type: carousel
+    field: comment_text
+    status: not_collected_by_decision
+    reason: Same per-post cost structure as instagram/video/comment_text. See research.md R6.
+    evidence: specs/005-signal-field-coverage/research.md R6.
+    determined_on: 2026-08-02
+
+  - platform: instagram
+    content_type: image
+    field: comment_text
+    status: not_collected_by_decision
+    reason: Same per-post cost structure as instagram/video/comment_text. See research.md R6.
+    evidence: specs/005-signal-field-coverage/research.md R6.
+    determined_on: 2026-08-02
+
+  - platform: tiktok
+    content_type: video
+    field: comment_text
+    status: not_collected_by_decision
+    reason: Same per-post cost structure as the Instagram surfaces. See research.md R6.
+    evidence: specs/005-signal-field-coverage/research.md R6.
+    determined_on: 2026-08-02

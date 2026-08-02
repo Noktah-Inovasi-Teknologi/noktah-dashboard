@@ -6,6 +6,7 @@ Instagram uses a burner-account cookie session (anonymous access only surfaces
 the first few posts and no stories); TikTok is collected anonymously. See
 specs/002-social-content-harvest/research.md R3/R4.
 """
+import contextvars
 import http.cookiejar
 import os
 import random
@@ -310,6 +311,56 @@ def _parse_gdl_date(value) -> str | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Per-listing network-pass accounting (feature 005-signal-field-coverage, FR-024)
+# ---------------------------------------------------------------------------
+# FR-024 requires the marginal collection volume of any change to be stated as a
+# percentage of the baseline — and the baseline was never measured. Counting here
+# costs ZERO additional requests: it instruments runs that were going to happen
+# anyway, rather than spending real requests to measure how many we spend.
+#
+# HONESTY BOUNDARY (constitution VI): `gallery_dl` and `yt_dlp` count *process
+# invocations*, not HTTP requests. Each one pages internally and the true request
+# count is not observable from outside the subprocess, so it is NOT reported as
+# one. Only `direct_api` — our own curl_cffi calls — is an exact request count.
+# Do not sum these into a single "requests" number; that would present an
+# estimate and an observation as the same field.
+#
+# Call-scoped via ContextVar, NOT a module-level dict. `/list` is a sync `def`
+# endpoint, so Starlette runs it on the anyio worker threadpool — two concurrent
+# listings over one shared dict would have each reset the other's in-flight
+# counts, silently biasing the baseline DOWNWARD. A quietly wrong baseline
+# defeats the entire reason for measuring one.
+_PASS_COUNTS: contextvars.ContextVar[dict[str, int]] = contextvars.ContextVar("roach_pass_counts")
+
+
+def _count_pass(kind: str) -> None:
+    counts = _PASS_COUNTS.get(None)
+    if counts is None:
+        return  # counting outside a listing: nothing to attribute it to
+    counts[kind] = counts.get(kind, 0) + 1
+
+
+def _reset_pass_counts() -> None:
+    _PASS_COUNTS.set({})
+
+
+def _pass_counts() -> dict:
+    """Snapshot of this listing's network passes, by observability class.
+
+    `gallery_dl_invocations`/`yt_dlp_invocations` are process invocations, each
+    issuing one or more HTTP requests internally (not observable from outside).
+    Only `direct_api_requests` is an exact request count — see the module
+    comment above and `.claude/rules/backend/roach.md`.
+    """
+    counts = _PASS_COUNTS.get(None) or {}
+    return {
+        "gallery_dl_invocations": counts.get("gallery_dl", 0),
+        "yt_dlp_invocations": counts.get("yt_dlp", 0),
+        "direct_api_requests": counts.get("direct_api", 0),
+    }
+
+
 def list_profile(profile_url: str, platform: str, max_items: int = 30, stories_only: bool = False) -> tuple[dict, list[dict]]:
     """List publicly visible items for a profile via the tool that fits the platform.
 
@@ -335,6 +386,7 @@ def list_profile(profile_url: str, platform: str, max_items: int = 30, stories_o
     authoritative content_type is re-derived from the downloaded files in
     `download_item` (`_derive_content_type`).
     """
+    _reset_pass_counts()
     fingerprint = _session_fingerprint(_handle_from_url(profile_url))
     if platform == "instagram":
         if stories_only:
@@ -358,6 +410,7 @@ def _gallery_dl_json(url: str, platform: str, max_items: int, fingerprint: dict 
     the whole list).
     """
     cmd = _gallery_dl_cmd(url, platform, ["-j", "--range", f"1-{max_items}"], fingerprint)
+    _count_pass("gallery_dl")
     # TikTok pacing (~1 request/post + sleep-request) makes deep listings slow
     # by design — budget generously so pacing never masquerades as a hang.
     pace = 8 if platform == "tiktok" else 2
@@ -410,6 +463,7 @@ def _list_tiktok(profile_url: str, max_items: int, fingerprint: dict | None = No
     # 1) Videos via yt-dlp (deep, fast). Failure here is non-fatal — gallery-dl
     #    photos/stories below may still yield content.
     try:
+        _count_pass("yt_dlp")
         opts = {**_yt_dlp_opts("tiktok", fingerprint), "extract_flat": True, "dump_single_json": True}
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(profile_url, download=False)
@@ -624,6 +678,7 @@ def _instagram_profile_info(handle: str, fingerprint: dict) -> dict:
         return {}
     creq, cookies, headers, browser = session
     try:
+        _count_pass("direct_api")
         r = creq.get(
             f"https://www.instagram.com/api/v1/users/web_profile_info/?username={handle}",
             headers=headers, cookies=cookies, impersonate=browser, timeout=30,
@@ -693,6 +748,7 @@ def _instagram_profile_info_graphql(user_id: str, handle: str, fingerprint: dict
     gql_headers["Accept"] = "*/*"
     gql_headers["Content-Type"] = "application/x-www-form-urlencoded"
     try:
+        _count_pass("direct_api")
         r = creq.post(
             "https://www.instagram.com/graphql/query",
             data={
@@ -750,6 +806,7 @@ def _instagram_clip_stats(user_id: str | None, handle: str, fingerprint: dict, m
             payload = {"target_user_id": str(user_id), "page_size": "24"}
             if max_id:
                 payload["max_id"] = max_id
+            _count_pass("direct_api")
             r = creq.post(
                 "https://www.instagram.com/api/v1/clips/user/", data=payload,
                 headers=headers, cookies=cookies, impersonate=browser, timeout=30,
@@ -777,6 +834,80 @@ def _instagram_clip_stats(user_id: str | None, handle: str, fingerprint: dict, m
     return stats
 
 
+def _instagram_feed_stats(user_id: str | None, handle: str, fingerprint: dict, max_items: int) -> dict:
+    """Best-effort per-account comment counts from IG's user-feed endpoint.
+
+    WHY THIS EXISTS. gallery-dl lists Instagram via `/v1/feed/user/<id>/` and its
+    post parser maps `like_count` and nothing else count-shaped
+    (extractor/instagram.py:240) — so `comment_count`, which the very same
+    payload carries, is fetched and thrown away. That left 379 carousel/image
+    rows with likes only, looking for all the world like a platform limit. It
+    was a mapping gap in a third-party library.
+
+    gallery-dl `-j` emits only its own mapped dict and has no raw passthrough, so
+    the field cannot be recovered from that subprocess; this re-issues the same
+    request directly, exactly as `_instagram_clip_stats` does for the Reels grid.
+
+    Measured live 2026-08-02 (natgeo, 4 requests of a 10 budget): 5/5 carousel,
+    5/5 image and 2/2 video items carried `comment_count`.
+
+    Returns {shortcode: {comments, views, likes}} or {} on any failure — a stats
+    hiccup must never break a listing. Same authenticated surface, same cookie
+    session, same impersonation as every other IG call here (rule #1); one paged
+    request per account, never per post.
+    """
+    session = _instagram_api_session(handle, fingerprint)
+    if session is None:
+        return {}
+    creq, cookies, headers, browser = session
+    # No `_instagram_profile_info` fallback here, unlike the clips pass. The only
+    # caller resolves the id once and hands it to both passes, so a fallback
+    # could only fire when that resolution ALREADY failed this listing — and
+    # `web_profile_info` has been 400ing per-account since 2026-07-31. It would
+    # spend a real authenticated request on a call certain to fail again.
+    if not user_id:
+        return {}
+
+    stats: dict = {}
+    max_id = None
+    try:
+        for _ in range(2):  # cap pages; 30/page covers the usual max_items
+            url = f"https://www.instagram.com/api/v1/feed/user/{user_id}/?count=30"
+            if max_id:
+                url += f"&max_id={max_id}"
+            _count_pass("direct_api")
+            r = creq.get(url, headers=headers, cookies=cookies, impersonate=browser, timeout=30)
+            if r.status_code != 200:
+                # Printed, not swallowed. An empty result must be
+                # distinguishable from a throttle, an expired cookie and a
+                # platform-side outage — silently returning {} is precisely the
+                # ambiguity this feature exists to remove, and it would leave a
+                # carousel's missing comment count looking like a platform limit.
+                print(
+                    f"[instagram] {handle}: feed comment stats unavailable "
+                    f"(HTTP {r.status_code}: {r.text[:160]})",
+                    flush=True,
+                )
+                break
+            body = r.json()
+            for entry in body.get("items", []):
+                code = entry.get("code")
+                if not code:
+                    continue
+                stats[code] = {
+                    "comments": entry.get("comment_count"),
+                    "views": entry.get("play_count") or entry.get("ig_play_count"),
+                    "likes": entry.get("like_count"),
+                }
+            max_id = body.get("next_max_id")
+            if not body.get("more_available") or not max_id or len(stats) >= max_items:
+                break
+            time.sleep(random.uniform(1.0, 2.5))  # pace paged requests
+    except Exception:
+        return stats
+    return stats
+
+
 def _reels_listing_entries(profile_url: str, max_items: int, fingerprint: dict) -> list:
     """Best-effort `gallery-dl -j` of the Instagram Reels tab.
 
@@ -788,6 +919,7 @@ def _reels_listing_entries(profile_url: str, max_items: int, fingerprint: dict) 
     base = profile_url if profile_url.endswith("/") else profile_url + "/"
     reels_url = base if base.rstrip("/").endswith("reels") else base + "reels/"
     cmd = _gallery_dl_cmd(reels_url, "instagram", ["-j", "--range", f"1-{max_items}"], fingerprint)
+    _count_pass("gallery_dl")
     timeout = min(600, 120 + max_items * 2)
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -853,6 +985,7 @@ def _list_instagram(profile_url: str, max_items: int, fingerprint: dict | None =
     fingerprint = fingerprint or _session_fingerprint(handle)
     list_url = _gallery_dl_list_url(profile_url, "instagram")
     cmd = _gallery_dl_cmd(list_url, "instagram", ["-j", "--range", f"1-{max_items}"], fingerprint)
+    _count_pass("gallery_dl")
     # Deeper listings page through more feed requests (each spaced by gallery-dl's
     # own sleep), so scale the timeout with max_items.
     timeout = min(600, 120 + max_items * 2)
@@ -1012,6 +1145,32 @@ def _list_instagram(profile_url: str, max_items: int, fingerprint: dict | None =
             if st.get("likes") is not None and not pc.get("likes"):
                 pc["likes"] = st["likes"]
         print(f"[instagram] enriched {matched} item(s) with Reel view/comment counts")
+
+    # Comment counts for NON-VIDEO (and video) from the user-feed endpoint —
+    # the field gallery-dl fetches and discards. One paged request per account.
+    #
+    # This runs ALONGSIDE the clips pass rather than replacing it. The probe
+    # showed the feed also carries play_count for video, which suggests it could
+    # subsume clips entirely — but the feed is the *posts grid*, and a Reel that
+    # never appears there would silently lose its view count. Dropping clips on
+    # one probe's evidence would risk the view data on ~291 video rows to save a
+    # single request; that trade is not worth it, and Constitution VIII forbids
+    # acting on the unverified half of the finding.
+    feed_stats = _instagram_feed_stats(owner_id, handle, fingerprint, max_items)
+    if feed_stats:
+        matched = 0
+        for it in items:
+            st = feed_stats.get(_shortcode_from_url(it.get("source_url")))
+            if not st:
+                continue
+            matched += 1
+            pc = it["public_counts"]
+            # Fill only what is missing — the clips pass is authoritative for
+            # Reel views and has already run.
+            for key in ("comments", "views", "likes"):
+                if st.get(key) is not None and pc.get(key) is None:
+                    pc[key] = st[key]
+        print(f"[instagram] enriched {matched} item(s) with feed comment counts")
 
     return profile_meta, items
 

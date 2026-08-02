@@ -127,6 +127,24 @@ Postgres as a **space-joined string**, not an array
 
 ## 3. Views, shares, comment text
 
+> **UPDATED 2026-08-02 (feature 005-signal-field-coverage).** The table below is
+> the state as audited. Three of its figures have since moved or been superseded;
+> re-measure before relying on them:
+>
+> | As audited | Measured 2026-08-02 |
+> |---|---|
+> | 656 signal rows, 361 IG carousel/image | **~700 rows, 379 IG carousel/image** — the corpus grows every harvest, so re-derive rather than quote |
+> | "Share counts ABSENT — not requested from either platform" | **Half-right.** roach already parsed TikTok `shareCount` ([collect.py:545](service/roach/collect.py#L545)) and yt-dlp `repost_count` ([:450](service/roach/collect.py#L450)); the value was discarded at the *storage* boundary. Now persisted to `harvested_signals.shares`. |
+> | "IG `public_metadata` always empty" | **Superseded 2026-08-01.** `_instagram_profile_info` + a GraphQL fallback populate it; 11 accounts carry follower observations. |
+>
+> Also missed by the original audit: **Instagram stories expose no public counts
+> at all** — not even likes — which is now recorded as a platform limit rather
+> than reading as a permanent collection failure.
+>
+> Why a field is empty is no longer a matter of inference: see
+> `field_availability` (can this ever be known?) and `capture_outcomes` (was it
+> known this time?), and `specs/005-signal-field-coverage/`.
+
 | Signal | Status | Detail |
 |---|---|---|
 | **View/play counts** | **PARTIAL — video only** | Field exists everywhere; populated only for video. Measured: 293/656 signal rows have `views` — 269 IG video + 24 TikTok video. **0 of 361 IG carousel/image rows** have views. Instagram simply does not expose plays for non-video here. |

@@ -72,6 +72,37 @@ browser:
 - **Cookies** (`secrets/cookies.txt`, gitignored) are required for IG depth; pools live in
   `secrets/cookies.d/<platform>/*.txt`.
 
+## What each listing costs (feature 005)
+
+`/list` returns a `request_stats` object counting this listing's network passes.
+**Read the observability boundary before quoting it**: `gallery_dl_invocations`
+and `yt_dlp_invocations` count *process invocations*, each of which pages
+internally — the true HTTP request count is not observable from outside the
+subprocess and is deliberately **not** reported as one. Only
+`direct_api_requests` (our own `curl_cffi` calls) is an exact count. Do not sum
+them into a single "requests" number: that would present an estimate and an
+observation in the same field, which constitution VI forbids.
+
+This exists so a change's marginal collection volume can be stated against a
+measured baseline (FR-024) — instrumenting runs that were going to happen anyway,
+rather than spending real requests to measure how many we spend.
+
+### gallery-dl drops Instagram comment counts
+
+roach lists Instagram via `gallery-dl`, which resolves to
+`/v1/feed/user/{user_id}/` (`extractor/instagram.py:1151`, gallery-dl 1.32.6).
+Its post parser maps **`like_count` and nothing else count-shaped** (`:240`) —
+`comment_count` is never read, though the same media object shape carries it
+(proven by `_instagram_clip_stats`, which reads `comment_count` off the clips
+endpoint at [collect.py:767](service/roach/collect.py#L767)).
+
+So the missing comment count on 379 carousel/image rows is very likely a
+**mapping gap in a third-party library, not a platform limit** — the payload is
+already being fetched. gallery-dl `-j` emits only its own mapped dict and offers
+no raw passthrough, so recovering it needs a direct call in the
+`_instagram_clip_stats` mould. Confirming this needs ONE live probe; the
+determination is recorded in `config/field_availability.yaml`.
+
 ## Conventions
 
 - **Stateless per call** — no DB in roach; persistence + orchestration are on the Prefect side.

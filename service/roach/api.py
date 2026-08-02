@@ -97,7 +97,15 @@ def list_profile(req: ListRequest, x_api_key: str | None = Header(default=None))
         raise
     except Exception as e:
         return _failure("list_failed", e)
-    return {"ok": True, "profile": profile, "items": items}
+    # `request_stats` (feature 005, FR-024): what this listing actually cost in
+    # network passes. Purely observational — measured on runs that were going to
+    # happen anyway, so establishing the baseline costs zero extra requests.
+    # Best-effort: accounting must never break a listing.
+    try:
+        stats = collect._pass_counts()
+    except Exception:
+        stats = None
+    return {"ok": True, "profile": profile, "items": items, "request_stats": stats}
 
 
 @app.post("/download")

@@ -569,3 +569,127 @@ def test_date_range_selector_open_ended_start():
     # only an end bound: keep everything up to and including 2026-06-30
     selected = engine.make_date_range_selector(None, "2026-06-30")(items)
     assert sorted(i["content_id"] for i in selected) == ["in", "old"]
+
+
+# ==========================================================================
+# Feature 005-signal-field-coverage: layout + capture provenance
+# ==========================================================================
+
+def test_row_core_width_matches_header():
+    """
+    The row builder and the header must stay the same width. A mismatch writes
+    every value one column off — silently relabelling `advertisement`, the one
+    column reviewers edit by hand. Appending a column without updating
+    `_row_core` is exactly how that happens.
+    """
+    row = engine._row_core(
+        username="acme", platform="tiktok",
+        item={"content_id": "t1", "content_type": "video",
+              "public_counts": {"views": 10, "likes": 2, "comments": 1, "shares": 3}},
+        analysis={}, drive_file_ids=[], harvest_name="run", harvest_date="2026-08-02",
+    )
+    # ACCOUNT_HEADER's first column is `id`, supplied by the caller.
+    assert len(row) == len(engine.ACCOUNT_HEADER) - 1
+    assert row[-1] == 3, "shares must be the trailing value, matching the header"
+
+
+def test_row_core_shares_blank_when_platform_publishes_none():
+    """Instagram exposes no share count; the cell is blank, not zero."""
+    row = engine._row_core(
+        username="acme", platform="instagram",
+        item={"content_id": "i1", "content_type": "carousel",
+              "public_counts": {"likes": 5, "shares": None}},
+        analysis={}, drive_file_ids=[], harvest_name="run", harvest_date="2026-08-02",
+    )
+    assert row[-1] == ""
+
+
+def test_advertisement_column_position_is_stable():
+    """
+    Feature 005 appends `shares` AFTER `advertisement`. If a later change ever
+    inserts mid-layout, this catches it before reviewer data is relabelled.
+    """
+    assert engine.ACCOUNT_HEADER[-1] == "shares"
+    assert engine.ACCOUNT_HEADER[-2] == "advertisement"
+    assert engine.CONTENT_ID_COL == engine.ACCOUNT_HEADER.index("content_id")
+
+
+def test_detail_header_inherits_shares():
+    assert "shares" in engine.DETAIL_HEADER
+    assert engine.DETAIL_HEADER[-1] == "account_folder_id"
+
+
+def test_capture_kind_mapping():
+    # TikTok has NO supplementary pass — its counts come off the primary
+    # listing. Naming one would fabricate provenance for every TikTok row in the
+    # one table whose entire purpose is provenance.
+    assert engine._capture_kind_for("tiktok", "video") is None
+    assert engine._capture_kind_for("instagram", "video") == "instagram_clip_stats"
+    # Non-video is attributed to the feed pass — the clips grid was never going
+    # to match it, so recording no_match against clips would be noise.
+    assert engine._capture_kind_for("instagram", "carousel") == "instagram_feed_stats"
+    assert engine._capture_kind_for("instagram", "image") == "instagram_feed_stats"
+    assert engine._capture_kind_for("threads", "video") is None
+
+
+@pytest.mark.asyncio
+async def test_capture_outcome_no_match_for_unenriched_item(monkeypatch):
+    """
+    FR-003b, the distinction that carries the feature. A carousel is absent from
+    the Reels-keyed clips response, so the pass returns nothing for it — that is
+    `no_match`, NOT `failed`. Recording it as a failure would make every normal
+    non-Reel post look like a collection error.
+    """
+    calls = []
+
+    async def fake_record(**kw):
+        calls.append(kw)
+
+    monkeypatch.setattr(engine, "social_capture_record_outcome", fake_record)
+
+    await engine._record_capture_outcomes(
+        platform="instagram", content_id="c1", content_type="carousel",
+        counts={"likes": 10, "views": None, "comments": None},
+        account_id="a1", run_id="r1",
+    )
+    assert calls[0]["outcome"] == "no_match"
+    assert calls[0]["capture_kind"] == "instagram_feed_stats"
+
+
+@pytest.mark.asyncio
+async def test_carousel_with_comments_is_success_despite_no_views(monkeypatch):
+    """
+    A carousel can never have views (platform limit). Requiring one as evidence
+    would mark every carousel `no_match` forever, which is exactly the false
+    signal this table exists to prevent.
+    """
+    calls = []
+
+    async def fake_record(**kw):
+        calls.append(kw)
+
+    monkeypatch.setattr(engine, "social_capture_record_outcome", fake_record)
+
+    await engine._record_capture_outcomes(
+        platform="instagram", content_id="c2", content_type="carousel",
+        counts={"likes": 10, "views": None, "comments": 7},
+        account_id="a1", run_id="r1",
+    )
+    assert calls[0]["outcome"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_capture_outcome_success_for_enriched_item(monkeypatch):
+    calls = []
+
+    async def fake_record(**kw):
+        calls.append(kw)
+
+    monkeypatch.setattr(engine, "social_capture_record_outcome", fake_record)
+
+    await engine._record_capture_outcomes(
+        platform="instagram", content_id="r1", content_type="video",
+        counts={"likes": 10, "views": 5000, "comments": 12},
+        account_id="a1", run_id="r1",
+    )
+    assert calls[0]["outcome"] == "success"

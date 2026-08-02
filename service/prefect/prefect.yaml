@@ -80,6 +80,35 @@ deployments:
       - prefect.deployments.steps.set_working_directory:
           directory: /app
 
+  # Field availability sync (feature 005-signal-field-coverage) — reconciles
+  # config/field_availability.yaml into the field_availability table, so "can
+  # this field ever be known?" is answerable in SQL alongside the observations
+  # themselves.
+  #
+  # UNSCHEDULED by design. Determinations change only when a human investigates
+  # something and records a finding; a cron would add nothing but noise, and
+  # would rewrite synced_at on every row forever. Run it after editing the YAML.
+  - name: field-availability-sync
+    entrypoint: flows/field_availability_sync.py:field_availability_sync
+    work_pool:
+      name: noktah-pool
+    parameters: {}
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
+  # Sheet header backfill (feature 005) — ONE-OFF migration bringing existing
+  # harvest tabs to the current column layout after `shares` was appended.
+  # Unscheduled and idempotent; touches only row 1, never reviewer-entered data.
+  - name: sheet-header-backfill
+    entrypoint: flows/sheet_header_backfill.py:sheet_header_backfill
+    work_pool:
+      name: noktah-pool
+    parameters: {}
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
   # Social harvest — Stories only (ephemeral, ~24h). NO schedule for now — trigger
   # manually or add a frequent schedule later. Uses roach's fast Stories listing.
   - name: social-harvest-stories

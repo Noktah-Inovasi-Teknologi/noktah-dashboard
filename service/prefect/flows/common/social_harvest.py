@@ -23,6 +23,7 @@ try:
         RoachRateLimitedError,
         social_account_record_followers,
         social_account_resolve,
+        social_capture_record_outcome,
         social_dedup_check,
         social_dedup_delete,
         social_dedup_record,
@@ -53,6 +54,7 @@ except ImportError:
         RoachRateLimitedError,
         social_account_record_followers,
         social_account_resolve,
+        social_capture_record_outcome,
         social_dedup_check,
         social_dedup_delete,
         social_dedup_record,
@@ -102,8 +104,20 @@ ACCOUNT_HEADER = [
     "id", "username", "platform", "content_id", "content_type", "source_url", "published_at",
     "caption", "hashtags", "views", "likes", "comments", "drive_file_ids",
     "subtitle", "content_flow", "summary", "harvest_name", "harvest_date", "advertisement",
+    # Feature 005: appended at the END, never inserted mid-layout. Inserting
+    # beside views/likes/comments — where it logically belongs — would shift
+    # `advertisement`, the one column a human edits and social-harvest-sync
+    # reads back by position on older tabs. Logical grouping is not worth
+    # re-indexing reviewer-entered data; the metrics sit together in Postgres,
+    # where column order is irrelevant.
+    "shares",
 ]
 # Per-run detail sheet = account columns + the account folder id.
+# NOTE: because this is derived, appending a column to ACCOUNT_HEADER *inserts*
+# it mid-layout here, landing where older detail sheets hold `account_folder_id`.
+# That is why `sheet-header-backfill` leaves detail sheets alone. It is safe
+# because each run creates its own detail sheet and never rewrites an earlier
+# one, and because every read of these sheets resolves columns by name.
 DETAIL_HEADER = ACCOUNT_HEADER + ["account_folder_id"]
 # 0-based index of content_id within ACCOUNT_HEADER (for row-deletion on retry).
 CONTENT_ID_COL = ACCOUNT_HEADER.index("content_id")
@@ -171,7 +185,80 @@ def _row_core(
         ",".join(drive_file_ids),
         analysis.get("subtitle", ""), analysis.get("flow", ""), analysis.get("summary", ""),
         harvest_name, harvest_date, DEFAULT_ADVERTISEMENT,
+        # Trailing, matching ACCOUNT_HEADER. Empty for Instagram (no public
+        # share count exists there) — field_availability is what records that
+        # this blank is a platform limit rather than a collection miss.
+        counts.get("shares", ""),
     )]
+
+
+# Which supplementary capture pass is responsible for which item, per platform
+# and content type. Only passes that actually run are recorded — the primary
+# listing is NOT a supplementary capture (its failure aborts the profile and is
+# already a run-level fact, so recording it here would double-count).
+def _capture_kind_for(platform: str, content_type: str) -> Optional[str]:
+    # TikTok deliberately returns None. Its counts come straight off the PRIMARY
+    # listing — yt-dlp's flat entries and `_tiktok_counts` on the gallery-dl
+    # photo/story paths — and roach has no supplementary TikTok pass at all.
+    # Recording `tiktok_stats` would invent a pass name for every TikTok row, in
+    # the one table whose entire purpose is provenance. A fabricated pass name is
+    # worse than the NULL it replaced, because it makes a positive claim.
+    if platform == "instagram":
+        # Two per-item Instagram passes now run. The Reels-grid pass is keyed by
+        # shortcode and only ever matches video; the feed pass (added after the
+        # 2026-08-02 probe) supplies comment counts across all feed types. A
+        # carousel is therefore attributed to the feed pass — attributing it to
+        # clips would record `no_match` for a pass that was never going to match
+        # it, which is noise rather than provenance.
+        return "instagram_clip_stats" if content_type == "video" else "instagram_feed_stats"
+    return None
+
+
+async def _record_capture_outcomes(
+    platform: str, content_id: str, content_type: str, counts: Dict[str, Any],
+    account_id: Optional[str], run_id: Optional[str],
+) -> None:
+    """Record what each supplementary pass produced for one item (FR-003).
+
+    The distinction that carries the feature (FR-003b):
+
+      success   the pass ran and returned a value for this item
+      no_match  the pass ran FINE and returned nothing for THIS item — the live
+                case of a carousel absent from the Reels-keyed clips response.
+                Without this, a perfectly normal non-Reel post is indistinguishable
+                from an enrichment error, which is the ambiguity feature 005 exists
+                to remove.
+
+    An outright pass failure is recorded by the caller that owns the pass, with a
+    classified reason; it is not inferable from the item payload here.
+    """
+    kind = _capture_kind_for(platform, content_type)
+    if kind is None:
+        return
+    # Evidence the responsible pass produced something for this item. For video
+    # that is views/comments from the clips grid; for non-video it is the comment
+    # count the feed pass supplies (non-video has no views by platform limit, so
+    # requiring one would mark every carousel `no_match` forever).
+    #
+    # KNOWN LIMITATION: this INFERS the outcome from which counts came back, so
+    # it can only ever produce `success` or `no_match`. A pass that failed
+    # outright — expired cookie, 429, parse error — returns {} from roach and is
+    # recorded here as `no_match`, i.e. "ran fine, this item wasn't in it".
+    # Only roach can tell those apart; it distinguishes them internally and then
+    # flattens them to {}. Closing this needs roach to report a per-pass verdict
+    # alongside `request_stats`, which is a roach-side change beyond this
+    # feature's scope. Until then `failed`/`not_attempted` are unreachable on the
+    # item path (the account-level follower capture does emit them).
+    keys = ("views", "comments") if content_type == "video" else ("comments",)
+    produced = any(counts.get(k) is not None for k in keys)
+    await social_capture_record_outcome(
+        platform=platform,
+        content_id=content_id,
+        capture_kind=kind,
+        outcome="success" if produced else "no_match",
+        account_id=account_id,
+        run_id=run_id,
+    )
 
 
 def make_recent_n_selector(n: int) -> DepthSelector:
@@ -411,6 +498,15 @@ async def run_harvest(
 
             profile_meta = listing["profile"]
             username = _resolve_handle(profile_url, profile_meta)
+            # FR-024: record what this profile's listing actually cost, so the
+            # baseline is measured rather than estimated — and so any future
+            # change's marginal volume can be stated against a real number.
+            # Read off a run that was happening anyway; costs no extra requests.
+            stats = listing.get("request_stats")
+            if stats:
+                summary.setdefault("request_stats", {})[username] = stats
+                run_logger.info(f"{username}: listing passes {stats}")
+
             all_items = listing.get("items", [])
             items = depth_selector(all_items)
             run_logger.info(f"{username}: {len(all_items)} items available, {len(items)} selected for this run")
@@ -443,18 +539,41 @@ async def run_harvest(
             # does not (research R3) — that is the expected, correct state,
             # not a bug, and is why a miss is recorded rather than treated as
             # an error.
+            #
+            # Feature 005 (FR-018): the outcome is ALSO written to
+            # capture_outcomes. Until now a miss existed only in this run's
+            # summary, so "does this account have no observation for August, or
+            # was it never attempted?" could not be answered by query — only by
+            # reading run logs. The observation table itself stays observations-
+            # only (constitution VII): a miss never becomes a zero row there.
+            follower_outcome, follower_reason = "success", None
             try:
                 follower_count = (profile_meta.get("public_metadata") or {}).get("follower_count")
                 wrote = await social_account_record_followers(account_id=account_id, follower_count=follower_count, run_id=run_record_id)
                 if not wrote:
+                    follower_outcome, follower_reason = "no_match", None
                     summary["follower_capture_missed"].append(
                         {"platform": platform, "handle": username, "reason": "not_returned"}
                     )
             except Exception as e:
                 run_logger.warning(f"{username}: follower capture failed (non-fatal): {e}")
+                follower_outcome, follower_reason = "failed", "unexpected_structure"
                 summary["follower_capture_missed"].append(
                     {"platform": platform, "handle": username, "reason": "error"}
                 )
+            if platform == "instagram":
+                try:
+                    await social_capture_record_outcome(
+                        platform=platform,
+                        content_id=f"acct:{username}",
+                        capture_kind="instagram_profile_info",
+                        outcome=follower_outcome,
+                        reason=follower_reason,
+                        account_id=account_id,
+                        run_id=run_record_id,
+                    )
+                except Exception as e:
+                    run_logger.warning(f"{username}: follower capture-outcome write failed (non-fatal): {e}")
 
             # Folder hierarchy: {Platform}/{username}
             platform_folder_id = await drive_folder_ensure(_platform_display(platform), parent_id, credentials_block_name=credentials_block_name)
@@ -606,6 +725,9 @@ async def run_harvest(
                         views=counts.get("views"),
                         likes=counts.get("likes"),
                         comments=counts.get("comments"),
+                        # Feature 005. roach has always parsed this on both
+                        # TikTok paths; it was discarded at this boundary.
+                        shares=counts.get("shares"),
                         subtitle=_cell(analysis.get("subtitle", "")),
                         content_flow=_cell(analysis.get("flow", "")),
                         summary=_cell(analysis.get("summary", "")),
@@ -614,6 +736,19 @@ async def run_harvest(
                     )
                 except Exception as e:
                     run_logger.warning(f"{username}/{content_id}: signal-store write failed (non-fatal): {e}")
+
+                # Capture provenance (feature 005, FR-003): record whether each
+                # supplementary pass actually produced a value for THIS item, so
+                # an empty count is resolvable to exactly one cause. Best-effort
+                # for the same reason as the signal write — and a missing outcome
+                # degrades to "provenance unknown", which is the safe reading.
+                try:
+                    await _record_capture_outcomes(
+                        platform=platform, content_id=content_id, content_type=content_type,
+                        counts=counts, account_id=account_id, run_id=run_record_id,
+                    )
+                except Exception as e:
+                    run_logger.warning(f"{username}/{content_id}: capture-outcome write failed (non-fatal): {e}")
 
                 data.append({"username": username, "content_id": content_id, "drive_file_ids": drive_file_ids, "analysis_status": analysis.get("status")})
                 summary["items_collected"] += 1

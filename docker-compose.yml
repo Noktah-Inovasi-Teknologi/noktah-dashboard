@@ -42,6 +42,11 @@ services:
       - ./service/prefect/prefect.yaml:/app/prefect.yaml
       # Sheet-backed hashmap loader — mounted for the same reason.
       - ./service/prefect/hashmap.py:/app/hashmap.py
+      # Field availability determinations (feature 005) — the version-controlled
+      # source of truth for "can this field ever be known?". Mounted read-only:
+      # it is edited in the repo and reviewed as a diff, never from inside the
+      # container.
+      - ./config/field_availability.yaml:/app/config/field_availability.yaml:ro
       # Shared DB pool/transaction helpers — same reason again.
       - ./service/prefect/db.py:/app/db.py
       - social_data:/data
@@ -103,6 +108,8 @@ services:
       - ./service/prefect/data:/app/data
       # Sheet-backed hashmap loader — mounted so edits apply without an image rebuild.
       - ./service/prefect/hashmap.py:/app/hashmap.py
+      # Field availability determinations (feature 005), read-only. See above.
+      - ./config/field_availability.yaml:/app/config/field_availability.yaml:ro
       # Shared DB pool/transaction helpers — same reason.
       - ./service/prefect/db.py:/app/db.py
       - social_data:/data

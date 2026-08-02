@@ -495,6 +495,44 @@ async def sheets_tab_ensure(
         raise
 
 
+def column_index(header_row: List[str], name: str) -> int:
+    """0-based index of `name` in a sheet's header row.
+
+    Raises `KeyError` when the column is absent (FR-016b). Deliberately not
+    tolerant: silently defaulting to a positional index is worse than a failed
+    read, because it would write a reviewer's advertisement flag onto unrelated
+    content. A missing expected column means the tab is not the layout we think
+    it is, and that must stop the caller.
+    """
+    try:
+        return header_row.index(name)
+    except ValueError:
+        raise KeyError(
+            f"column {name!r} not found in header {header_row!r}; "
+            f"the tab may predate a layout change — run flows/sheet_header_backfill.py"
+        ) from None
+
+
+@task(name="google.sheets.ensure-header", retries=2, retry_delay_seconds=30)
+async def sheets_ensure_header(
+    spreadsheet_id: str, tab_name: str, header_row: List[str],
+    credentials_block_name: str = "google-creds",
+) -> str:
+    """Bring one existing tab's header up to `header_row` by appending columns.
+
+    Returns "unchanged", "extended", "empty", or "mismatch". Shared by the delivery path
+    (via `sheets_tab_ensure`) and `sheet-header-backfill`, so one definition
+    governs both and they cannot drift into disagreeing about the layout.
+    """
+    try:
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
+        client = google_creds.get_client()
+        return client.extend_tab_header(spreadsheet_id, tab_name, header_row)
+    except Exception as e:
+        logger.error(f"Failed to ensure header on '{tab_name}' in {spreadsheet_id}: {str(e)}")
+        raise
+
+
 @task(name="sheets.tab.row-count", retries=2, retry_delay_seconds=30)
 async def sheets_tab_row_count(
     spreadsheet_id: str, tab_name: str, credentials_block_name: str = "google-creds"

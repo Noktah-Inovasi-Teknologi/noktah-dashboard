@@ -136,13 +136,49 @@ rehearsal clone), and verify row counts and headline queries **before** running 
 `noktah_dashboard` directly. Applying schema changes to the live database is a deliberate,
 separate step — never the default path while iterating.
 
+## Field availability and capture outcomes (feature 005)
+
+Two tables make absence legible. Before them, "the platform never publishes
+this" and "our enrichment call failed" were both stored as `NULL`, so a
+collection regression was indistinguishable from a platform limit.
+
+- **`field_availability`** — "can this ever be known?", keyed by
+  `(platform, content_type, field_name)`. Reference data, mirrored from the
+  version-controlled `config/field_availability.yaml` by `field-availability-sync`.
+  Holds **no foreign keys**, deliberately: a determination must be updatable
+  without touching a stored observation.
+- **`capture_outcomes`** — "was it known this time?". **Append-only**, one row
+  per supplementary capture attempt.
+
+Three details that are easy to get wrong:
+
+- **`capture_outcomes` is keyed by `(platform, content_id)`, not
+  `harvested_signals.id`.** A capture can fail *before* a signal row exists;
+  keying to the signal row would make exactly those failures unrecordable.
+- **`no_match` is not `failed`.** A carousel absent from the Reels-keyed clips
+  response is `no_match` — the pass worked, this item just wasn't in it.
+  Collapsing the two restores the ambiguity the feature removes.
+- **`CHECK (outcome <> 'failed' OR (reason IS NOT NULL AND reason IN (...)))`** —
+  the `IS NOT NULL` term is load-bearing. Without it, `outcome='failed'` with a
+  NULL reason evaluates to `false OR NULL` = `NULL`, and **a CHECK constraint
+  passes on NULL**, letting through precisely the case being forbidden. Caught by
+  `test_capture_outcome.py::test_failed_without_reason_rejected`.
+
+The status vocabulary is closed and enforced at the database boundary, not only
+in the sync task — it is reference data other systems read, so a sixth value must
+be impossible to store even if the task is bypassed.
+
 ## Naming
 
-Flows: `roster-sync`, `spine-backfill` — kebab-case (constitution I).
+Flows: `roster-sync`, `spine-backfill`, `field-availability-sync`,
+`sheet-header-backfill` — kebab-case (constitution I).
 Tasks: `roster.client.upsert`, `roster.alias.upsert`, `roster.account.upsert`, `roster.role.upsert`,
 `roster.account.record-rename`, `roster.alias.reassign`, `spine.signal.link`, `spine.item.link`,
 `spine.knowledge.link`, `social.account.resolve`, `social.account.record-followers`,
-`run.record.start`, `run.record.finish` — `api-group.resource.action`.
+`social.capture.record-outcome`, `availability.determination.sync`,
+`availability.determination.get`, `availability.determination.coverage-gaps`,
+`google.sheets.ensure-header`, `run.record.start`, `run.record.finish` —
+`api-group.resource.action`.
 
 ---
 

@@ -28,9 +28,12 @@ echo "== Building '$DB_B' from the migration chain ..."
 docker exec "$CONTAINER" dropdb -U "$USER" --if-exists "$DB_B"
 docker exec "$CONTAINER" createdb -U "$USER" "$DB_B"
 docker exec "$CONTAINER" psql -U "$USER" -d "$DB_B" -c "CREATE EXTENSION IF NOT EXISTS pgcrypto; CREATE EXTENSION IF NOT EXISTS pg_trgm;" >/dev/null
+# Explicit, ordered list — never a glob. `00N_*.sql` also matches
+# `00N_*.down.sql`, and applying a migration followed by its own reversal
+# silently undoes it (schema.md).
 for m in 000_schema_migrations 001_knowledge_records 002_harvested_items \
          003_harvested_signals 004_relational_spine 005_link_existing \
-         006_enforce_account_link; do
+         006_enforce_account_link 007_signal_field_coverage; do
   docker exec -i "$CONTAINER" psql -U "$USER" -d "$DB_B" -v ON_ERROR_STOP=1 < "$MIGRATIONS_DIR/$m.sql" >/dev/null
 done
 

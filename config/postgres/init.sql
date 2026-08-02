@@ -303,7 +303,13 @@ CREATE TABLE IF NOT EXISTS harvested_signals (
     -- harvested_items above for why these are added as NULL + explicit-named
     -- ALTER rather than inline NOT NULL / REFERENCES.
     account_id         UUID NULL,
-    run_id             UUID NULL
+    run_id             UUID NULL,
+    -- Signal Field Coverage (migration 007). Declared LAST because 007 adds it
+    -- with ALTER TABLE ADD COLUMN, which appends — ordinal_position must match
+    -- between this path and the migration chain or schema parity fails.
+    -- Nullable by design: emptiness is resolved by field_availability /
+    -- capture_outcomes below, never by a sentinel. 0 shares is a real value.
+    shares             BIGINT NULL
 );
 
 -- One signal row per harvested item; re-harvests upsert the freshest metrics.
@@ -342,3 +348,123 @@ ON CONFLICT (version) DO NOTHING;
 -- Fuzzy handle matching (own/competitor lookups may not match casing exactly).
 CREATE INDEX IF NOT EXISTS ix_signal_profile_trgm
     ON harvested_signals USING gin (profile_key gin_trgm_ops);
+
+-- ===========================================================================
+-- Signal Field Coverage (feature 005) — mirrors migration 007.
+-- Constraints are added by explicit named ALTER, exactly as 007 does, so both
+-- build paths produce byte-identical pg_constraint entries (schema.md).
+-- ===========================================================================
+
+-- "Can this ever be known?" — reference data, mirrored from
+-- config/field_availability.yaml by flows/field_availability_sync.py.
+-- Deliberately NOT foreign-keyed to any observation: a determination must be
+-- updatable without touching a stored observation (FR-007).
+CREATE TABLE IF NOT EXISTS field_availability (
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    platform           TEXT NOT NULL,
+    content_type       TEXT NOT NULL,
+    field_name         TEXT NOT NULL,
+    status             TEXT NOT NULL,
+    reason             TEXT NOT NULL,
+    evidence           TEXT NULL,
+    determined_on      DATE NOT NULL,
+    source_version     TEXT NOT NULL,
+    synced_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_field_availability_platform') THEN
+        ALTER TABLE field_availability
+            ADD CONSTRAINT chk_field_availability_platform
+            CHECK (platform IN ('instagram', 'tiktok'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_field_availability_status') THEN
+        ALTER TABLE field_availability
+            ADD CONSTRAINT chk_field_availability_status
+            CHECK (status IN (
+                'available',
+                'unavailable_platform_limit',
+                'not_collected_by_decision',
+                'inconclusive',
+                'undetermined'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_field_availability_reason_nonempty') THEN
+        ALTER TABLE field_availability
+            ADD CONSTRAINT chk_field_availability_reason_nonempty
+            CHECK (btrim(reason) <> '');
+    END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_field_availability_triple
+    ON field_availability (platform, content_type, field_name);
+
+-- "Was it known this time?" — append-only, one row per supplementary capture
+-- attempt. Keyed by (platform, content_id) rather than harvested_signals.id
+-- because a capture can fail BEFORE a signal row exists, and those are exactly
+-- the failures that must not be silently dropped.
+CREATE TABLE IF NOT EXISTS capture_outcomes (
+    id                 BIGSERIAL PRIMARY KEY,
+    platform           TEXT NOT NULL,
+    content_id         TEXT NOT NULL,
+    capture_kind       TEXT NOT NULL,
+    outcome            TEXT NOT NULL,
+    reason             TEXT NULL,
+    account_id         UUID NULL,
+    run_id             UUID NULL,
+    observed_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_capture_outcomes_platform') THEN
+        ALTER TABLE capture_outcomes
+            ADD CONSTRAINT chk_capture_outcomes_platform
+            CHECK (platform IN ('instagram', 'tiktok'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_capture_outcomes_kind') THEN
+        ALTER TABLE capture_outcomes
+            ADD CONSTRAINT chk_capture_outcomes_kind
+            CHECK (capture_kind IN (
+                'instagram_clip_stats',
+                'instagram_feed_stats',
+                'instagram_profile_info',
+                'tiktok_stats'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_capture_outcomes_outcome') THEN
+        ALTER TABLE capture_outcomes
+            ADD CONSTRAINT chk_capture_outcomes_outcome
+            CHECK (outcome IN ('success', 'no_match', 'failed', 'not_attempted'));
+    END IF;
+    -- `reason IS NOT NULL` is load-bearing: without it, outcome='failed' with a
+    -- NULL reason evaluates to `false OR NULL` = NULL, and a CHECK passes on
+    -- NULL — letting through exactly the case being forbidden.
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_capture_outcomes_reason') THEN
+        ALTER TABLE capture_outcomes
+            ADD CONSTRAINT chk_capture_outcomes_reason
+            CHECK (
+                outcome <> 'failed'
+                OR (reason IS NOT NULL
+                    AND reason IN ('not_found', 'private', 'deleted', 'blocked',
+                                   'parse_failure', 'timeout', 'unexpected_structure'))
+            );
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_capture_outcomes_account') THEN
+        ALTER TABLE capture_outcomes
+            ADD CONSTRAINT fk_capture_outcomes_account FOREIGN KEY (account_id) REFERENCES accounts(id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_capture_outcomes_run') THEN
+        ALTER TABLE capture_outcomes
+            ADD CONSTRAINT fk_capture_outcomes_run FOREIGN KEY (run_id) REFERENCES runs(id);
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS ix_capture_outcomes_item
+    ON capture_outcomes (platform, content_id, observed_at DESC);
+CREATE INDEX IF NOT EXISTS ix_capture_outcomes_run
+    ON capture_outcomes (run_id);
+CREATE INDEX IF NOT EXISTS ix_capture_outcomes_account
+    ON capture_outcomes (account_id, capture_kind, observed_at DESC);
+
+INSERT INTO schema_migrations (version) VALUES ('007_signal_field_coverage')
+ON CONFLICT (version) DO NOTHING;

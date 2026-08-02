@@ -16,13 +16,15 @@ import httpx
 from prefect import task
 
 try:
-    from ..blocks.google_credentials import GoogleCredentials
+    from ..blocks.google_credentials import GoogleCredentials, col_letter
     from ..db import db_pool
+    from .google_tasks import column_index
 except ImportError:
     import sys
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-    from blocks.google_credentials import GoogleCredentials
+    from blocks.google_credentials import GoogleCredentials, col_letter
     from db import db_pool
+    from tasks.google_tasks import column_index
 
 logger = logging.getLogger(__name__)
 
@@ -32,16 +34,6 @@ _ADVERT_TRUE = {"true", "1", "yes", "ya", "y", "t", "x", "✓", "ada", "iklan"}
 
 def _parse_advert(value: Any) -> bool:
     return str(value).strip().lower() in _ADVERT_TRUE
-
-
-def _col_letter(i: int) -> str:
-    """0-based column index -> A1 letter (A, B, … Z, AA)."""
-    s = ""
-    i += 1
-    while i:
-        i, r = divmod(i - 1, 26)
-        s = chr(65 + r) + s
-    return s
 
 
 class RoachRateLimitedError(Exception):
@@ -253,6 +245,7 @@ async def social_signal_record(
     summary: Optional[str],
     account_id: Optional[str] = None,
     run_id: Optional[str] = None,
+    shares: Any = None,
 ) -> None:
     """
     Mirror a delivered item's engagement + analysis into the harvested_signals
@@ -266,6 +259,11 @@ async def social_signal_record(
 
     Idempotent per (platform, content_id): a re-harvest upserts the freshest
     metrics/analysis rather than duplicating the row.
+
+    `shares` (feature 005) is the public share/repost count. roach has always
+    parsed it on both TikTok paths — it was simply discarded here. Instagram
+    publishes no share count anywhere, so it arrives as None and is recorded as
+    absent; `field_availability` is what says WHY it is absent.
     """
     pool = await _db_pool()
     try:
@@ -275,8 +273,8 @@ async def social_signal_record(
                 INSERT INTO harvested_signals
                     (platform, profile_key, content_id, content_type, published_at,
                      caption, hashtags, views, likes, comments, subtitle, content_flow, summary,
-                     account_id, run_id)
-                VALUES ($1, $2, $3, $4, $5::text::timestamptz, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                     account_id, run_id, shares)
+                VALUES ($1, $2, $3, $4, $5::text::timestamptz, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
                 ON CONFLICT (platform, content_id) DO UPDATE SET
                     profile_key = EXCLUDED.profile_key,
                     content_type = EXCLUDED.content_type,
@@ -286,6 +284,10 @@ async def social_signal_record(
                     views = EXCLUDED.views,
                     likes = EXCLUDED.likes,
                     comments = EXCLUDED.comments,
+                    -- COALESCE, unlike the metrics above: a platform that stops
+                    -- returning a share count must not erase one we already
+                    -- observed. Absence is not evidence of zero.
+                    shares = COALESCE(EXCLUDED.shares, harvested_signals.shares),
                     subtitle = EXCLUDED.subtitle,
                     content_flow = EXCLUDED.content_flow,
                     summary = EXCLUDED.summary,
@@ -297,6 +299,88 @@ async def social_signal_record(
                 caption, hashtags,
                 _coerce_count(views), _coerce_count(likes), _coerce_count(comments),
                 subtitle, content_flow, summary, account_id, run_id,
+                _coerce_count(shares),
+            )
+    finally:
+        await pool.close()
+
+
+# Closed vocabularies for capture outcomes (feature 005-signal-field-coverage).
+# Mirrored by CHECK constraints in migration 007 — validated here for a readable
+# error at the call site, and there so a bad value cannot be stored at all.
+CAPTURE_KINDS = frozenset({
+    "instagram_clip_stats",
+    "instagram_feed_stats",
+    "instagram_profile_info",
+    "tiktok_stats",
+})
+CAPTURE_OUTCOMES = frozenset({"success", "no_match", "failed", "not_attempted"})
+CAPTURE_FAILURE_REASONS = frozenset({
+    "not_found", "private", "deleted", "blocked",
+    "parse_failure", "timeout", "unexpected_structure",
+})
+
+
+@task(name="social.capture.record-outcome", retries=0)
+async def social_capture_record_outcome(
+    platform: str,
+    content_id: str,
+    capture_kind: str,
+    outcome: str,
+    reason: Optional[str] = None,
+    account_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> None:
+    """
+    Record whether one supplementary capture produced a value for one item.
+
+    This is what makes an empty engagement value legible. Before feature 005,
+    "Instagram never publishes this for carousels" and "the enrichment call
+    failed this run" were both stored as NULL, so a collection regression could
+    not be told apart from a platform limit.
+
+    APPEND-ONLY (FR-003a). Insert only — no upsert. A re-harvest that re-attempts
+    a capture adds a row; it never overwrites the earlier attempt. Constitution
+    VII makes this load-bearing rather than stylistic: velocity is derivable only
+    from an append-only history.
+
+    `outcome` semantics, and the one that gets missed:
+        success        the pass ran and returned a value for this item
+        no_match       the pass ran FINE but returned nothing for THIS item —
+                       e.g. a carousel absent from the Reels-keyed clips response.
+                       Distinct from `failed`; conflating them would leave the
+                       corpus exactly as ambiguous as before, with more tables.
+        failed         the pass itself broke; `reason` is REQUIRED and classified
+        not_attempted  skipped for this item (no cookie session, pass disabled)
+
+    `retries=0`: a local database write whose failure should surface once, and it
+    sits on the collection path where constitution II's retry mandate is carved
+    out anyway.
+    """
+    if capture_kind not in CAPTURE_KINDS:
+        raise ValueError(f"unknown capture_kind {capture_kind!r}; expected one of {sorted(CAPTURE_KINDS)}")
+    if outcome not in CAPTURE_OUTCOMES:
+        raise ValueError(f"unknown outcome {outcome!r}; expected one of {sorted(CAPTURE_OUTCOMES)}")
+    if outcome == "failed" and reason not in CAPTURE_FAILURE_REASONS:
+        # Never defaulted. "Unknown failure" is a classification decision for a
+        # human reading a traceback, not something to COALESCE into existence.
+        raise ValueError(
+            f"outcome='failed' requires a classified reason from {sorted(CAPTURE_FAILURE_REASONS)}, "
+            f"got {reason!r}"
+        )
+    if outcome != "failed":
+        reason = None
+
+    pool = await _db_pool()
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO capture_outcomes
+                    (platform, content_id, capture_kind, outcome, reason, account_id, run_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """,
+                platform, content_id, capture_kind, outcome, reason, account_id, run_id,
             )
     finally:
         await pool.close()
@@ -374,8 +458,12 @@ async def social_detail_sync_advertisement(
     header = values[0]
     if not all(c in header for c in ("platform", "content_id", "advertisement")):
         return 0  # sheet predates the advertisement column
-    pi, ci, ai = header.index("platform"), header.index("content_id"), header.index("advertisement")
-    a_col = _col_letter(ai)
+    # Resolved BY NAME, never by fixed position (FR-016b). Feature 005 appends a
+    # trailing `shares` column, and tabs written before and after that change
+    # coexist until the backfill completes — a positional read would write the
+    # advertisement flag onto the wrong column on one of them.
+    pi, ci, ai = (column_index(header, c) for c in ("platform", "content_id", "advertisement"))
+    a_col = col_letter(ai)
     data = []
     for r_idx, row in enumerate(values[1:], start=2):
         if len(row) <= max(pi, ci):

@@ -110,6 +110,48 @@ See `.claude/rules/backend/schema.md` for the migration workflow and
 `docs/roster-maintenance.md` for the two maintainer actions this introduces
 (recording a handle rename, correcting a client name mapping).
 
+### Field Availability & Capture Provenance
+```bash
+# "Can this field ever be known?" — determinations live in the version-controlled
+# config/field_availability.yaml (NOT data/, which is gitignored) and sync into
+# the field_availability table. Unscheduled: run after editing the YAML.
+docker exec prefect python flows/field_availability_sync.py --validate-only
+docker exec prefect python flows/field_availability_sync.py
+
+# One-off: bring existing harvest sheet tabs to the current column layout after
+# `shares` was appended. Idempotent; touches row 1 only, never reviewer data.
+docker exec prefect python flows/sheet_header_backfill.py --validate-only
+docker exec prefect python flows/sheet_header_backfill.py
+
+# Why is this value empty? Every empty engagement value must resolve to exactly
+# one cause. An `UNRESOLVED` row is a bug.
+docker exec postgres psql -U noktah -d noktah_dashboard -c "
+  SELECT CASE
+      WHEN s.comments IS NOT NULL                   THEN 'present'
+      WHEN fa.status = 'unavailable_platform_limit' THEN 'platform does not publish it'
+      WHEN fa.status = 'not_collected_by_decision'  THEN 'deliberately not collected'
+      WHEN fa.status = 'undetermined'               THEN 'availability undetermined'
+      WHEN co.outcome = 'failed'                    THEN 'capture failed: ' || co.reason
+      WHEN co.outcome = 'no_match'                  THEN 'capture ran, item not in result'
+      WHEN co.id IS NULL                            THEN 'pre-feature row, provenance unknown'
+      ELSE 'UNRESOLVED - this row is a bug' END AS why_empty, count(*)
+  FROM harvested_signals s
+  LEFT JOIN field_availability fa ON fa.platform = s.platform
+       AND fa.content_type = s.content_type AND fa.field_name = 'comments'
+  LEFT JOIN LATERAL (SELECT * FROM capture_outcomes c
+       WHERE c.platform = s.platform AND c.content_id = s.content_id
+       ORDER BY c.observed_at DESC LIMIT 1) co ON true
+  GROUP BY 1 ORDER BY 2 DESC;"
+```
+A `NULL` metric is never self-explanatory: **`field_availability`** says whether
+the field is knowable at all, **`capture_outcomes`** (append-only) says whether it
+was obtained this run. TikTok share counts are now stored
+(`harvested_signals.shares`) — roach always parsed them, they were discarded at
+the storage boundary. Instagram publishes no share count anywhere, and Instagram
+stories expose no public counts at all; both are recorded as platform limits
+rather than left ambiguous. See `.claude/rules/backend/schema.md` and
+`specs/005-signal-field-coverage/`.
+
 ### Songbird Content Generation
 ```bash
 # Monthly content plan → reviewable draft (default)
