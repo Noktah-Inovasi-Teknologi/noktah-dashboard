@@ -38,6 +38,7 @@ FULL_CHAIN = [
     "005_link_existing",
     "006_enforce_account_link",
     "007_signal_field_coverage",
+    "008_observation_history",
 ]
 
 # `spine_db` skips 006: it enforces account_id IS NOT NULL and fails by design

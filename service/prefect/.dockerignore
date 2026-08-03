@@ -1,0 +1,29 @@
+# Python build/runtime artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Local virtualenv — the image builds its own via `uv sync` (Dockerfile:12 also
+# rm -rf's it, since a Windows-built .venv is unusable on Linux)
+.venv/
+venv/
+
+# Secrets and local config — never bake into an image layer
+.env
+.env.*
+!.env.example
+
+# Runtime output, bind-mounted at run time rather than copied in
+data/
+
+# Not copied by the Dockerfile; excluded to keep the build context small
+tests/
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp

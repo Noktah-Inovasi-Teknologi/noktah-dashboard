@@ -152,6 +152,64 @@ stories expose no public counts at all; both are recorded as platform limits
 rather than left ambiguous. See `.claude/rules/backend/schema.md` and
 `specs/005-signal-field-coverage/`.
 
+### Longitudinal Metrics (observation history + velocity)
+```bash
+# Engagement is no longer frozen at first sighting. Every harvest now records one
+# observation per LISTED item — including items its day-window filter discards —
+# read off a listing that was happening anyway. Marginal platform requests: ZERO.
+# No download, no analysis, no model call for an already-harvested item.
+
+# One-time: carry pre-feature signal rows forward as `legacy` observations.
+docker exec prefect python flows/observation_backfill.py --validate-only
+docker exec prefect python flows/observation_backfill.py
+
+# Derive velocity from stored observations (monthly cron, 06:00 WIB on the 2nd —
+# after both harvest waves close). Reads the datastore only; a derivation failure
+# cannot affect a harvest, and a blocked profile cannot prevent derivation.
+docker exec prefect python flows/velocity_derive.py --validate-only
+docker exec prefect python flows/velocity_derive.py
+docker exec prefect python flows/velocity_derive.py --platform instagram
+
+# Why does this item have no velocity? Exactly one reason applies.
+# An `UNRESOLVED` row is a bug.
+docker exec postgres psql -U noktah -d noktah_dashboard -c "
+  SELECT reason, count(*) FROM velocity_status GROUP BY 1 ORDER BY 2 DESC;"
+
+# One item's series, with its derived rates
+docker exec postgres psql -U noktah -d noktah_dashboard -c "
+  SELECT o.observed_at, o.provenance, o.likes,
+         round(v.elapsed_seconds/86400.0, 2) AS days_since_prev,
+         v.delta_likes, v.rate_likes_per_day, v.is_plateau, v.is_acceleration
+  FROM metric_observations o
+  LEFT JOIN velocity_intervals v ON v.to_observation_id = o.id
+  WHERE o.content_id = '<id>' ORDER BY o.observed_at;"
+```
+**Velocity needs a second observation, which arrives with the next monthly harvest.**
+On the day this ships a correct system reports nearly every item as `legacy_only`
+with no velocity. That is the expected state, not a failure.
+
+**Re-observability is bounded by listing depth, not by a day window** — the `days:`
+filter is applied client-side *after* the listing returns, so an item stays
+observable long after it leaves the harvest window. The monthly deployments list
+at `DEFAULT_LIST_DEPTH = 150` (`social_harvest_window.py`; no deployment overrides
+it), and no account holds more than 69 harvested items — so **the whole corpus is
+currently reachable**. Measured live 2026-08-03: one `lasikasyik` listing returned
+**182** items and produced 182 observations while collecting nothing.
+
+When an item *does* eventually fall out of reach it is recorded as
+`aged_out_of_listing` — a reported fact about how far the listing sees, **not** a
+collection regression. Raising depth to chase one is collection expansion and out
+of scope.
+
+A metric refresh writes **only** metric columns. It must never touch `subtitle`,
+`content_flow`, `summary`, or `advertisement` — `social.signal.record` overwrites
+those unconditionally, which is why the refresh path uses
+`social.signal.record-metrics` instead. Routing a refresh through the wrong one
+would blank stored analysis on every refreshed row, silently, and this feature
+cannot regenerate it (re-running analysis would cost model spend it forbids).
+
+See `.claude/rules/backend/schema.md` and `specs/006-longitudinal-metric-capture/`.
+
 ### Songbird Content Generation
 ```bash
 # Monthly content plan → reviewable draft (default)

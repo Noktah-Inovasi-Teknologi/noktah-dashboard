@@ -168,6 +168,59 @@ The status vocabulary is closed and enforced at the database boundary, not only
 in the sync task — it is reference data other systems read, so a sixth value must
 be impossible to store even if the task is bypassed.
 
+## Observation history and velocity (feature 006)
+
+Two tables and a view make engagement *accumulation* measurable. Before them a
+post's counts were frozen at first sighting — `harvested_signals` is UNIQUE on
+`(platform, content_id)`, so the schema had no slot for a second observation,
+and a post that earned 5,000 likes in six hours was indistinguishable from one
+that took three weeks.
+
+- **`metric_observations`** — append-only, many rows per item. The record of
+  what was seen and when. Never updated, never deleted.
+- **`velocity_intervals`** — derived, one row per consecutive observation pair.
+  **Recomputed in place on re-derivation.** This does NOT breach Principle VII,
+  which governs *observations*: a derived row is a pure function of two
+  immutable endpoints plus configuration, and FR-016c requires it be
+  re-derivable after a threshold change. `config_version` records which
+  thresholds produced each verdict.
+- **`velocity_status`** — a view, not a column, answering "why does this item
+  have no velocity" with exactly one reason.
+
+Four details that are easy to get wrong:
+
+- **Both tables are keyed by `(platform, content_id)`, not `harvested_signals.id`.**
+  Same reasoning as `capture_outcomes`: the failure-retry purge can delete a
+  signal row, and observation history must outlive that (FR-005). Regression
+  tests: `test_metric_observation.py::test_purging_the_dedup_ledger_does_not_touch_observations`.
+- **`velocity_status`'s item universe is the UNION of `harvested_signals` and
+  `metric_observations`** — not the observation table alone. An item carrying no
+  metric anywhere has nothing to seed and therefore zero observations; driven by
+  observations alone it would vanish from the view, lacking both a velocity and
+  a reason, which is exactly what FR-024 forbids. Measured: 2 of 819 rows are in
+  that position. Caught only by validating against real data, not by any test
+  written beforehand.
+- **`never_observed` must be tested before the single-observation branches**, or
+  zero falls through to one. Likewise `legacy_only` before `observed_once` — both
+  have one observation and only `captured_count = 0` separates them.
+- **`chk_metric_observations_has_a_value`** forbids an all-NULL observation. The
+  correct record for "the capture produced nothing" is a `capture_outcomes` row
+  with `outcome = 'no_match'`; an empty observation would make the series look
+  longer than the evidence supports.
+
+Migration 008 also **widens** `chk_capture_outcomes_kind` by DROP + ADD with a
+strict superset (adding `metric_refresh`). Widening is the one shape of
+constraint replacement this file permits, because it cannot reject an existing
+row — verify the re-added list still contains all four original kinds.
+
+Absence vocabulary, and the distinction that took a clarification round to get
+right: `aged_out_of_listing` means published *before* the oldest item the
+listing returned, so it was provably out of reach. `absent_within_reach` means it
+should have been returned and was not — consistent with removal, but a short
+page produces the same observation, so it is **never** recorded as `deleted`.
+`deleted` requires an explicit platform not-found, which only the download path
+can observe.
+
 ## Naming
 
 Flows: `roster-sync`, `spine-backfill`, `field-availability-sync`,
@@ -177,8 +230,13 @@ Tasks: `roster.client.upsert`, `roster.alias.upsert`, `roster.account.upsert`, `
 `spine.knowledge.link`, `social.account.resolve`, `social.account.record-followers`,
 `social.capture.record-outcome`, `availability.determination.sync`,
 `availability.determination.get`, `availability.determination.coverage-gaps`,
-`google.sheets.ensure-header`, `run.record.start`, `run.record.finish` —
+`google.sheets.ensure-header`, `run.record.start`, `run.record.finish`,
+`social.observation.record`, `social.signal.record-metrics`, `social.known-items`,
+`velocity.interval.derive`, `velocity.observation.backfill` —
 `api-group.resource.action`.
+
+Feature 006 adds the flows `velocity-derive` (monthly) and `observation-backfill`
+(one-time, unscheduled).
 
 ---
 

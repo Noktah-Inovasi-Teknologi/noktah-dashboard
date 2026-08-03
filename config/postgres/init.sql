@@ -425,11 +425,16 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_capture_outcomes_kind') THEN
         ALTER TABLE capture_outcomes
             ADD CONSTRAINT chk_capture_outcomes_kind
+            -- 'metric_refresh' added by migration 008. Value ORDER must match
+            -- 008's re-added constraint exactly: Postgres stores the IN list as
+            -- an ordered ARRAY, so pg_get_constraintdef() differs between the
+            -- two paths if the order differs, and schema parity fails.
             CHECK (capture_kind IN (
                 'instagram_clip_stats',
                 'instagram_feed_stats',
                 'instagram_profile_info',
-                'tiktok_stats'));
+                'tiktok_stats',
+                'metric_refresh'));
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_capture_outcomes_outcome') THEN
         ALTER TABLE capture_outcomes
@@ -467,4 +472,185 @@ CREATE INDEX IF NOT EXISTS ix_capture_outcomes_account
     ON capture_outcomes (account_id, capture_kind, observed_at DESC);
 
 INSERT INTO schema_migrations (version) VALUES ('007_signal_field_coverage')
+ON CONFLICT (version) DO NOTHING;
+
+-- ============================================================================
+-- Longitudinal Metric Capture (feature 006) -- mirrors migration
+-- config/postgres/migrations/008_observation_history.sql
+--
+-- Read that file for the rationale; this is the greenfield copy and must stay
+-- structurally identical to it. Constraints are declared as named ALTERs, not
+-- inline REFERENCES, so pg_constraint entries match the migrated path exactly
+-- (see .claude/rules/backend/schema.md § Mirroring into init.sql).
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS metric_observations (
+    id                 BIGSERIAL PRIMARY KEY,
+    platform           TEXT NOT NULL,
+    content_id         TEXT NOT NULL,
+    observed_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    provenance         TEXT NOT NULL DEFAULT 'captured',
+    views              BIGINT NULL,
+    likes              BIGINT NULL,
+    comments           BIGINT NULL,
+    shares             BIGINT NULL,
+    account_id         UUID NULL,
+    run_id             UUID NULL
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_metric_observations_platform') THEN
+        ALTER TABLE metric_observations
+            ADD CONSTRAINT chk_metric_observations_platform
+            CHECK (platform IN ('instagram', 'tiktok'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_metric_observations_provenance') THEN
+        ALTER TABLE metric_observations
+            ADD CONSTRAINT chk_metric_observations_provenance
+            CHECK (provenance IN ('captured', 'legacy'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_metric_observations_has_a_value') THEN
+        ALTER TABLE metric_observations
+            ADD CONSTRAINT chk_metric_observations_has_a_value
+            CHECK (views IS NOT NULL OR likes IS NOT NULL
+                   OR comments IS NOT NULL OR shares IS NOT NULL);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_metric_observations_account') THEN
+        ALTER TABLE metric_observations
+            ADD CONSTRAINT fk_metric_observations_account FOREIGN KEY (account_id) REFERENCES accounts(id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_metric_observations_run') THEN
+        ALTER TABLE metric_observations
+            ADD CONSTRAINT fk_metric_observations_run FOREIGN KEY (run_id) REFERENCES runs(id);
+    END IF;
+END $$;
+
+-- Serves every read of this table; see the note in migration 008 for why there
+-- is no second index on the same three columns.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_metric_observation_capture
+    ON metric_observations (platform, content_id, observed_at);
+
+CREATE INDEX IF NOT EXISTS ix_metric_observations_run
+    ON metric_observations (run_id);
+CREATE INDEX IF NOT EXISTS ix_metric_observations_account
+    ON metric_observations (account_id, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS velocity_intervals (
+    id                    BIGSERIAL PRIMARY KEY,
+    platform              TEXT NOT NULL,
+    content_id            TEXT NOT NULL,
+    from_observation_id   BIGINT NOT NULL,
+    to_observation_id     BIGINT NOT NULL,
+    elapsed_seconds       BIGINT NOT NULL,
+    delta_views           BIGINT NULL,
+    delta_likes           BIGINT NULL,
+    delta_comments        BIGINT NULL,
+    delta_shares          BIGINT NULL,
+    rate_views_per_day    DOUBLE PRECISION NULL,
+    rate_likes_per_day    DOUBLE PRECISION NULL,
+    rate_comments_per_day DOUBLE PRECISION NULL,
+    rate_shares_per_day   DOUBLE PRECISION NULL,
+    rate_withheld_reason  TEXT NULL,
+    is_plateau            BOOLEAN NOT NULL DEFAULT false,
+    is_acceleration       BOOLEAN NOT NULL DEFAULT false,
+    plateau_interval_id   BIGINT NULL,
+    derived_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    config_version        TEXT NOT NULL DEFAULT 'v1'
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_velocity_intervals_platform') THEN
+        ALTER TABLE velocity_intervals
+            ADD CONSTRAINT chk_velocity_intervals_platform
+            CHECK (platform IN ('instagram', 'tiktok'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_velocity_elapsed_positive') THEN
+        ALTER TABLE velocity_intervals
+            ADD CONSTRAINT chk_velocity_elapsed_positive
+            CHECK (elapsed_seconds > 0);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_velocity_rate_withheld') THEN
+        ALTER TABLE velocity_intervals
+            ADD CONSTRAINT chk_velocity_rate_withheld
+            CHECK (rate_withheld_reason IS NULL
+                   OR rate_withheld_reason IN ('interval_too_short'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_velocity_acceleration_has_plateau') THEN
+        ALTER TABLE velocity_intervals
+            ADD CONSTRAINT chk_velocity_acceleration_has_plateau
+            CHECK (is_acceleration = false OR plateau_interval_id IS NOT NULL);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_velocity_from_observation') THEN
+        ALTER TABLE velocity_intervals
+            ADD CONSTRAINT fk_velocity_from_observation
+            FOREIGN KEY (from_observation_id) REFERENCES metric_observations(id) ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_velocity_to_observation') THEN
+        ALTER TABLE velocity_intervals
+            ADD CONSTRAINT fk_velocity_to_observation
+            FOREIGN KEY (to_observation_id) REFERENCES metric_observations(id) ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_velocity_plateau_interval') THEN
+        ALTER TABLE velocity_intervals
+            ADD CONSTRAINT fk_velocity_plateau_interval
+            FOREIGN KEY (plateau_interval_id) REFERENCES velocity_intervals(id) ON DELETE SET NULL;
+    END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_velocity_interval_pair
+    ON velocity_intervals (from_observation_id, to_observation_id);
+
+CREATE INDEX IF NOT EXISTS ix_velocity_intervals_item
+    ON velocity_intervals (platform, content_id);
+CREATE INDEX IF NOT EXISTS ix_velocity_intervals_acceleration
+    ON velocity_intervals (is_acceleration) WHERE is_acceleration;
+
+CREATE OR REPLACE VIEW velocity_status AS
+WITH items AS (
+    SELECT platform, content_id FROM harvested_signals
+    UNION
+    SELECT platform, content_id FROM metric_observations
+), obs AS (
+    SELECT platform, content_id,
+           count(*)                                        AS observation_count,
+           count(*) FILTER (WHERE provenance = 'captured') AS captured_count
+    FROM metric_observations
+    GROUP BY platform, content_id
+), iv AS (
+    SELECT platform, content_id,
+           count(*)                                             AS interval_count,
+           count(*) FILTER (WHERE rate_withheld_reason IS NULL) AS rated_count
+    FROM velocity_intervals
+    GROUP BY platform, content_id
+), last_outcome AS (
+    SELECT DISTINCT ON (platform, content_id) platform, content_id, outcome, reason
+    FROM capture_outcomes
+    WHERE capture_kind = 'metric_refresh'
+    ORDER BY platform, content_id, observed_at DESC
+)
+SELECT i.platform,
+       i.content_id,
+       COALESCE(o.observation_count, 0) AS observation_count,
+       COALESCE(iv.rated_count, 0) > 0  AS has_velocity,
+       CASE
+           WHEN COALESCE(iv.rated_count, 0) > 0        THEN 'has_velocity'
+           WHEN COALESCE(o.observation_count, 0) = 0   THEN 'never_observed'
+           WHEN o.observation_count = 1
+                AND o.captured_count = 0               THEN 'legacy_only'
+           WHEN o.observation_count = 1                THEN 'observed_once'
+           WHEN iv.interval_count IS NULL              THEN 'not_yet_derived'
+           WHEN iv.rated_count = 0                     THEN 'all_intervals_too_short'
+           WHEN lo.reason IN ('aged_out_of_listing',
+                              'absent_within_reach',
+                              'deleted')               THEN 'no_longer_observable'
+           ELSE 'UNRESOLVED'
+       END AS reason
+FROM items i
+LEFT JOIN obs o ON o.platform = i.platform AND o.content_id = i.content_id
+LEFT JOIN iv ON iv.platform = i.platform AND iv.content_id = i.content_id
+LEFT JOIN last_outcome lo ON lo.platform = i.platform AND lo.content_id = i.content_id;
+
+INSERT INTO schema_migrations (version) VALUES ('008_observation_history')
 ON CONFLICT (version) DO NOTHING;

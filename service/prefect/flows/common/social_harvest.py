@@ -29,8 +29,11 @@ try:
         social_dedup_record,
         social_item_analyze,
         social_item_download,
+        social_known_items,
+        social_observation_record,
         social_profile_list,
         social_signal_record,
+        social_signal_record_metrics,
     )
     from ...tasks.run_tasks import run_record_finish, run_record_start
     from ...tasks.google_tasks import (
@@ -60,8 +63,11 @@ except ImportError:
         social_dedup_record,
         social_item_analyze,
         social_item_download,
+        social_known_items,
+        social_observation_record,
         social_profile_list,
         social_signal_record,
+        social_signal_record_metrics,
     )
     from tasks.run_tasks import run_record_finish, run_record_start
     from tasks.google_tasks import (
@@ -123,6 +129,11 @@ DETAIL_HEADER = ACCOUNT_HEADER + ["account_folder_id"]
 CONTENT_ID_COL = ACCOUNT_HEADER.index("content_id")
 
 DepthSelector = Callable[[List[Dict[str, Any]]], List[Dict[str, Any]]]
+
+# The public counts an observation carries (feature 006). Mirrors
+# `velocity_tasks.METRICS` and the engagement columns on `metric_observations`;
+# named here so the observation pass spells them once rather than per call site.
+OBSERVED_METRICS = ("views", "likes", "comments", "shares")
 
 
 def _platform_display(platform: str) -> str:
@@ -259,6 +270,197 @@ async def _record_capture_outcomes(
         account_id=account_id,
         run_id=run_id,
     )
+
+
+async def _observe_listed_items(
+    platform: str,
+    username: str,
+    all_items: List[Dict[str, Any]],
+    account_id: Optional[str],
+    run_id: Optional[str],
+    summary: Dict[str, Any],
+    logger_,
+) -> None:
+    """
+    Record one metric observation for EVERY item the listing returned (feature 006).
+
+    This is where engagement stops being frozen at first sighting. The counts are
+    already in `all_items` — they arrived in a response the harvest was making
+    anyway — and until now they were discarded for any item the de-duplication
+    gate skipped. Marginal platform requests: ZERO (FR-003, FR-026).
+
+    ## Why `all_items` and not the depth-selected `items`
+
+    The depth selector is a CLIENT-SIDE filter applied after the response
+    arrives. The monthly deployments use `days: 31`, so iterating the selected
+    subset would observe only content published in the last month — and an item
+    needs at least two observations to yield any velocity at all, three for an
+    acceleration verdict. Restricting to the window would therefore discard
+    exactly the counts this feature exists to capture (FR-004), leaving the
+    feature technically working and practically useless.
+
+    ## What it deliberately does not do
+
+    No download, no analysis, no model call (FR-001, FR-025). It does not touch
+    the de-duplication gate, which keeps skipping already-successful items
+    exactly as before (FR-002).
+
+    Best-effort throughout: a harvest that delivered content must never be failed
+    by an observation write, matching how `social.signal.record` is treated.
+    """
+    for item in all_items:
+        content_id = item.get("content_id")
+        if not content_id:
+            continue
+        counts = item.get("public_counts") or {}
+        # Extracted once and splatted into both writes below. Spelling the four
+        # names out twice in one function means a fifth metric needs two edits
+        # thirty lines apart, and a typo in either is invisible because both
+        # callees accept the same keywords.
+        metrics = {name: counts.get(name) for name in OBSERVED_METRICS}
+        try:
+            observation_id = await social_observation_record(
+                platform=platform,
+                content_id=content_id,
+                account_id=account_id,
+                run_id=run_id,
+                **metrics,
+            )
+            if observation_id is None:
+                # The listing carried no usable counts for this item. Recorded as
+                # `no_match` — the pass ran fine, this item just had nothing in
+                # it — never as a failure, and never as an empty observation row.
+                summary["observations_skipped_no_counts"] += 1
+                await social_capture_record_outcome(
+                    platform=platform, content_id=content_id,
+                    capture_kind="metric_refresh", outcome="no_match",
+                    account_id=account_id, run_id=run_id,
+                )
+                continue
+
+            summary["observations_recorded"] += 1
+            await social_capture_record_outcome(
+                platform=platform, content_id=content_id,
+                capture_kind="metric_refresh", outcome="success",
+                account_id=account_id, run_id=run_id,
+            )
+            # Keep the latest-value convenience current (FR-010). Metric columns
+            # ONLY — never the analysis or reviewer columns (FR-010a).
+            await social_signal_record_metrics(
+                platform=platform,
+                content_id=content_id,
+                **metrics,
+            )
+        except Exception as e:
+            summary["observations_failed"] += 1
+            logger_.warning(f"{username}/{content_id}: observation write failed (non-fatal): {e}")
+
+
+async def _record_listing_failure(
+    profile_url: str, platform: str, reason: str,
+    run_id: Optional[str], logger_,
+) -> None:
+    """
+    Record that a whole profile's metric refresh could not be attempted (FR-020).
+
+    Without this, a run blocked by a throttle is indistinguishable from one
+    where nothing had changed: both leave the same silence. The item-level
+    absence classification cannot run either (there is no listing to compare
+    against), so the failure is recorded once per profile, keyed to a synthetic
+    `acct:` content id — the same convention the follower capture already uses.
+
+    `failed` rather than `not_attempted`: the attempt was made and it broke.
+    """
+    handle = _resolve_handle(profile_url, {})
+    try:
+        await social_capture_record_outcome(
+            platform=platform, content_id=f"acct:{handle}",
+            capture_kind="metric_refresh", outcome="failed",
+            reason=reason, run_id=run_id,
+        )
+    except Exception as e:
+        logger_.warning(f"{handle}: listing-failure outcome write failed (non-fatal): {e}")
+
+
+async def _classify_absent_items(
+    platform: str,
+    username: str,
+    all_items: List[Dict[str, Any]],
+    account_id: Optional[str],
+    run_id: Optional[str],
+    summary: Dict[str, Any],
+    logger_,
+) -> None:
+    """
+    Record why each previously-known item was NOT in this listing (FR-018/FR-019).
+
+    An item we have observed before and did not see this run has stopped
+    accruing history, and the reason matters: a series that ends because the
+    item slid past the listing's reach is a fact about how far we can see, while
+    one that ends because the item vanished is a fact about the item. Recording
+    both as a bare absence would leave 252 measured rows (research R2) looking
+    like a collection regression.
+
+    ## The discriminator
+
+    `T` = `published_at` of the OLDEST item the listing actually returned.
+
+      * published before `T`  -> provably beyond reach -> `aged_out_of_listing`
+      * published after `T`   -> should have been returned and was not
+                                 -> `absent_within_reach`
+
+    Using the oldest *returned* item, rather than a rank against `list_depth`,
+    is what keeps this correct when an account has fewer than 30 posts or the
+    listing returns a short page.
+
+    ## What it deliberately will not claim
+
+    `absent_within_reach` is NOT recorded as `deleted`. It is consistent with
+    removal, but a short page or a listing hiccup produces exactly the same
+    observation, and asserting deletion from an absence would state something
+    never observed (Principle VI). A definitive signal exists — roach's
+    not-found on the download path — and only that justifies `deleted`.
+    """
+    listed_ids = {i.get("content_id") for i in all_items if i.get("content_id")}
+    published = [ts for i in all_items if (ts := _published_ts(i)) is not None]
+    if not listed_ids or not published:
+        # Nothing came back at all. That is a listing failure, not an item-level
+        # absence, and inferring per-item reasons from it would attribute a
+        # profile-wide problem to every item individually.
+        return
+
+    oldest_returned = min(published)
+
+    pool_rows = await social_known_items(platform, username)
+    for row in pool_rows:
+        content_id = row["content_id"]
+        if content_id in listed_ids:
+            continue
+        published_at = row["published_at"]
+        if published_at is not None and published_at.timestamp() < oldest_returned:
+            reason = "aged_out_of_listing"
+            summary["items_aged_out"] += 1
+        else:
+            # Also covers published_at IS NULL: without a publication time the
+            # item cannot be placed relative to the boundary, so the weaker,
+            # honest classification is the correct one.
+            reason = "absent_within_reach"
+            summary["items_absent_within_reach"] += 1
+        try:
+            await social_capture_record_outcome(
+                platform=platform, content_id=content_id,
+                capture_kind="metric_refresh", outcome="not_attempted",
+                reason=reason, account_id=account_id, run_id=run_id,
+            )
+        except Exception as e:
+            logger_.warning(f"{username}/{content_id}: absence-outcome write failed (non-fatal): {e}")
+
+    if summary["items_aged_out"]:
+        logger_.info(
+            f"{username}: {summary['items_aged_out']} previously-known item(s) are now beyond "
+            "listing reach and will not gain further observations "
+            "(extending listing depth is out of scope — see spec 006)"
+        )
 
 
 def make_recent_n_selector(n: int) -> DepthSelector:
@@ -446,6 +648,15 @@ async def run_harvest(
         # a miss is recorded HERE, not as a placeholder observation row, since
         # nothing gates the run on whether a count came back (FR-013b).
         "follower_capture_missed": [],
+        # Longitudinal Metric Capture (feature 006). Counted separately from
+        # items_collected: an observation is not a collection. These are the
+        # numbers that show engagement is no longer frozen at first sighting,
+        # and they should be non-zero on a run where items_collected is zero.
+        "observations_recorded": 0,
+        "observations_skipped_no_counts": 0,
+        "observations_failed": 0,
+        "items_aged_out": 0,
+        "items_absent_within_reach": 0,
         "account_folder_ids": {},
         "detail_sheet_id": None,
     }
@@ -490,10 +701,12 @@ async def run_harvest(
                 listing = await social_profile_list(profile_url, platform, list_depth, stories_only=stories_only)
             except RoachNotFoundError as e:
                 run_logger.warning(f"Profile skipped (private/non-existent): {profile_url} — {e}")
+                await _record_listing_failure(profile_url, platform, "not_found", run_record_id, run_logger)
                 continue
             except RoachRateLimitedError as e:
                 run_logger.warning(f"Profile listing rate-limited/challenged: {profile_url} — {e}; deferring profile")
                 summary["profiles_blocked"] += 1
+                await _record_listing_failure(profile_url, platform, "blocked", run_record_id, run_logger)
                 continue
 
             profile_meta = listing["profile"]
@@ -532,6 +745,33 @@ async def run_harvest(
                 summary["profiles_processed"] += 1
                 continue
             account_id = resolution["account_id"]
+
+            # Longitudinal Metric Capture (feature 006): observe EVERY listed
+            # item's current counts before the per-item loop decides what to
+            # download. Positioned here deliberately —
+            #   * AFTER account resolution, so account_id is known;
+            #   * BEFORE the `if not items` guard below, so a profile whose
+            #     items all fall outside this run's window is still observed
+            #     (that is the common case for a days:31 deployment listing an
+            #     account's most recent ~30 posts);
+            #   * BEFORE the download loop, so it runs for items the
+            #     de-duplication gate will skip — which is the entire point.
+            await _observe_listed_items(
+                platform=platform, username=username, all_items=all_items,
+                account_id=account_id, run_id=run_record_id,
+                summary=summary, logger_=run_logger,
+            )
+            # And say why each previously-known item that did NOT come back has
+            # stopped accruing history (FR-018/FR-019). Best-effort: a
+            # bookkeeping write must never fail a harvest that delivered.
+            try:
+                await _classify_absent_items(
+                    platform=platform, username=username, all_items=all_items,
+                    account_id=account_id, run_id=run_record_id,
+                    summary=summary, logger_=run_logger,
+                )
+            except Exception as e:
+                run_logger.warning(f"{username}: absence classification failed (non-fatal): {e}")
 
             # Follower capture (FR-013a/b): best-effort, never able to fail the
             # run. `public_metadata` is per-profile (not per-item), so this is

@@ -64,6 +64,46 @@ deployments:
       - prefect.deployments.steps.set_working_directory:
           directory: /app
 
+  # Velocity derive (feature 006-longitudinal-metric-capture) — turns the
+  # append-only observation history into rate of change. Reads the datastore
+  # only: no platform request, no model call.
+  #
+  # 06:00 on the 2nd, deliberately AFTER both harvest waves close — per-client
+  # runs occupy 17:30 on the 1st through 02:00 on the 2nd, competitor runs
+  # 02:30-05:00 on the 2nd. Deriving before a wave finishes is harmless (the
+  # next run picks up the rest, and `velocity_status.not_yet_derived` makes the
+  # gap visible), but deriving after means one pass covers the whole month.
+  #
+  # Separate from collection on purpose: a derivation failure must not affect a
+  # harvest, and a blocked profile must not prevent derivation over what was
+  # already observed.
+  - name: velocity-derive
+    entrypoint: flows/velocity_derive.py:velocity_derive_flow
+    work_pool:
+      name: noktah-pool
+    schedules:
+      - cron: "0 6 2 * *"
+        timezone: "Asia/Jakarta"
+    parameters: {}
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
+  # Observation backfill (feature 006) — one-time seeding of pre-feature signal
+  # rows as `legacy` observations.
+  #
+  # UNSCHEDULED by design, and NOT a parameter on velocity-derive: that flow is
+  # monthly, and a one-shot operation riding on it would fire every month if its
+  # default were ever wrong. Idempotent, so re-running is harmless.
+  - name: observation-backfill
+    entrypoint: flows/observation_backfill.py:observation_backfill_flow
+    work_pool:
+      name: noktah-pool
+    parameters: {}
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
   # Roster sync (feature 004-relational-spine) — reconciles clients/accounts/roles
   # from the Clients + Hashmaps worksheets into the datastore. Daily, clear of the
   # 03:00 social-harvest-sync slot. Nothing gates collection/generation on this

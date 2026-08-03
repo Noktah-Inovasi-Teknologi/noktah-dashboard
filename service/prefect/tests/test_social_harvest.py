@@ -131,6 +131,31 @@ def patched_engine(monkeypatch):
     async def fake_signal_record(**kwargs):
         calls.setdefault("signal_record", []).append(kwargs)
 
+    # Feature 006. The observation pass runs on EVERY harvest, so these three
+    # must be stubbed here rather than per-test, or every existing test would
+    # start making real database calls.
+    async def fake_observation_record(**kwargs):
+        calls.setdefault("observation_record", []).append(kwargs)
+        counts = (kwargs.get("views"), kwargs.get("likes"),
+                  kwargs.get("comments"), kwargs.get("shares"))
+        # Mirrors the real task: no usable counts -> no observation row.
+        if all(c is None for c in counts):
+            return None
+        return len(calls["observation_record"])
+
+    async def fake_capture_record_outcome(**kwargs):
+        calls.setdefault("capture_outcome", []).append(kwargs)
+
+    async def fake_signal_record_metrics(**kwargs):
+        calls.setdefault("signal_record_metrics", []).append(kwargs)
+        return True
+
+    async def fake_known_items(platform, profile_key):
+        calls.setdefault("known_items", []).append((platform, profile_key))
+        # Default: nothing previously known, so absence classification is a
+        # no-op. Tests exercising aged-out/absent-within-reach override this.
+        return []
+
     async def fake_run_record_start(**kwargs):
         calls.setdefault("run_record_start", []).append(kwargs)
         return "run-1"
@@ -174,6 +199,10 @@ def patched_engine(monkeypatch):
     monkeypatch.setattr(engine, "social_account_resolve", fake_account_resolve)
     monkeypatch.setattr(engine, "social_account_record_followers", fake_record_followers)
     monkeypatch.setattr(engine, "social_signal_record", fake_signal_record)
+    monkeypatch.setattr(engine, "social_observation_record", fake_observation_record)
+    monkeypatch.setattr(engine, "social_capture_record_outcome", fake_capture_record_outcome)
+    monkeypatch.setattr(engine, "social_signal_record_metrics", fake_signal_record_metrics)
+    monkeypatch.setattr(engine, "social_known_items", fake_known_items)
     monkeypatch.setattr(engine, "run_record_start", fake_run_record_start)
     monkeypatch.setattr(engine, "run_record_finish", fake_run_record_finish)
 
@@ -693,3 +722,170 @@ async def test_capture_outcome_success_for_enriched_item(monkeypatch):
         account_id="a1", run_id="r1",
     )
     assert calls[0]["outcome"] == "success"
+
+
+# ---------------------------------------------------------------------------
+# Feature 006 — metric refresh separated from full re-harvest (US1)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_known_item_is_observed_without_download_or_analysis(patched_engine, monkeypatch):
+    """The core claim of the feature (FR-001, FR-002, SC-002).
+
+    An already-successful item still skips download and analysis — the gate is
+    correct and stays — but its current counts are now recorded instead of
+    being discarded one line after they arrive.
+    """
+    async def fake_list(profile_url, platform, max_items=30, stories_only=False):
+        return {"profile": {"handle": "acct"}, "items": [_item("known")]}
+
+    async def already_harvested(platform, content_id, drive_target):
+        return {"analysis_status": "success", "drive_file_id": "f1"}
+
+    monkeypatch.setattr(engine, "social_profile_list", fake_list)
+    monkeypatch.setattr(engine, "social_dedup_check", already_harvested)
+
+    result = await engine.run_harvest(
+        profiles=["https://www.tiktok.com/@acct"],
+        depth_selector=engine.make_recent_n_selector(10),
+    )
+
+    assert patched_engine["download"] == [], "a refresh must not download"
+    assert patched_engine["analyze"] == [], "a refresh must not spend a model call"
+    assert result["summary"]["items_skipped_dedup"] == 1, "the dedup gate must still work"
+    assert result["summary"]["observations_recorded"] == 1
+    assert [c["content_id"] for c in patched_engine["observation_record"]] == ["known"]
+
+
+@pytest.mark.asyncio
+async def test_observation_covers_items_the_window_filter_excludes(patched_engine, monkeypatch):
+    """FR-004 — the difference between working and barely working.
+
+    The depth selector is a client-side filter over an already-fetched response.
+    Observing only the selected subset would mean a days:31 deployment could
+    never build a series on anything older than a month, and two observations
+    are the minimum for any velocity at all.
+    """
+    async def fake_list(profile_url, platform, max_items=30, stories_only=False):
+        return {"profile": {"handle": "acct"}, "items": [
+            _item("recent", published_at="2026-08-01T00:00:00Z"),
+            _item("old", published_at="2026-01-01T00:00:00Z"),
+        ]}
+
+    monkeypatch.setattr(engine, "social_profile_list", fake_list)
+
+    result = await engine.run_harvest(
+        profiles=["https://www.tiktok.com/@acct"],
+        depth_selector=engine.make_time_window_selector(31),
+    )
+
+    observed = {c["content_id"] for c in patched_engine["observation_record"]}
+    assert observed == {"recent", "old"}, "every LISTED item must be observed, not every SELECTED item"
+    assert result["summary"]["observations_recorded"] == 2
+    assert patched_engine["download"] == ["recent"], "only the in-window item is downloaded"
+
+
+@pytest.mark.asyncio
+async def test_profile_with_no_selected_items_is_still_observed(patched_engine, monkeypatch):
+    """The common case for a days:31 deployment on a low-frequency account:
+    everything the listing returns is older than the window. The run collects
+    nothing and must still observe everything."""
+    async def fake_list(profile_url, platform, max_items=30, stories_only=False):
+        return {"profile": {"handle": "acct"}, "items": [
+            _item("old1", published_at="2026-01-01T00:00:00Z"),
+            _item("old2", published_at="2026-02-01T00:00:00Z"),
+        ]}
+
+    monkeypatch.setattr(engine, "social_profile_list", fake_list)
+
+    result = await engine.run_harvest(
+        profiles=["https://www.tiktok.com/@acct"],
+        depth_selector=engine.make_time_window_selector(31),
+    )
+
+    assert result["summary"]["items_collected"] == 0
+    assert result["summary"]["observations_recorded"] == 2, (
+        "an observation pass placed after the `if not items` guard would record nothing here"
+    )
+
+
+@pytest.mark.asyncio
+async def test_item_without_counts_records_no_match_not_an_empty_observation(patched_engine, monkeypatch):
+    """An observation recording nothing is not an observation.
+
+    The pass ran fine; this item just had no counts in it. That is `no_match`,
+    and it must not become an all-NULL row that makes the series look longer
+    than the evidence supports.
+    """
+    async def fake_list(profile_url, platform, max_items=30, stories_only=False):
+        item = _item("blank")
+        item["public_counts"] = {}
+        return {"profile": {"handle": "acct"}, "items": [item]}
+
+    monkeypatch.setattr(engine, "social_profile_list", fake_list)
+
+    result = await engine.run_harvest(
+        profiles=["https://www.tiktok.com/@acct"],
+        depth_selector=engine.make_recent_n_selector(10),
+    )
+
+    assert result["summary"]["observations_recorded"] == 0
+    assert result["summary"]["observations_skipped_no_counts"] == 1
+    refresh = [c for c in patched_engine["capture_outcome"] if c["capture_kind"] == "metric_refresh"]
+    assert [c["outcome"] for c in refresh] == ["no_match"]
+
+
+@pytest.mark.asyncio
+async def test_observation_failure_never_fails_the_harvest(patched_engine, monkeypatch):
+    """Best-effort, matching how social.signal.record is already treated: a
+    harvest that delivered content must not be failed by a bookkeeping write."""
+    async def fake_list(profile_url, platform, max_items=30, stories_only=False):
+        return {"profile": {"handle": "acct"}, "items": [_item("1")]}
+
+    async def exploding_observation(**kwargs):
+        raise RuntimeError("database is down")
+
+    monkeypatch.setattr(engine, "social_profile_list", fake_list)
+    monkeypatch.setattr(engine, "social_observation_record", exploding_observation)
+
+    result = await engine.run_harvest(
+        profiles=["https://www.tiktok.com/@acct"],
+        depth_selector=engine.make_recent_n_selector(10),
+    )
+
+    assert result["error"] is None
+    assert result["summary"]["observations_failed"] == 1
+    assert result["summary"]["items_collected"] == 1, "delivery must proceed regardless"
+
+
+@pytest.mark.asyncio
+async def test_refresh_updates_metrics_without_touching_analysis_columns(patched_engine, monkeypatch):
+    """FR-010a at the call site.
+
+    `social.signal.record` overwrites subtitle/content_flow/summary
+    unconditionally, so the refresh path must call the metrics-only task
+    instead. Asserting on WHICH task is called is the only way to catch a
+    future edit that "simplifies" this back into the destructive one.
+    """
+    async def fake_list(profile_url, platform, max_items=30, stories_only=False):
+        return {"profile": {"handle": "acct"}, "items": [_item("known")]}
+
+    async def already_harvested(platform, content_id, drive_target):
+        return {"analysis_status": "success", "drive_file_id": "f1"}
+
+    monkeypatch.setattr(engine, "social_profile_list", fake_list)
+    monkeypatch.setattr(engine, "social_dedup_check", already_harvested)
+
+    await engine.run_harvest(
+        profiles=["https://www.tiktok.com/@acct"],
+        depth_selector=engine.make_recent_n_selector(10),
+    )
+
+    assert len(patched_engine["signal_record_metrics"]) == 1
+    metrics_call = patched_engine["signal_record_metrics"][0]
+    assert set(metrics_call) == {"platform", "content_id", "views", "likes", "comments", "shares"}, (
+        "the refresh must pass ONLY metric fields — an analysis field here would blank stored analysis"
+    )
+    assert not patched_engine.get("signal_record"), (
+        "a refreshed item must not go through social.signal.record"
+    )

@@ -312,6 +312,9 @@ CAPTURE_KINDS = frozenset({
     "instagram_clip_stats",
     "instagram_feed_stats",
     "instagram_profile_info",
+    # Feature 006: one metric refresh attempt for one item, read off a listing
+    # that was happening anyway. Mirrored by migration 008's widened CHECK.
+    "metric_refresh",
     "tiktok_stats",
 })
 CAPTURE_OUTCOMES = frozenset({"success", "no_match", "failed", "not_attempted"})
@@ -319,6 +322,38 @@ CAPTURE_FAILURE_REASONS = frozenset({
     "not_found", "private", "deleted", "blocked",
     "parse_failure", "timeout", "unexpected_structure",
 })
+
+# Feature 006. Why an item was NOT attempted this run. Kept separate from the
+# failure vocabulary above because none of these is a failure — an item beyond
+# the listing's reach is a reported fact about how far we can see, not a
+# collection regression (FR-019, Constitution X).
+#
+#   aged_out_of_listing  published BEFORE the oldest item the listing returned,
+#                        so it was provably out of reach this run
+#   absent_within_reach  published AFTER the oldest returned item — it should
+#                        have been in the response and was not. Consistent with
+#                        removal, but a short page produces the same observation,
+#                        so this is NOT recorded as `deleted`
+#   deleted              the platform explicitly reported the content gone.
+#                        Only the download path can observe this; a listing
+#                        absence never justifies it
+CAPTURE_ABSENCE_REASONS = frozenset({
+    "aged_out_of_listing", "absent_within_reach", "deleted",
+})
+
+# Which reasons each outcome may carry. A table rather than a branch chain,
+# because the domain really is a mapping — the previous if/elif form made the
+# `failed` test twice and its correctness depended on branch order.
+CAPTURE_REASONS = {
+    "failed": CAPTURE_FAILURE_REASONS,
+    "not_attempted": CAPTURE_ABSENCE_REASONS,
+    "success": frozenset(),
+    "no_match": frozenset(),
+}
+# `failed` is the only outcome where a reason is mandatory rather than optional:
+# a failure with no classification is the silent partial success constitution V
+# calls the most dangerous failure mode in this system.
+REASON_REQUIRED = frozenset({"failed"})
 
 
 @task(name="social.capture.record-outcome", retries=0)
@@ -361,15 +396,25 @@ async def social_capture_record_outcome(
         raise ValueError(f"unknown capture_kind {capture_kind!r}; expected one of {sorted(CAPTURE_KINDS)}")
     if outcome not in CAPTURE_OUTCOMES:
         raise ValueError(f"unknown outcome {outcome!r}; expected one of {sorted(CAPTURE_OUTCOMES)}")
-    if outcome == "failed" and reason not in CAPTURE_FAILURE_REASONS:
+    # One outcome test per outcome, driven by the vocabulary table rather than a
+    # chain. The previous form re-tested `outcome != "failed"` in its last arm,
+    # so a valid failed-reason survived only by falling past every branch — and
+    # any arm inserted between them silently changed that.
+    allowed = CAPTURE_REASONS[outcome]
+    if outcome in REASON_REQUIRED and reason not in allowed:
         # Never defaulted. "Unknown failure" is a classification decision for a
         # human reading a traceback, not something to COALESCE into existence.
         raise ValueError(
-            f"outcome='failed' requires a classified reason from {sorted(CAPTURE_FAILURE_REASONS)}, "
-            f"got {reason!r}"
+            f"outcome={outcome!r} requires a classified reason from {sorted(allowed)}, got {reason!r}"
         )
-    if outcome != "failed":
+    if not allowed:
+        # Outcomes that carry no vocabulary discard any reason, unchanged from
+        # the pre-006 behaviour for `success`/`no_match`.
         reason = None
+    elif reason is not None and reason not in allowed:
+        raise ValueError(
+            f"outcome={outcome!r} accepts a reason only from {sorted(allowed)}, got {reason!r}"
+        )
 
     pool = await _db_pool()
     try:
@@ -586,5 +631,167 @@ async def social_dedup_record(
                 platform, profile_key, content_id, drive_target, content_type, drive_file_id,
                 analysis_status, account_id, run_id,
             )
+    finally:
+        await pool.close()
+
+
+@task(name="social.observation.record", retries=2, retry_delay_seconds=10)
+async def social_observation_record(
+    platform: str,
+    content_id: str,
+    views: Any = None,
+    likes: Any = None,
+    comments: Any = None,
+    shares: Any = None,
+    observed_at: Optional[str] = None,
+    provenance: str = "captured",
+    account_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> Optional[int]:
+    """
+    Append one timestamped observation of an item's public counts (feature 006).
+
+    This is the ONLY writer to `metric_observations`, and it is append-only: no
+    UPDATE, no DELETE, ever (FR-007). Re-observing an item adds a row. That is
+    what makes velocity derivable at all — Constitution VII treats this as
+    load-bearing rather than stylistic, because rate of change is the closest
+    available substitute for the retention signals this system cannot obtain.
+
+    Keyed by (platform, content_id), NOT harvested_signals.id — an observation
+    must outlive the failure-retry purge that can delete a signal row (FR-005).
+
+    `retries=2` despite Constitution II's collection carve-out: this task makes
+    NO platform request. It writes to the local database from values already in
+    memory, so there is no target to hammer.
+
+    Returns the observation id, or None when nothing was stored.
+
+    Args:
+        views/likes/comments/shares: raw counts; coerced via `_coerce_count`
+            (the same "1.2K" -> 1200 quantization used by `social.signal.record`,
+            so a delta between two observations can never register phantom
+            movement caused by two different parses of the same number)
+        observed_at: ISO-8601 capture time. Defaults to the database's now().
+            Legacy seeding passes the row's real `harvested_at` — it must never
+            invent a time it does not know (Principle VI).
+        provenance: 'captured' by this feature, or 'legacy' for a value
+            inherited from the pre-feature single-row record.
+    """
+    if provenance not in ("captured", "legacy"):
+        raise ValueError(f"unknown provenance {provenance!r}; expected 'captured' or 'legacy'")
+
+    values = {
+        "views": _coerce_count(views),
+        "likes": _coerce_count(likes),
+        "comments": _coerce_count(comments),
+        "shares": _coerce_count(shares),
+    }
+    # An observation recording nothing is not an observation. The caller records
+    # a capture_outcomes row with outcome='no_match' instead — storing an
+    # all-NULL row here would make the series look longer than the evidence
+    # supports, and would violate chk_metric_observations_has_a_value anyway.
+    if all(v is None for v in values.values()):
+        return None
+
+    pool = await _db_pool()
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetchval(
+                """
+                INSERT INTO metric_observations
+                    (platform, content_id, observed_at, provenance,
+                     views, likes, comments, shares, account_id, run_id)
+                VALUES ($1, $2, COALESCE($3::text::timestamptz, now()), $4,
+                        $5, $6, $7, $8, $9, $10)
+                -- DO NOTHING, never DO UPDATE: a same-instant re-insert is a
+                -- retry of one capture, so the pass is safely re-runnable, but
+                -- an existing observation is never rewritten.
+                ON CONFLICT (platform, content_id, observed_at) DO NOTHING
+                RETURNING id
+                """,
+                platform, content_id, observed_at or None, provenance,
+                values["views"], values["likes"], values["comments"], values["shares"],
+                account_id, run_id,
+            )
+    finally:
+        await pool.close()
+
+
+@task(name="social.known-items", retries=2, retry_delay_seconds=10)
+async def social_known_items(platform: str, profile_key: str) -> List[Dict[str, Any]]:
+    """
+    Every content item already recorded for this account, with its publish time.
+
+    Feeds the absence classification (feature 006): an item in this set that is
+    missing from the current listing has stopped accruing history, and the run
+    must say WHY rather than leave the series ending unexplained.
+
+    Read from `harvested_signals` rather than `metric_observations` because the
+    signal row is what carries `published_at` — the discriminator between
+    "beyond the listing's reach" and "should have been listed".
+    """
+    pool = await _db_pool()
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT content_id, published_at FROM harvested_signals "
+                "WHERE platform = $1 AND profile_key = $2",
+                platform, profile_key,
+            )
+            return [dict(r) for r in rows]
+    finally:
+        await pool.close()
+
+
+@task(name="social.signal.record-metrics", retries=2, retry_delay_seconds=10)
+async def social_signal_record_metrics(
+    platform: str,
+    content_id: str,
+    views: Any = None,
+    likes: Any = None,
+    comments: Any = None,
+    shares: Any = None,
+) -> bool:
+    """
+    Refresh ONLY the metric columns of an existing `harvested_signals` row.
+
+    Keeps the single-row latest-value convenience current (FR-010) without
+    touching anything a metric refresh did not observe (FR-010a).
+
+    WHY THIS EXISTS RATHER THAN REUSING `social.signal.record`: that task's
+    upsert sets `subtitle`, `content_flow`, and `summary` to EXCLUDED
+    unconditionally. A refresh carries no analysis output, so routing one
+    through it would blank the stored analysis on every refreshed row — silently,
+    and irrecoverably, since re-running analysis is out of scope for feature 006
+    and would cost model spend FR-025 forbids.
+
+    `advertisement` is likewise untouched: it is reviewer-assigned, and the daily
+    sync flow is its only writer.
+
+    Metric columns COALESCE to the stored value, matching the `shares` precedent
+    in `social.signal.record`: a platform that stops returning a count must not
+    erase one already observed. Absence is not evidence of zero.
+
+    Returns True if a row was updated (i.e. the item was already known).
+    """
+    pool = await _db_pool()
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE harvested_signals SET
+                    views    = COALESCE($3, views),
+                    likes    = COALESCE($4, likes),
+                    comments = COALESCE($5, comments),
+                    shares   = COALESCE($6, shares),
+                    harvested_at = now()
+                WHERE platform = $1 AND content_id = $2
+                RETURNING id
+                """,
+                platform, content_id,
+                _coerce_count(views), _coerce_count(likes),
+                _coerce_count(comments), _coerce_count(shares),
+            )
+            return row is not None
     finally:
         await pool.close()
