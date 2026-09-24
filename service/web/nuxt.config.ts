@@ -15,7 +15,11 @@ export default defineNuxtConfig({
   // On Cloudflare they come from Worker variables/secrets named NUXT_<KEY>
   // (e.g. NUXT_API_BASE_URL); locally from service/web/.env.
   runtimeConfig: {
-    apiBaseUrl: ''
+    apiBaseUrl: '',
+    // Cloudflare Access service token for hub-api.noktah.co. Worker secrets
+    // NUXT_ACCESS_CLIENT_ID / NUXT_ACCESS_CLIENT_SECRET (wrangler secret put).
+    accessClientId: '',
+    accessClientSecret: ''
   },
 
   compatibilityDate: '2026-06-30',

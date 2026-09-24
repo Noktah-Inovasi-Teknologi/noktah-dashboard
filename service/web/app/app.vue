@@ -15,7 +15,10 @@ useSeoMeta({
   <UApp>
     <UHeader>
       <template #left>
-        <NuxtLink to="/" class="font-semibold">
+        <NuxtLink
+          to="/"
+          class="font-semibold"
+        >
           Noktah Hub
         </NuxtLink>
       </template>
