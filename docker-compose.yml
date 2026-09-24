@@ -161,6 +161,30 @@ services:
       retries: 3
       start_period: 20s
 
+  # Noktah Hub API (service/api): the only writer of company data behind the Hub
+  # (hub.noktah.co). No published port: reached only through the Cloudflare tunnel
+  # at hub-api.noktah.co, whose Access application admits just the Hub Worker's
+  # service token. Deliberately NOT given the whole .env: it gets only what it uses.
+  api:
+    build:
+      context: ./service/api
+      dockerfile: Dockerfile
+    container_name: hub-api
+    restart: unless-stopped
+    environment:
+      - HUB_API_DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # AUD tag of the "Noktah Hub API" Access application (not a secret)
+      - HUB_API_ACCESS_API_AUD=c9804e34dfdec51dd20dac8e8e0c35b323a09985005ac929abcc69d02e5b6c92
+    depends_on:
+      - postgres
+    networks:
+      - dashboard-networks
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "512M"
+
   # Instagram/TikTok content scraping and OpenRouter-based content analysis
   roach:
     build:

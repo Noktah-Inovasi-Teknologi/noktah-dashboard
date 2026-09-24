@@ -15,6 +15,11 @@
     "binding": "ASSETS",
     "directory": ".output/public"
   },
+  // Non-secret settings. Secrets (the Access service token) are set with
+  // `bunx wrangler secret put NUXT_ACCESS_CLIENT_ID` / `..._SECRET`, never here.
+  "vars": {
+    "NUXT_API_BASE_URL": "https://hub-api.noktah.co"
+  },
   "observability": {
     "enabled": true
   }
