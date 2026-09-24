@@ -1,0 +1,21 @@
+// Cloudflare Worker for the internal dashboard (Nuxt, nitro preset cloudflare_module).
+// Pages and forms only: every data read/write and AI call goes to the Python API on
+// the office PC, reached through the Cloudflare tunnel (see service/web/README.md).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "noktah-hub",
+  "main": ".output/server/index.mjs",
+  "compatibility_date": "2026-09-01",
+  // Only hub.noktah.co (behind Cloudflare Access) may serve this Worker. The
+  // default *.workers.dev and preview addresses would bypass the login gate.
+  "workers_dev": false,
+  "preview_urls": false,
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "binding": "ASSETS",
+    "directory": ".output/public"
+  },
+  "observability": {
+    "enabled": true
+  }
+}
