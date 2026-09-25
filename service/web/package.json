@@ -10,7 +10,10 @@
     "lint": "eslint .",
     "typecheck": "nuxt typecheck",
     "deploy": "nuxt build && wrangler deploy",
-    "cf-typegen": "wrangler types"
+    "cf-typegen": "wrangler types",
+    "test:ui": "bun test tests/ui-conventions.test.ts",
+    "ui:gate": "playwright test e2e/ui-sweep.e2e.ts",
+    "ui:sweep": "UI_SWEEP_FULL=1 UI_SWEEP_SOFT=1 playwright test e2e/ui-sweep.e2e.ts"
   },
   "dependencies": {
     "@iconify-json/lucide": "^1.2.134",
@@ -21,6 +24,7 @@
   },
   "devDependencies": {
     "@nuxt/eslint": "^1.17.0",
+    "@playwright/test": "^1.63.0",
     "eslint": "^10.11.0",
     "eslint-plugin-better-tailwindcss": "^4.7.0",
     "typescript": "^6.0.3",

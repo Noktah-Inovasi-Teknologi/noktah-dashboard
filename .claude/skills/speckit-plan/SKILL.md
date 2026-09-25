@@ -59,7 +59,7 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 1. **Setup**: Run `.specify/scripts/powershell/setup-plan.ps1 -Json` from repo root and parse JSON for FEATURE_SPEC, IMPL_PLAN, SPECS_DIR, BRANCH. For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
 
-2. **Load context**: Read FEATURE_SPEC and `.specify/memory/constitution.md`. Load IMPL_PLAN template (already copied).
+2. **Load context**: Read FEATURE_SPEC and `.specify/memory/constitution.md`. Load IMPL_PLAN template (already copied). Also read `docs/DEFERRED.md`: the plan's Constitution Check MUST confirm the spec's **Inherited & Deferred** section accounts for every register row in scope, and the plan's Complexity Tracking lists any finding the plan itself decides to defer (it is added to the register in the same PR, with this spec as origin). Read `CONTEXT.md` when it exists: `data-model.md` names entities by their glossary term, and a term the design coins is added to `CONTEXT.md` in the same PR. Read `FEATURE_SPEC`'s sibling `grill.md` when it exists: a plan does not quietly reverse a ledger decision — reversing one is a spec change, made in the spec first.
 
 3. **Execute plan workflow**: Follow the structure in IMPL_PLAN template to:
    - Fill Technical Context (mark unknowns as "NEEDS CLARIFICATION")
