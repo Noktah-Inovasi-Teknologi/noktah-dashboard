@@ -114,10 +114,11 @@ const SAVE_LABEL = { edit: 'Simpan', correct: 'Simpan koreksi', proposal: 'Terim
           :label="spec.label"
         >
           <UTextarea
-            v-model="draft as string"
+            :model-value="draft as string"
             autoresize
             :rows="3"
             class="w-full"
+            @update:model-value="v => (draft = v)"
           />
         </UFormField>
         <UFormField
@@ -126,8 +127,9 @@ const SAVE_LABEL = { edit: 'Simpan', correct: 'Simpan koreksi', proposal: 'Terim
           help="Tekan Enter setelah tiap isian."
         >
           <UInputTags
-            v-model="draft as string[]"
+            :model-value="draft as string[]"
             class="w-full"
+            @update:model-value="v => (draft = v)"
           />
         </UFormField>
 
@@ -141,15 +143,17 @@ const SAVE_LABEL = { edit: 'Simpan', correct: 'Simpan koreksi', proposal: 'Terim
           >
             <UTextarea
               v-if="sub.shape === 'text'"
-              v-model="obj[sub.key] as string"
+              :model-value="obj[sub.key] as string"
               autoresize
               :rows="1"
               class="w-full"
+              @update:model-value="v => (obj[sub.key] = v)"
             />
             <UInputTags
               v-else-if="sub.shape === 'list'"
-              v-model="obj[sub.key] as string[]"
+              :model-value="obj[sub.key] as string[]"
               class="w-full"
+              @update:model-value="v => (obj[sub.key] = v)"
             />
             <div
               v-else-if="sub.shape === 'rating'"
@@ -175,10 +179,11 @@ const SAVE_LABEL = { edit: 'Simpan', correct: 'Simpan koreksi', proposal: 'Terim
             </div>
             <USelect
               v-else-if="sub.shape === 'choice'"
-              v-model="obj[sub.key] as string"
+              :model-value="obj[sub.key] as string"
               :items="choiceItems(sub.choices)"
               placeholder="Pilih…"
               class="w-full"
+              @update:model-value="v => (obj[sub.key] = v)"
             />
           </UFormField>
         </template>
@@ -197,8 +202,9 @@ const SAVE_LABEL = { edit: 'Simpan', correct: 'Simpan koreksi', proposal: 'Terim
                 :label="sub.label"
               >
                 <UInput
-                  v-model="line[sub.key] as string"
+                  :model-value="line[sub.key] as string"
                   class="w-full"
+                  @update:model-value="v => (line[sub.key] = v)"
                 />
               </UFormField>
             </div>
@@ -236,23 +242,26 @@ const SAVE_LABEL = { edit: 'Simpan', correct: 'Simpan koreksi', proposal: 'Terim
           <div class="grid gap-3 sm:grid-cols-3">
             <UFormField label="Sumber: siapa">
               <UInput
-                v-model="source.who as string"
+                :model-value="source.who as string"
                 placeholder="mis. Bu Rina (PIC)"
                 class="w-full"
+                @update:model-value="v => (source.who = v)"
               />
             </UFormField>
             <UFormField label="Di mana">
               <UInput
-                v-model="source.where as string"
+                :model-value="source.where as string"
                 placeholder="mis. WhatsApp grup"
                 class="w-full"
+                @update:model-value="v => (source.where = v)"
               />
             </UFormField>
             <UFormField label="Kapan">
               <UInput
-                v-model="source.when as string"
+                :model-value="source.when as string"
                 type="date"
                 class="w-full"
+                @update:model-value="v => (source.when = v)"
               />
             </UFormField>
           </div>

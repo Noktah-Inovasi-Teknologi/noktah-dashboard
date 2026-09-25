@@ -191,7 +191,7 @@
 - [X] T071 [P] [US6] Add a Prefect flow `hub-notes-process` (manual, `--limit`, `--dry-run`) in `service/prefect/flows/hub_notes_process.py`, plus `prefect.yaml`
 - [X] T072 [P] [US6] Build the Catatan lama page (progress, unmatched list, client picker) in `service/web/app/pages/notes.vue`
 - [X] T073 [US6] Add fixtures and UI sweep routes for `/notes`
-- [ ] T074 [US6] Run note processing on the live notes (after T062): **dry run first** (projected spend), then the real run; report processed, matched and unmatched counts and actual vs projected cost
+- [X] T074 [US6] Run note processing on the live notes (after T062): **dry run first** (projected spend), then the real run; report processed, matched and unmatched counts and actual vs projected cost
 
 ---
 
@@ -213,7 +213,7 @@
   - the `chat.noktah.co` tunnel hostname (a user step)
 
   Keep the `knowledge_records` table.
-- [ ] T082 Open the PR(s) for spec 008 through the push gate (UI sweep clean), with only this feature's files staged
+- [X] T082 Open the PR(s) for spec 008 through the push gate (UI sweep clean), with only this feature's files staged
 
 ---
 
