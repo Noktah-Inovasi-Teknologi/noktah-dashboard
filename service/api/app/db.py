@@ -1,4 +1,10 @@
-"""One asyncpg pool for the process, opened at startup and closed at shutdown."""
+"""One asyncpg pool for the process, opened at startup and closed at shutdown.
+
+Every connection gets a JSON codec for `json`/`jsonb`, so values go in and come
+out as Python objects. Pass dicts and lists, never pre-encoded strings: a string
+would be stored as a JSON string, not as the object.
+"""
+import json
 from typing import Optional
 
 import asyncpg
@@ -6,9 +12,17 @@ import asyncpg
 _pool: Optional[asyncpg.Pool] = None
 
 
+async def init_connection(conn: asyncpg.Connection) -> None:
+    for typename in ("json", "jsonb"):
+        await conn.set_type_codec(
+            typename, encoder=lambda v: json.dumps(v, ensure_ascii=False, default=str),
+            decoder=json.loads, schema="pg_catalog",
+        )
+
+
 async def open_pool(dsn: str) -> None:
     global _pool
-    _pool = await asyncpg.create_pool(dsn, min_size=1, max_size=5)
+    _pool = await asyncpg.create_pool(dsn, min_size=1, max_size=5, init=init_connection)
 
 
 async def close_pool() -> None:

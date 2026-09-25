@@ -8,6 +8,25 @@
 
 **Input**: User description: "$ARGUMENTS"
 
+**Grill ledger**: [grill.md](grill.md) · session [DATE] — or "not grilled"
+
+## Inherited & Deferred *(mandatory)*
+
+<!--
+  Read docs/DEFERRED.md before writing anything below. Every row whose Target
+  matches this spec's scope (or says `any`) MUST appear here, once, as either:
+    - CLAIMED  — it becomes a requirement or task of this spec; delete the row
+                 from docs/DEFERRED.md in the same PR
+    - RE-DEFERRED — state the new reason and the new target; update the row
+  "Nothing in scope" is a valid answer and must be written as such.
+  Findings THIS spec defers (found but not done) are added to docs/DEFERRED.md
+  with this spec as origin — list their ids here too.
+-->
+
+- Claimed from register: [W-n, E-n, X-n — or "none in scope"]
+- Re-deferred: [id → new target, reason — or "none"]
+- Deferred by this spec: [ids added to docs/DEFERRED.md — or "none yet"]
+
 ## User Scenarios & Testing *(mandatory)*
 
 <!--
@@ -99,6 +118,12 @@
 - **FR-007**: System MUST retain user data for [NEEDS CLARIFICATION: retention period not specified]
 
 ### Key Entities *(include if feature involves data)*
+
+<!--
+  Name every entity with its CONTEXT.md term (the glossary). A term this spec
+  coins or sharpens is added to CONTEXT.md in the same PR — the definition
+  lives there once; here, say what the entity is *in this capability*.
+-->
 
 - **[Entity 1]**: [What it represents, key attributes without implementation]
 - **[Entity 2]**: [What it represents, relationships to other entities]

@@ -337,6 +337,47 @@ Reads are cached in-process for `HASHMAP_TTL_SECONDS` (default 300) and snapshot
 absent from a block simply get no mapping (e.g. no Jira component, or no competitor signal for
 songbird) — so a client must exist in the sheet to be wired up.
 
+### Noktah Hub (managers' dashboard)
+```bash
+# Web: service/web (Nuxt 4 + Nuxt UI, TypeScript, Bun) → Cloudflare Worker `noktah-hub`
+# at hub.noktah.co, behind Cloudflare Access. Auto-deploys on merge to master.
+# API: service/api (FastAPI) → container `hub-api`, reached only through the tunnel
+# at hub-api.noktah.co (service token). The ONLY writer of company data; the web
+# app never touches the database or OpenRouter. See service/web/README.md and
+# service/api/README.md.
+docker-compose up -d --build api              # after API code changes (source is baked in)
+cd service/api && uv run pytest               # API tests (real-Postgres ones need HUB_TEST_DATABASE_URL)
+
+# Prefect → hub-api over the Docker network (/internal/*, X-Hub-Internal-Token).
+# hub-api does the work; these flows only schedule it and alert #noktah-otomasi.
+#   hub-summary-refresh  hourly :15   stale Ringkasan, max once/day/Client, AI cap applies
+#   hub-sheet-sync       every 5 min  Registry → Clients/Hashmaps tabs (only changed Hub cells)
+#   hub-sheet-check      Mon 06:00    same, full diff; rewrites cells edited in the sheet
+#   hub-intake-purge     01:30 daily  Intake raw material > 12 months (excerpts kept forever)
+#   hub-registry-import  manual       ONE-TIME sheet → Registry import; validate-only default
+#   hub-notes-process    manual       old AnythingLLM notes → Intakes; dry run default
+docker exec prefect python flows/hub_registry_import.py            # difference report, writes nothing
+docker exec prefect python flows/hub_registry_import.py --apply    # real import; pauses roster-sync
+docker exec prefect python flows/hub_sheet_sync.py --validate-only # cells it would write
+docker exec prefect python flows/hub_notes_process.py              # zero model calls, projected spend
+docker exec prefect python flows/hub_notes_process.py --apply      # real run; stops at the AI cap
+```
+**After the import the Hub is the only place Clients, teams and accounts are edited.** The
+Clients and Hashmaps tabs become read-only copies (a note on A1 says so) that the
+automations keep reading until they switch to the Registry (`docs/DEFERRED.md` A-1).
+`roster-sync` is paused by the real import — don't unpause it: it would rewrite the roster
+from the sheet, and migration 011 makes it fail on any new Client (no Noktah Brand).
+The sheet copy refuses to write until the import has run, so its schedule is safe to deploy
+early. Roles are the Hub's own (email → Person → role; G-11); the first three are seeded by
+migration 010. Card, Intake and AI rules: `service/api/README.md`.
+```bash
+# UI gate: two halves. Static rules run after every edit under service/web/app
+# (post-edit hook); the rendered sweep (every page × width × light/dark × data
+# state, on sample data, no Docker needed) must be clean before a push/PR that
+# touches service/web/app (pre-push hook). Full survey with screenshots: /ui-sweep
+cd service/web && bun run test:ui && bun run ui:gate
+```
+
 ### Database Backup (nightly)
 ```bash
 # db-backup deployment: 02:00 WIB daily. pg_dump of noktah_dashboard →

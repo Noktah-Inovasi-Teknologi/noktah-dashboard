@@ -14,14 +14,19 @@ Every request must carry two Access JWTs, both RS256-signed by our Access team:
    the service token; this token cannot.
 
 A missing, expired, wrongly-signed or wrong-audience token gets 401, never a default user.
+A verified email with no Manager role gets 403 `no_access` (G-11); roles are the Hub's
+own, from the people list, never Cloudflare's.
 """
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import jwt
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, Request
 from fastapi.concurrency import run_in_threadpool
 
+from . import db
+from .errors import NoAccess, Unauthenticated
+from .permissions import Assignment, is_manager
 from .settings import Settings, get_settings
 
 SERVICE_HEADER = "cf-access-jwt-assertion"
@@ -54,6 +59,7 @@ async def verify_access_jwt(token: str, audience: str, settings: Settings) -> Di
 
 @dataclass(frozen=True)
 class User:
+    """A verified sign-in: the email Cloudflare Access proved. Not yet a Person."""
     email: str
 
 
@@ -61,14 +67,53 @@ async def current_user(request: Request, settings: Settings = Depends(get_settin
     service_token = request.headers.get(SERVICE_HEADER)
     user_token = request.headers.get(USER_HEADER)
     if not service_token or not user_token:
-        raise HTTPException(status_code=401, detail="missing Cloudflare Access credentials")
+        raise Unauthenticated("Belum login melalui Cloudflare Access.")
     try:
         await verify_access_jwt(service_token, settings.access_api_aud, settings)
         claims = await verify_access_jwt(user_token, settings.access_hub_aud, settings)
     except jwt.InvalidTokenError as e:
-        raise HTTPException(status_code=401, detail=f"invalid Cloudflare Access token: {e}") from e
+        raise Unauthenticated(f"Token Cloudflare Access tidak valid: {e}") from e
     email = str(claims.get("email") or "").strip().lower()
     if not email:
         # A service-token JWT has no email; only a person may act through the Hub.
-        raise HTTPException(status_code=401, detail="token does not identify a person")
+        raise Unauthenticated("Token tidak menunjukkan seseorang.")
     return User(email=email)
+
+
+@dataclass(frozen=True)
+class Caller:
+    """The Person behind a verified sign-in, with their active roles (G-11, G-16).
+
+    History always records `person_id`, never the email (G-16).
+    """
+    person_id: str
+    display_name: str
+    email: str
+    assignments: Tuple[Assignment, ...]
+
+
+async def load_caller(email: str) -> Caller:
+    """email → Person → active roles. NoAccess unless they hold a Manager role (G-9, G-11)."""
+    async with db.pool().acquire() as conn:
+        person = await conn.fetchrow(
+            """SELECT p.id, p.display_name, p.status
+               FROM person_emails e JOIN people p ON p.id = e.person_id
+               WHERE e.email = $1""",
+            email,
+        )
+        if person is None or person["status"] != "active":
+            raise NoAccess("Anda belum punya akses ke Noktah Hub.", email=email)
+        rows = await conn.fetch(
+            """SELECT r.role, b.brand_key
+               FROM person_roles r LEFT JOIN noktah_brands b ON b.id = r.noktah_brand_id
+               WHERE r.person_id = $1 AND r.valid_to IS NULL""",
+            person["id"],
+        )
+    assignments = tuple(Assignment(r["role"], r["brand_key"]) for r in rows)
+    if not is_manager(assignments):
+        raise NoAccess("Anda belum punya akses ke Noktah Hub.", email=email)
+    return Caller(str(person["id"]), person["display_name"], email, assignments)
+
+
+async def current_caller(user: User = Depends(current_user)) -> Caller:
+    return await load_caller(user.email)

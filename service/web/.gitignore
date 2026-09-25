@@ -26,3 +26,7 @@ logs
 # Wrangler local state
 .wrangler
 .dev.vars*
+
+# Playwright / UI sweep output (report, screenshots, last-clean marker)
+test-results
+playwright-report
