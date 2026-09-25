@@ -160,10 +160,10 @@ services:
       - HUB_API_ACCESS_API_AUD=c9804e34dfdec51dd20dac8e8e0c35b323a09985005ac929abcc69d02e5b6c92
       # Prefect -> /internal/* (Docker network only; refused through Cloudflare)
       - HUB_API_INTERNAL_TOKEN=${HUB_API_INTERNAL_TOKEN}
-      # AI intake + summaries (spec 008). Model is configuration, per call site.
+      # AI intake + summaries (spec 008). The summary model comes from
+      # config/ai/models.yaml (mounted below); Intake still uses HUB_INTAKE_MODEL.
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - HUB_INTAKE_MODEL=${HUB_INTAKE_MODEL:-xiaomi/mimo-v2.5}
-      - HUB_SUMMARY_MODEL=${HUB_SUMMARY_MODEL:-xiaomi/mimo-v2.5}
       - HUB_AI_MONTHLY_CAP_USD=${HUB_AI_MONTHLY_CAP_USD:-5}
       # Google Docs intake + the read-only Clients/Hashmaps sheet copy
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
@@ -178,6 +178,8 @@ services:
     volumes:
       # Card definition (versioned YAML), read-only, like config/extraction
       - ./config/hub:/app/config/hub:ro
+      # Accepted AI models per case and their rotation, read-only
+      - ./config/ai:/app/config/ai:ro
     depends_on:
       - postgres
     networks:
@@ -207,6 +209,8 @@ services:
       # client-side validation from them, Prefect re-validates at the storage
       # boundary. One declaration, three consumers.
       - ./config/extraction:/app/config/extraction:ro
+      # Accepted AI models per case (image, video) and their rotation, read-only
+      - ./config/ai:/app/config/ai:ro
       - social_data:/data
     networks:
       - dashboard-networks

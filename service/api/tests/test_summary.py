@@ -3,13 +3,23 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app.ai import rotation
 from app.ai.openrouter import AiResult
+from app.ai.rotation import Rotation
 from app.settings import get_settings
 from app.summary import service
 from tests.conftest import add_client
 
 pytestmark = pytest.mark.schema
 BODY = {"siapa": "Klinik mata di Sampang.", "promo_berjalan": [], "aturan_kunci": ["Sapaan Anda"], "permintaan_terbuka": []}
+
+
+@pytest.fixture(autouse=True)
+def fresh_rotation(monkeypatch):
+    """Rotation state is per process; every test starts on the first model of the repo list."""
+    cases = rotation.load(rotation.models_file("/nonexistent"))
+    monkeypatch.setattr(rotation, "_rotations", cases)
+    return cases["summary"]
 
 
 @pytest.fixture
@@ -90,24 +100,48 @@ async def _card(conn, name, pid):
            VALUES ($1::uuid, 'guideline', 'suara', 'v1', $2, 'current', $3)""", cid, {"sapaan": name}, pid)
 
 
-async def test_a_throttled_model_is_reported_by_client_and_defers_the_rest(hub_db, monkeypatch):
+async def test_repeated_failures_rotate_to_the_next_model(hub_db, monkeypatch):
     from app.ai.openrouter import AiFailure
 
+    monkeypatch.setitem(rotation._rotations, "summary", Rotation("summary", ["first", "second"], rotate_after=2))
     calls = []
 
-    async def throttled(**kwargs):
+    async def first_is_down(**kwargs):
         calls.append(kwargs)
-        raise AiFailure("provider_error", "HTTP 429 from DeepInfra (upstream_provider_shared_pool)")
+        if kwargs["model"] == "first":
+            raise AiFailure("provider_error", "HTTP 429 from DeepInfra (upstream_provider_shared_pool)")
+        kwargs["validate"](BODY)
+        return AiResult(BODY, "second", "Alibaba", 100, 50, 0.001, 1)
 
-    monkeypatch.setattr(service, "chat_json", throttled)
+    monkeypatch.setattr(service, "chat_json", first_is_down)
     async with hub_db.acquire() as conn:
         pid = await conn.fetchval("SELECT id FROM people LIMIT 1")
         for name in ("A Klinik", "B Klinik", "C Klinik"):
             await _card(conn, name, pid)
         out = await service.refresh_all(conn)
-    assert out["failed"] == 1 and out["deferred"] == 2, "after one throttled Client, the rest wait for next hour"
-    assert out["failures"] == {"A Klinik": "provider_error: HTTP 429 from DeepInfra (upstream_provider_shared_pool)"}
-    assert calls[0]["rate_limit_backoff"] == service.SUMMARY_BACKOFF, "background job retries patiently"
+    assert [c["model"] for c in calls] == ["first", "first", "second"]
+    assert out["failed"] == 2 and out["refreshed"] == 1 and out["deferred"] == 0
+    assert out["failures"]["A Klinik"] == "first: provider_error: HTTP 429 from DeepInfra (upstream_provider_shared_pool)"
+    assert out["model"]["current"] == "second"
+    assert calls[0]["rate_limit_backoff"] == service.SUMMARY_BACKOFF
+
+
+async def test_when_every_model_has_failed_the_rest_wait_for_next_hour(hub_db, monkeypatch):
+    from app.ai.openrouter import AiFailure
+
+    monkeypatch.setitem(rotation._rotations, "summary", Rotation("summary", ["first", "second"], rotate_after=1))
+
+    async def all_down(**kwargs):
+        raise AiFailure("provider_error", "HTTP 429 from somewhere")
+
+    monkeypatch.setattr(service, "chat_json", all_down)
+    async with hub_db.acquire() as conn:
+        pid = await conn.fetchval("SELECT id FROM people LIMIT 1")
+        for name in ("A Klinik", "B Klinik", "C Klinik"):
+            await _card(conn, name, pid)
+        out = await service.refresh_all(conn)
+    assert out["failed"] == 2 and out["deferred"] == 1, "one turn for each accepted model, then stop"
+    assert set(out["failures"]) == {"A Klinik", "B Klinik"}
 
 
 async def test_other_failures_do_not_stop_the_run(hub_db, monkeypatch):
@@ -123,3 +157,4 @@ async def test_other_failures_do_not_stop_the_run(hub_db, monkeypatch):
             await _card(conn, name, pid)
         out = await service.refresh_all(conn)
     assert out["failed"] == 2 and out["deferred"] == 0 and set(out["failures"]) == {"A Klinik", "B Klinik"}
+    assert out["failures"]["A Klinik"].startswith("deepseek/deepseek-v4-flash: validation_failed")

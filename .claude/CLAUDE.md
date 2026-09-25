@@ -263,10 +263,26 @@ Three rules that are counter-intuitive and easy to undo:
   `\{.*\}` salvage regex and `_to_text`'s list coercion are **deleted**, not disabled, and a test
   greps the module to prove it.
 
-Model routing is **roach's** to report, not something to infer from Prefect's environment
-(`OPENROUTER_IMAGE_MODEL` lives in `service/roach/.env`, which Prefect does not load). Ask
-`GET /extraction-config`. Guessing locally reports "no cross-model comparison applies" while roach
-is demonstrably serving two different models.
+Model routing is **roach's** to report, not something to infer from Prefect's environment: which
+model a case uses depends on roach's in-memory rotation. Ask `GET /extraction-config`. Guessing
+locally reports "no cross-model comparison applies" while roach is demonstrably serving two
+different models.
+
+### AI models: one accepted list per case (`config/ai/models.yaml`)
+```bash
+# Which models each case may use, best value first; edit, then restart (no rebuild):
+docker-compose restart api roach
+# What roach is using right now, per case, with its rotation state:
+curl -s -H "X-API-KEY: $key" http://localhost:8081/extraction-config
+```
+Three cases: `summary` (Hub Ringkasan, hub-api), `image` and `video` (roach /analyze). Each
+starts on its first model; 3 consecutive failures move it to the next, and after 60 minutes on a
+fallback it tries the first again (`rotate_after`, `back_to_first_after_minutes`). The lists
+were chosen from a benchmark on real data (costs in the file's comments). Two rules:
+**video models must take audio** (the subtitle is a verbatim transcript; a video-only model
+"transcribes" by reading burned-in captions), and **every model must be served by a provider
+the OpenRouter account allows** (openrouter.ai/settings/privacy), or its calls fail with 404.
+Songbird and Hub Intake still use their own env vars (`OPENROUTER_MODEL`, `HUB_INTAKE_MODEL`).
 
 Spend: `EXTRACTION_SPEND_THRESHOLD_USD` (per run, default $5) and
 `EXTRACTION_MONTHLY_CEILING_USD` (hard stop, default $25). **Both cover extraction spend only** —

@@ -30,7 +30,6 @@ class Settings(BaseSettings):
     # AI (spec 008). Models are configuration per call site (constitution II).
     openrouter_api_key: str = Field(default="", validation_alias=AliasChoices("OPENROUTER_API_KEY"))
     intake_model: str = Field(default="xiaomi/mimo-v2.5", validation_alias=AliasChoices("HUB_INTAKE_MODEL"))
-    summary_model: str = Field(default="xiaomi/mimo-v2.5", validation_alias=AliasChoices("HUB_SUMMARY_MODEL"))
     ai_monthly_cap_usd: float = Field(default=5.0, validation_alias=AliasChoices("HUB_AI_MONTHLY_CAP_USD"))
     ai_timeout_seconds: float = 90.0
 
@@ -48,6 +47,8 @@ class Settings(BaseSettings):
 
     # Card definition files (mounted read-only from ./config/hub).
     card_definition_dir: str = "/app/config/hub"
+    # Accepted models per case and their rotation (mounted read-only from ./config/ai).
+    ai_models_file: str = "/app/config/ai/models.yaml"
 
     public_hub_url: str = "https://hub.noktah.co"
 

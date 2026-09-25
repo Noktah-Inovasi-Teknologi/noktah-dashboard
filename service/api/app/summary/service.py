@@ -10,10 +10,12 @@ Requests). Never pending values, never raw Intake material.
   - the AI cap applies: at the cap, nothing is generated and the last summary
     stays visible, marked out of date (`cap_paused`).
   - it is marked "dibuat otomatis", never edited by hand, never a source.
-  - a throttled model is retried patiently (SUMMARY_BACKOFF: nobody is waiting),
-    and once one Client still fails after that, the run leaves the rest for the
-    next hour instead of queueing more calls behind an overloaded provider. Every
-    failure is reported with its Client and reason, which the flow alerts on.
+  - the model comes from the accepted list in config/ai/models.yaml (case
+    `summary`), rotating to the next after repeated failures (ai/rotation.py). A
+    throttled model is retried a little first (SUMMARY_BACKOFF: nobody is waiting).
+    When every accepted model has failed its turn in one run, the rest of the
+    Clients wait for the next hour. Every failure is reported with its Client,
+    model and reason, which the flow alerts on.
 """
 import hashlib
 import json
@@ -22,7 +24,7 @@ from typing import Any, Dict, Optional
 
 import asyncpg
 
-from ..ai import budget
+from ..ai import budget, rotation
 from ..ai.openrouter import AiFailure, chat_json
 from ..card.values import current_values
 from ..errors import AiCapReached
@@ -30,7 +32,7 @@ from ..settings import get_settings
 
 PROMPT_VERSION = "summary_v1"
 MIN_INTERVAL = timedelta(hours=24)
-SUMMARY_BACKOFF = (10, 30, 60)  # seconds before each retry of a 429
+SUMMARY_BACKOFF = (10, 30)  # seconds before each retry of a 429; rotation covers the rest
 
 SCHEMA = {
     "type": "object",
@@ -104,7 +106,7 @@ async def refresh_one(conn: asyncpg.Connection, client_id: str, now: Optional[da
                       failure: Optional[Dict[str, str]] = None) -> str:
     """'refreshed' | 'fresh' | 'too_soon' | 'empty' | 'paused' | 'failed'.
 
-    On 'failed', `failure` (when given) receives the reason and detail.
+    On 'failed', `failure` (when given) receives the model, reason and detail.
     """
     now = now or datetime.now(timezone.utc)
     inputs = await _inputs(conn, client_id)
@@ -123,18 +125,22 @@ async def refresh_one(conn: asyncpg.Connection, client_id: str, now: Optional[da
     except AiCapReached:
         return "paused"
     settings = get_settings()
+    models = rotation.for_case("summary")
+    model = models.current()
     try:
         result = await chat_json(
-            api_key=settings.openrouter_api_key, model=settings.summary_model,
+            api_key=settings.openrouter_api_key, model=model,
             messages=[{"role": "system", "content": SYSTEM},
                       {"role": "user", "content": json.dumps(inputs, ensure_ascii=False, default=str)}],
             schema=SCHEMA, validate=_validate,
             call_site="hub.summary", max_tokens=1500, timeout=settings.ai_timeout_seconds,
             rate_limit_backoff=SUMMARY_BACKOFF)
     except AiFailure as e:
+        models.failure(model)
         if failure is not None:
-            failure.update(reason=e.reason, detail=e.detail)
+            failure.update(model=model, reason=e.reason, detail=e.detail)
         return "failed"
+    models.success(model)
     async with conn.transaction():
         await budget.record(conn, call_site="hub.summary", client_id=client_id, intake_id=None, model=result.model,
                             provider=result.provider, prompt_tokens=result.prompt_tokens,
@@ -155,18 +161,23 @@ async def refresh_all(conn: asyncpg.Connection) -> Dict[str, Any]:
         "ORDER BY display_name")
     counts: Dict[str, int] = {}
     failures: Dict[str, str] = {}
-    throttled = False
+    models = rotation.for_case("summary")
+    # Enough failures in a row for every accepted model to have had its turn.
+    give_up_after = models.rotate_after * len(models.models)
+    in_a_row = 0
     for r in rows:
-        if throttled:
+        if in_a_row >= give_up_after:
             counts["deferred"] = counts.get("deferred", 0) + 1
             continue
         failure: Dict[str, str] = {}
         outcome = await refresh_one(conn, r["id"], failure=failure)
         counts[outcome] = counts.get(outcome, 0) + 1
         if outcome == "failed":
-            failures[r["display_name"]] = f"{failure.get('reason')}: {failure.get('detail')}"
-            throttled = failure.get("detail", "").startswith("HTTP 429")
+            failures[r["display_name"]] = f"{failure['model']}: {failure['reason']}: {failure['detail']}"
+            in_a_row += 1
+        elif outcome == "refreshed":
+            in_a_row = 0
     return {"refreshed": counts.get("refreshed", 0), "skipped_fresh": counts.get("fresh", 0) + counts.get("too_soon", 0),
             "empty": counts.get("empty", 0), "paused_by_cap": counts.get("paused", 0), "failed": counts.get("failed", 0),
-            # Stale or not, these weren't looked at: a provider was still throttling. Next hour tries them.
-            "deferred": counts.get("deferred", 0), "failures": failures}
+            # Not looked at: every accepted model had just failed. Next hour tries them.
+            "deferred": counts.get("deferred", 0), "failures": failures, "model": models.state()}

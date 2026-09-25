@@ -1,0 +1,48 @@
+# Accepted AI models per case, best value first. The one place a model is chosen.
+#
+# Read at startup by hub-api (summary) and roach (image, video); mounted read-only,
+# so a change here needs only a container restart, not a rebuild:
+#   docker-compose restart api roach
+#
+# Rotation: each service starts on the FIRST model of a case. After `rotate_after`
+# consecutive failures on the model in use (provider errors, rate limits that
+# outlast the retries, timeouts, answers that fail validation twice), it moves to
+# the next one, wrapping round at the end. A success resets the count. After
+# `back_to_first_after_minutes` on a fallback it tries the first model again, so
+# a short outage doesn't leave a case on its third choice for good. Rotation
+# state lives in memory: a restart starts every case on its first model again.
+#
+# Every model must be served by a provider the OpenRouter account allows
+# (openrouter.ai/settings/privacy), or every call to it fails with 404.
+#
+# Chosen 2026-09-25 from a benchmark on real data: the Balakosa card for summary,
+# a real image and a 3-frame carousel for image, two real TikTok clips for video,
+# each through the service's own prompt, schema and validator. Costs are USD per
+# call as OpenRouter billed them.
+
+rotate_after: 3
+back_to_first_after_minutes: 60
+
+cases:
+  # Hub Ringkasan: text in, JSON out, Bahasa, facts copied exactly.
+  summary:
+    - deepseek/deepseek-v4-flash   # $0.0003; the most faithful (kept every banned claim word for word)
+    - qwen/qwen3.7-flash           # $0.00005; cheapest, but once listed the regular menu as "promo berjalan"
+    - xiaomi/mimo-v2.5             # $0.0005; the previous default, dropped two banned claims
+
+  # roach /analyze for images and carousels: what is shown, on-screen text, beats.
+  image:
+    - qwen/qwen3.7-flash               # $0.00008 single / $0.00013 carousel; read the doctor's name off the screen
+    - qwen/qwen3.5-flash-02-23         # $0.00016 / $0.00026
+    - inclusionai/ling-3.0-flash-vl    # $0.00010 / $0.00019; shortest summaries
+    - xiaomi/mimo-v2.6-flash           # $0.00022 / $0.00043
+    - google/gemini-2.5-flash-lite     # $0.00035 / $0.00034; the previous default, kept last
+
+  # roach /analyze for video. MUST take audio: the subtitle is a verbatim transcript.
+  # qwen/qwen3.7-flash is deliberately absent: it has no audio input and only
+  # "transcribed" the test clips by reading their burned-in captions.
+  video:
+    - xiaomi/mimo-v2.6-flash           # $0.0007–0.0016; names and on-screen text exact
+    - xiaomi/mimo-v2.5                 # the previous default; same price, rate-limited on every benchmark call
+    - qwen/qwen3.8-omni-flash          # $0.0008–0.0018; misread one name
+    - google/gemini-2.5-flash-lite     # $0.0011–0.0026
