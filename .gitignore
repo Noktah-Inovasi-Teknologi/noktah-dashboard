@@ -113,14 +113,6 @@ log
 secret
 secrets
 
-# AnythingLLM persistent storage
-service/anythingllm/storage/*
-!service/anythingllm/storage/.gitkeep
-service/anythingllm/collector/hotdir/*
-!service/anythingllm/collector/hotdir/.gitkeep
-service/anythingllm/collector/outputs/*
-!service/anythingllm/collector/outputs/.gitkeep
-
 # Service account keys  
 **/gdrive-service-account.json
 **/*service-account*.json

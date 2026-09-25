@@ -662,7 +662,7 @@ branch and a PR that the user merges. Branch names follow the venyu repo's forma
 
 - **type**: `feat` (new behaviour or a tweak), `fix` (a bug), `chore` (tooling, deps, scripts), `docs`.
 - **scope**: the area the change lives in. `web` (service/web), `api` (service/api),
-  `prefect`, `roach`, `knowledge-base`, `config`. Use `project` when it spans more than one
+  `prefect`, `roach`, `config`. Use `project` when it spans more than one
   (e.g. a Hub change touching both web and api).
 - **title**: a few capitalised words joined by hyphens, saying what the branch is for.
 

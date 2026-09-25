@@ -206,13 +206,15 @@
   - change the Cloudflare Access policy for `hub.noktah.co` to *Include: Everyone*
   - verify from outside that a no-role sign-in sees only `/no-access`
 - [ ] T080 Run the quickstart end to end (§1–§8) and record the results, including the paste-to-saved time for SC-001
-- [ ] T081 **With the user's explicit go-ahead at this step** (G-33), remove AnythingLLM entirely:
+- [X] T081 **With the user's explicit go-ahead at this step** (G-33), remove AnythingLLM entirely:
   - the `anythingllm` and `knowledge-base` services in `docker-compose.yml`, their containers and images
   - the `service/anythingllm/` and `service/knowledge-base/` directories
   - `.claude/rules/backend/knowledge-base.md`, and every CLAUDE.md mention
   - the `chat.noktah.co` tunnel hostname (a user step)
 
-  Keep the `knowledge_records` table.
+  Keep the `knowledge_records` table. Done 2026-09-25: containers, images, directories, compose
+  services, rules file, docs and the tunnel hostname removed; the AnythingLLM database is backed
+  up outside the repo.
 - [X] T082 Open the PR(s) for spec 008 through the push gate (UI sweep clean), with only this feature's files staged
 
 ---

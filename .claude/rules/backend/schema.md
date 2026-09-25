@@ -106,8 +106,7 @@ and `harvested_signals` came to have no migration at all.
 
 Schema and constraint tests (`test_spine_schema.py`, `test_account_resolution.py`,
 `test_roster_sync.py`, `test_roster_alias.py`, `test_spine_backfill.py`, `test_run_records.py`,
-`test_schema_parity.py`) run against a real disposable PostgreSQL database, following the
-knowledge-base service's precedent (`.claude/rules/backend/knowledge-base.md`): partial unique
+`test_schema_parity.py`) run against a real disposable PostgreSQL database: partial unique
 indexes, the `NOT VALID` → `VALIDATE` sequence, and cross-source name reconciliation are exactly
 the class of bug that passes against a mock and fails against Postgres.
 
@@ -284,8 +283,9 @@ writer. Details that are easy to get wrong:
   ONE `pending` row, enforced by two partial unique indexes. Those are checked
   immediately, so a write moves the old current row to `superseded`/`corrected`
   BEFORE inserting the new one, and fills the old row's `replaced_by` AFTER (a
-  non-deferrable FK). Same ordering lesson as `knowledge_records`
-  (knowledge-base.md). Don't reorder `card/values.write`.
+  non-deferrable FK). A partial unique index is checked per statement, not at
+  COMMIT, so inserting first fails even inside one transaction (the old
+  `knowledge_records` upsert hit the same trap). Don't reorder `card/values.write`.
 - **The card definition freezes on first use.** `card_definitions.frozen_at` is set
   the first time a value references a version; the startup sync then refuses to
   change that version's YAML. A changed field list is `card_v2.yaml`, never an edit.

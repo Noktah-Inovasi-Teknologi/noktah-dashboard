@@ -3,7 +3,7 @@ Intake sources → what the model reads and what is kept as evidence (research R
 
   - text     pasted text, normalised (line endings, trailing spaces, blank runs)
   - image    one screenshot, PNG/JPEG/WebP, up to 5 MB, checked by its magic bytes
-  - gdoc     a Google Doc link, read with the Docs API (ported from knowledge-base)
+  - gdoc     a Google Doc link, read with the Docs API (ported from the retired knowledge-base service)
   - pdf      pypdf reads the text layer; a PDF whose text layer is too thin is a
              SCANNED PDF and is rendered to images with pypdfium2 — at most 10
              pages. A longer scanned PDF is refused ("unreadable"), never cut short
