@@ -1,6 +1,6 @@
 """
 /internal/*: jobs Prefect triggers on schedule (sheet copy, summaries, purge,
-import, old notes). Hub logic stays in this one codebase; Prefect only decides WHEN.
+import). Hub logic stays in this one codebase; Prefect only decides WHEN.
 
 Two locks, both required:
   1. `X-Hub-Internal-Token` must equal HUB_API_INTERNAL_TOKEN (constant-time
@@ -117,13 +117,3 @@ async def sheet_sync(check: bool = False, dry_run: bool = False) -> dict:
     from .registry.sheet_copy import sync
     async with db.pool().acquire() as conn:
         return await sync(conn, get_settings().clients_spreadsheet_id, check=check, dry_run=dry_run)
-
-
-@router.post("/notes/process")
-async def notes_process(limit: int | None = None, dry_run: bool = True) -> dict:
-    """Manual (flow hub-notes-process). dry_run defaults to TRUE: zero model calls,
-    notes in scope and projected spend. The real run is a deliberate second step."""
-    from . import db, deps
-    from .intake.notes import process
-    async with db.pool().acquire() as conn:
-        return await process(conn, deps.definition(), limit=limit, dry_run=dry_run)

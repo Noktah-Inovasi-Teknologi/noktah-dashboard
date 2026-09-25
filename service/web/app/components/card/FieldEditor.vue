@@ -59,22 +59,26 @@ function clean(shape: Shape, v: unknown): unknown {
   if (shape === 'rating') return typeof v === 'number' ? v : null
   return v
 }
-function payloadValue(): unknown {
+function payloadOf(value: unknown): unknown {
   const spec = props.spec
   if (spec.shape === 'object') {
     const out: Obj = {}
     for (const s of spec.subfields ?? []) {
-      const c = clean(s.shape, obj.value[s.key])
+      const c = clean(s.shape, (value as Obj)[s.key])
       if (!isEmptyValue(c)) out[s.key] = c
     }
     return out
   }
-  if (spec.shape === 'lines') return lineList.value.filter(l => !isEmptyValue(l))
-  return clean(spec.shape, draft.value)
+  if (spec.shape === 'lines') return (value as Obj[]).filter(l => !isEmptyValue(l))
+  return clean(spec.shape, value)
 }
+// Save is enabled only when the value or its validity differs from the one opened:
+// an untouched form, or an edit typed back to the original, saves nothing.
+const dirty = computed(() => !sameForm(payloadOf(draft.value), payloadOf(initial()))
+  || (props.mode !== 'proposal' && !sameForm(validUntil.value, props.validUntil)))
 function save() {
   emit('save', {
-    value: payloadValue(),
+    value: payloadOf(draft.value),
     valid_until: validUntil.value || null,
     source: { who: source.who || null, where: source.where || null, when: source.when || null }
   })
@@ -278,6 +282,7 @@ const SAVE_LABEL = { edit: 'Simpan', correct: 'Simpan koreksi', proposal: 'Terim
         />
         <UButton
           :loading="saving"
+          :disabled="!dirty"
           :label="SAVE_LABEL[mode]"
           @click="save"
         />

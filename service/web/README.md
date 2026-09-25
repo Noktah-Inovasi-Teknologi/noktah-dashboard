@@ -11,13 +11,23 @@ tunnel. Never put database access or OpenRouter calls here.
 
 | Route | What |
 |---|---|
-| `/` | Klien: the Registry list (active by default), completeness, team |
+| `/` | Klien: the Registry list, filters (status, brand, team member, card), pages of 20, Tambah klien |
 | `/clients/[id]` | One Client: tabs Ringkasan, Profil, Guideline, Permintaan, Registry, Riwayat |
 | `/clients/[id]/intake` | Intake: paste text, a screenshot, a Google Doc or a PDF → Proposals to decide |
 | `/approvals` | Persetujuan: Guideline changes waiting for the Brand Manager / Owner |
-| `/people`, `/people/[id]` | Orang: people, emails, roles, leaving |
-| `/notes` | Catatan lama: old AnythingLLM notes, the "belum ada klien" list |
+| `/people`, `/people/[id]` | Orang: filters (status, role, brand), pages of 20; one profile form per Person (name, IDs, emails, any number of roles), leaving |
 | `/no-access` | Signed in to Cloudflare, but no Manager role in the Hub |
+
+## Forms and lists
+
+- **Save is enabled only when something changed.** Every edit form compares itself with
+  what is stored (`composables/useFormState.ts`: strings trimmed, blank = empty, emails and
+  roles as sets), so an untouched form, a saved one, or an edit typed back to the original
+  all leave Save disabled. A new-record form (Tambah klien, Tambah orang) enables Save once
+  its required fields are filled.
+- **Tables and long lists filter and page in the browser** (`composables/usePaged.ts`,
+  `components/ListPager.vue`): 20 rows a page, 10 for Permintaan. Changing a filter returns
+  to page 1.
 
 ## Access
 

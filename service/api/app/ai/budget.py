@@ -8,8 +8,8 @@ The Hub's AI spend: a ledger of every call, and a monthly ceiling that is ENFORC
   - Crossing 80% sends ONE alert per month to #noktah-otomasi (G-6); the
     `hub_alerts_sent` primary key makes a second send impossible.
 
-The cap covers Intake, old notes and Summaries together (call sites hub.intake,
-hub.notes, hub.summary), separate from roach/songbird's extraction budget.
+The cap covers Intake and Summaries together (call sites hub.intake and hub.summary;
+the one-time old-notes run spent as hub.notes), separate from roach/songbird's extraction budget.
 """
 import logging
 from datetime import datetime, timezone

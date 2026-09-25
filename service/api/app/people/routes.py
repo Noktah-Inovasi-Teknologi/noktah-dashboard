@@ -7,9 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from .. import db
 from ..auth import Caller, current_caller
 from ..deps import caller_brands
-from ..errors import Invalid, NotFound
+from ..errors import Invalid
 from ..permissions import Action, Decision, can
-from ..registry.changes import record_change
 from . import service
 
 router = APIRouter(prefix="/v1")
@@ -43,11 +42,28 @@ async def me(caller: Caller = Depends(current_caller)) -> dict:
 
 # ── US5: People and roles ─────────────────────────────────────────────────────
 
+class RoleIn(BaseModel):
+    role: str
+    brand: Optional[str] = None
+
+
 class PersonIn(BaseModel):
     display_name: str
     emails: List[str] = Field(default_factory=list)
     jira_account_id: Optional[str] = None
     slack_user_id: Optional[str] = None
+    roles: List[RoleIn] = Field(default_factory=list)
+
+
+class PersonSave(BaseModel):
+    """The whole profile form: what the Person should look like after the save."""
+    model_config = ConfigDict(extra="forbid")
+    version: int
+    display_name: str
+    jira_account_id: Optional[str] = None
+    slack_user_id: Optional[str] = None
+    emails: List[str]
+    roles: List[RoleIn]
 
 
 class PersonPatch(BaseModel):
@@ -61,11 +77,6 @@ class PersonPatch(BaseModel):
 
 class EmailIn(BaseModel):
     email: str
-
-
-class RoleIn(BaseModel):
-    role: str
-    brand: Optional[str] = None
 
 
 async def _loaded(conn, caller: Caller, person_id: str) -> dict:
@@ -99,7 +110,22 @@ async def create_person(body: PersonIn, caller: Caller = Depends(current_caller)
             pid = await service.create_person(conn, display_name=body.display_name, emails=body.emails,
                                               jira_account_id=body.jira_account_id, slack_user_id=body.slack_user_id,
                                               by=caller.person_id)
+            for r in {service.role_key(r.role, r.brand) for r in body.roles}:
+                await service.grant_role(conn, caller, pid, *r)
         return await _loaded(conn, caller, pid)
+
+
+@router.put("/people/{person_id}")
+async def save_person(person_id: str, body: PersonSave, caller: Caller = Depends(current_caller)) -> dict:
+    async with db.pool().acquire() as conn:
+        await _loaded(conn, caller, person_id)  # visibility; each change checks its own rule
+        async with conn.transaction():
+            await service.save_person(
+                conn, caller, person_id, version=body.version,
+                fields={"display_name": body.display_name, "jira_account_id": body.jira_account_id,
+                        "slack_user_id": body.slack_user_id},
+                emails=body.emails, roles=[(r.role, r.brand) for r in body.roles])
+        return await _loaded(conn, caller, person_id)
 
 
 @router.patch("/people/{person_id}")
@@ -128,12 +154,7 @@ async def remove_email(person_id: str, email: str, caller: Caller = Depends(curr
     async with db.pool().acquire() as conn:
         await _editable(conn, caller, person_id)
         async with conn.transaction():
-            gone = await conn.fetchval("DELETE FROM person_emails WHERE person_id = $1::uuid AND email = $2 RETURNING email",
-                                       person_id, email.strip().lower())
-            if gone is None:
-                raise NotFound("Email tidak ditemukan pada orang ini.")
-            await record_change(conn, entity="person_email", entity_id=person_id, field="email", old=gone, new=None,
-                                person_id=caller.person_id)
+            await service.remove_email(conn, person_id, email, caller.person_id)
         return await _loaded(conn, caller, person_id)
 
 

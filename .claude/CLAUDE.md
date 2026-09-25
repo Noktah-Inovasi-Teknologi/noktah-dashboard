@@ -355,12 +355,9 @@ cd service/api && uv run pytest               # API tests (real-Postgres ones ne
 #   hub-sheet-check      Mon 06:00    same, full diff; rewrites cells edited in the sheet
 #   hub-intake-purge     01:30 daily  Intake raw material > 12 months (excerpts kept forever)
 #   hub-registry-import  manual       ONE-TIME sheet → Registry import; validate-only default
-#   hub-notes-process    manual       old AnythingLLM notes → Intakes; dry run default
 docker exec prefect python flows/hub_registry_import.py            # difference report, writes nothing
 docker exec prefect python flows/hub_registry_import.py --apply    # real import; pauses roster-sync
 docker exec prefect python flows/hub_sheet_sync.py --validate-only # cells it would write
-docker exec prefect python flows/hub_notes_process.py              # zero model calls, projected spend
-docker exec prefect python flows/hub_notes_process.py --apply      # real run; stops at the AI cap
 ```
 **After the import the Hub is the only place Clients, teams and accounts are edited.** The
 Clients and Hashmaps tabs become read-only copies (a note on A1 says so) that the
@@ -657,3 +654,25 @@ docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --mon
 - Environment variables for all sensitive data
 - Postgres authentication with SCRAM-SHA-256
 - No secrets in version control
+
+### Branches and PRs
+`master` is the only long-lived branch. Every change reaches it through a short-lived
+branch and a PR that the user merges. Branch names follow the venyu repo's format,
+`<type>/<scope>/<Title-Case-Words>`:
+
+- **type**: `feat` (new behaviour or a tweak), `fix` (a bug), `chore` (tooling, deps, scripts), `docs`.
+- **scope**: the area the change lives in. `web` (service/web), `api` (service/api),
+  `prefect`, `roach`, `config`. Use `project` when it spans more than one
+  (e.g. a Hub change touching both web and api).
+- **title**: a few capitalised words joined by hyphens, saying what the branch is for.
+
+Examples: `feat/project/Noktah-Hub-tweaks`, `fix/web/Client-list-overflow-on-phones`,
+`chore/prefect/Content-plan-helper-scripts`.
+
+Don't open a PR until the user says so. Stage explicit paths: never sweep unrelated
+uncommitted files into a branch.
+
+Before a PR that adds or changes words people read (Hub UI text, captions and briefs,
+songbird/Intake prompts), have the `copy-editor` agent (`.claude/agents/copy-editor.md`)
+review them. It knows the glossary (`CONTEXT.md`), the Hub's Bahasa conventions and the
+content-voice rules, and it reviews by default; tell it to apply when you want edits.

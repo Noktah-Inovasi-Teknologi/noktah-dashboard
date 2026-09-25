@@ -35,7 +35,7 @@ Prefect (Docker network only) ─X-Hub-Internal-Token─▶ hub-api:8000/interna
 |---|---|
 | `app/registry/` | Clients, team, accounts (`service.py`), the change log, the one-time import (`importer.py`), the sheet copy (`sheet_copy.py`, pure planning + one write) |
 | `app/card/` | Card definition (`config/hub/card_v1.yaml`, frozen once used), append-only values, approvals |
-| `app/intake/` | Sources (text, screenshot, Google Doc, PDF), the `intake_v1` prompt, deterministic checks, the pipeline, old notes |
+| `app/intake/` | Sources (text, screenshot, Google Doc, PDF), the `intake_v1` prompt, deterministic checks, the pipeline |
 | `app/summary/` | The Ringkasan, from confirmed values only, at most once a day |
 | `app/ai/` | OpenRouter call (length checked before parsing, one quoted retry, no salvage), the monthly cap |
 | `app/people/` | People, emails, roles (grant rules in `permissions.may_grant`) |
@@ -54,8 +54,7 @@ Prefect (Docker network only) ─X-Hub-Internal-Token─▶ hub-api:8000/interna
   (`hub_sync_state.last_success_at` is NULL until then). Internal Clients (Eskala) stay out
   of the Clients tab but keep their Hashmaps rows. Hashmaps keys keep their live spelling.
 - **Validate-only is the default** for everything that writes outside the Hub or spends:
-  the import (`validate_only=true`, a rolled-back transaction), the sheet copy (`dry_run`),
-  and old notes (`dry_run`, zero model calls, projected spend).
+  the import (`validate_only=true`, a rolled-back transaction) and the sheet copy (`dry_run`).
 
 ## Settings (env)
 

@@ -1,7 +1,6 @@
 """Intake routes (US2). Contract: contracts/hub-api.md → Intake."""
 from typing import Any, Dict, Optional
 
-import asyncpg
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
@@ -10,9 +9,9 @@ from ..ai import budget
 from ..auth import Caller, current_caller
 from ..card.routes import _notify_pending
 from ..deps import client_brand, definition, require
-from ..errors import Conflict, Forbidden, Invalid, NotFound
+from ..errors import Forbidden, Invalid
 from ..permissions import Action, Decision, can
-from . import notes, pipeline, sources
+from . import pipeline, sources
 
 router = APIRouter(prefix="/v1")
 
@@ -114,58 +113,3 @@ async def decide(proposal_id: str, body: DecideIn, caller: Caller = Depends(curr
 async def ai_usage(caller: Caller = Depends(current_caller)) -> dict:
     async with db.pool().acquire() as conn:
         return await budget.usage(conn)
-
-
-# ── US6: old notes ────────────────────────────────────────────────────────────
-
-class AssignIn(BaseModel):
-    client_id: str
-
-
-def _require_notes(caller: Caller) -> None:
-    if not may_run_intake_somewhere(caller):
-        raise Forbidden("Peran Anda tidak bisa mengelola catatan lama.")
-
-
-async def _unmatched_note(conn, intake_id: str) -> asyncpg.Record:
-    row = await conn.fetchrow(
-        "SELECT id::text AS id, raw_text, source_ref, status FROM intakes WHERE id = $1::uuid AND kind = 'old_note'",
-        intake_id)
-    if row is None:
-        raise NotFound("Catatan tidak ditemukan.")
-    if row["status"] != "unmatched":
-        raise Conflict("Catatan ini sudah ditetapkan atau dibuang.", status=row["status"])
-    return row
-
-
-@router.get("/notes/unmatched")
-async def notes_unmatched(caller: Caller = Depends(current_caller)) -> dict:
-    _require_notes(caller)
-    async with db.pool().acquire() as conn:
-        return {"progress": await notes.progress(conn), "notes": await notes.unmatched(conn)}
-
-
-@router.post("/notes/{intake_id}/assign")
-async def notes_assign(intake_id: str, body: AssignIn, caller: Caller = Depends(current_caller)) -> dict:
-    async with db.pool().acquire() as conn:
-        require(caller, Action.RUN_INTAKE, await client_brand(conn, caller, body.client_id))
-        note = await _unmatched_note(conn, intake_id)
-        if not note["raw_text"]:
-            raise Invalid("Teks catatan ini sudah dihapus (lebih dari 12 bulan).")
-        source = sources.Source(kind="old_note", text=note["raw_text"], source_ref=note["source_ref"],
-                                content_hash=sources._hash("old_note", note["raw_text"].encode()))
-        try:
-            await pipeline.run_intake(conn, definition(), client_id=body.client_id, source=source,
-                                      submitted_by=caller.person_id, call_site="hub.notes", intake_id=intake_id)
-        except asyncpg.UniqueViolationError:
-            raise Invalid("Klien ini sudah punya catatan dengan isi yang sama.")
-        return await pipeline.intake_view(conn, intake_id)
-
-
-@router.post("/notes/{intake_id}/discard")
-async def notes_discard(intake_id: str, caller: Caller = Depends(current_caller)) -> dict:
-    _require_notes(caller)
-    async with db.pool().acquire() as conn:
-        await _unmatched_note(conn, intake_id)
-        await conn.execute("UPDATE intakes SET status = 'discarded' WHERE id = $1::uuid", intake_id)
-        return {"id": intake_id, "status": "discarded"}

@@ -1,8 +1,7 @@
 """
 Shared pytest fixtures for schema/constraint tests (feature 004-relational-spine).
 
-Mirrors the knowledge-base service's approach (.claude/rules/backend/knowledge-base.md):
-partial unique indexes and the NOT VALID -> VALIDATE sequence are exactly the class
+Partial unique indexes and the NOT VALID -> VALIDATE sequence are exactly the class
 of bug that does not reproduce against a mock, so these tests run against a real,
 disposable PostgreSQL database rather than a fake.
 
@@ -84,7 +83,7 @@ def pytest_collection_modifyitems(config, items):
         return
     skip = pytest.mark.skip(
         reason=f"No database reachable at SPINE_TEST_DATABASE_URL ({TEST_DSN}); "
-        f"see service/knowledge-base/README.md for the disposable-Postgres setup this mirrors."
+        f"point it at any Postgres the tests may create throwaway databases on."
     )
     for item in items:
         if "schema" in item.keywords:

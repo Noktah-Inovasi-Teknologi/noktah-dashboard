@@ -244,3 +244,66 @@ async def end_role(conn: asyncpg.Connection, caller: Caller, person_id: str, rol
     await conn.execute("UPDATE person_roles SET valid_to = now() WHERE id = $1::uuid", role_id)
     await record_change(conn, entity="person_role", entity_id=person_id, field=row["role"],
                         old={"role": row["role"], "noktah_brand": row["brand_key"]}, new=None, person_id=caller.person_id)
+
+
+async def remove_email(conn: asyncpg.Connection, person_id: str, email: str, by: Optional[str]) -> None:
+    gone = await conn.fetchval("DELETE FROM person_emails WHERE person_id = $1::uuid AND email = $2 RETURNING email",
+                               person_id, email.strip().lower())
+    if gone is None:
+        raise NotFound("Email tidak ditemukan pada orang ini.")
+    await record_change(conn, entity="person_email", entity_id=person_id, field="email", old=gone, new=None,
+                        person_id=by)
+
+
+def role_key(role: str, brand: Optional[str]) -> tuple:
+    return role, None if role == "owner" else brand
+
+
+async def save_person(conn: asyncpg.Connection, caller: Caller, person_id: str, *, version: int,
+                      fields: Dict[str, Any], emails: List[str], roles: List[tuple]) -> None:
+    """The profile form's one Save: details, emails and roles in one transaction.
+
+    Only the differences are applied, each through the rule its single-change route
+    uses (require_manage for details and emails, may_grant for each role), so one
+    refused role or a taken email rolls the whole save back. Roles are ended before
+    new ones are granted, so replacing a Brand Manager works in one save.
+    """
+    current = await lock_person(conn, person_id, version)
+    if current["status"] != "active":
+        raise Invalid("Orang ini sudah keluar.")
+    have_roles = (await _roles(conn, [person_id])).get(person_id, [])
+
+    details = {k: v for k, v in fields.items() if k in ("display_name", "jira_account_id", "slack_user_id")}
+    have_emails = [r["email"] for r in await conn.fetch(
+        "SELECT email FROM person_emails WHERE person_id = $1::uuid", person_id)]
+    want_emails = list(dict.fromkeys(clean_email(e) for e in emails))
+    details_change = any(
+        (" ".join((v or "").split()) if k == "display_name" else (v or "").strip() or None) != current[k]
+        for k, v in details.items())
+    if details_change or set(want_emails) != set(have_emails):
+        require_manage(caller, have_roles)
+
+    changed = False
+    if details_change:
+        await update_person(conn, person_id, version, details, caller.person_id)
+    for e in have_emails:
+        if e not in want_emails:
+            await remove_email(conn, person_id, e, caller.person_id)
+            changed = True
+    for e in want_emails:
+        if e not in have_emails:
+            await add_email(conn, person_id, e, caller.person_id)
+            changed = True
+
+    want_roles = {role_key(r, b) for r, b in roles}
+    for r in have_roles:
+        if (r["role"], r["noktah_brand"]) not in want_roles:
+            await end_role(conn, caller, person_id, r["id"])
+            changed = True
+    have_keys = {(r["role"], r["noktah_brand"]) for r in have_roles}
+    for role, brand in sorted(want_roles - have_keys, key=lambda k: (k[0], k[1] or "")):
+        await grant_role(conn, caller, person_id, role, brand)
+        changed = True
+    if changed and not details_change:
+        await conn.execute("UPDATE people SET version = version + 1, updated_at = now() WHERE id = $1::uuid",
+                           person_id)

@@ -74,14 +74,14 @@ function personDetail(id: string) {
   }
 }
 
-function clientsList() {
+function clientsList(status = 'active') {
   return CLIENT_NAMES.map((name, i) => ({
     id: idOf(i), name, status: name === 'Klinik Utama Gasa' ? 'inactive' : 'active', is_internal: false,
     brand: 'eskala', brand_name: 'Eskala', quotas: { post: 4, story: 4, short_video: 4 },
     team_summary: { account_executive: i % 3 ? 'Ardella Bernica' : null, field_associate: 'Nadya Safira Alia Adinda', content_editor: i % 4 ? 'Putri Indah Lestari' : null },
     card_completeness: { profil: `${i % 6}/5`.replace('5/5', '5/5'), guideline: `${i % 11}/10` },
     pending_approvals: i === 7 ? 1 : 0
-  })).filter(c => c.status === 'active')
+  })).filter(c => status === 'all' || c.status === status)
 }
 
 function clientRecord(id: string) {
@@ -219,9 +219,11 @@ export function fixtureResponse(path: string, method: string, state: FixtureStat
       const rec = clientRecord(registry[1]!)
       return { ...rec, version: rec.version + 1 }
     }
+    // Creating answers with the new record (the page then opens it).
+    if (p === '/v1/clients') return clientRecord(CLIENT_ID)
+    if (p === '/v1/people') return personDetail(idOf(902))
     const person = p.match(/^\/v1\/people\/([^/]+)/)
     if (person) return personDetail(person[1]!)
-    if (/^\/v1\/notes\/[^/]+\/assign$/.test(p)) return intake('full')
     const decide = p.match(/^\/v1\/proposals\/([^/]+)\/decide$/)
     if (decide) {
       const b = (body ?? {}) as { outcome?: string, final_value?: unknown }
@@ -239,7 +241,7 @@ export function fixtureResponse(path: string, method: string, state: FixtureStat
   if (p === '/v1/me') return ME
   if (p === '/v1/card-definition') return definition
   if (p === '/v1/ai/usage') return { month: '2026-09', spent_usd: state === 'cap' ? 5.0 : 0.37, cap_usd: 5, paused: state === 'cap' }
-  if (p === '/v1/clients') return empty ? [] : clientsList()
+  if (p === '/v1/clients') return empty ? [] : clientsList(String(query?.status ?? 'active'))
   if (p === '/v1/approvals') {
     return empty ? [] : [{ id: idOf(800), client: { id: CLIENT_ID, name: 'Klinik Mata Sampang' }, part: 'guideline', field_key: 'visual', current_value: null, proposed_value: card(false).pending[0]!.value, set_by: 'Ardella Bernica', set_at: '2026-09-24T09:00:00Z' }]
   }
@@ -247,16 +249,6 @@ export function fixtureResponse(path: string, method: string, state: FixtureStat
     const wanted = String(query?.status ?? 'active')
     return empty ? [] : PEOPLE.filter(x => wanted === 'all' || x.status === wanted)
   }
-  if (p === '/v1/notes/unmatched') {
-    return empty
-      ? { progress: { processed: 95, matched: 95, unmatched: 0, remaining: 0 }, notes: [] }
-      : { progress: { processed: 61, matched: 58, unmatched: 3, remaining: 34 }, notes: [
-          { id: idOf(300), subject: 'profil', text: 'Nirwana Coffee Space profile: tempat nongkrong dengan board game, buka 10.00–23.00.', source_name: 'Nirwana Coffee Space' },
-          { id: idOf(301), subject: 'services offered', text: 'Laser treatment, facial, and consultation with Dr. Maya every Saturday.', source_name: 'Klinik Kecantikan (tidak diketahui)' },
-          { id: idOf(302), subject: 'kontak', text: 'WA admin 0813-9999-0000, lokasi di Jl. Trunojoyo.', source_name: 'Klinik Mata' }
-        ] }
-  }
-
   let m = p.match(/^\/v1\/people\/([^/]+)$/)
   if (m) return personDetail(m[1]!)
   m = p.match(/^\/v1\/clients\/([^/]+)$/)

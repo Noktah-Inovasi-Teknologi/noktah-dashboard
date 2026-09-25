@@ -15,6 +15,19 @@ const FIELD: Record<string, string> = {
 }
 const STATUS: Record<string, string> = { active: 'Aktif', pending: 'Menunggu', inactive: 'Tidak aktif' }
 const RELATION: Record<string, string> = { owned: 'milik klien', own: 'milik klien', competitor: 'pesaing' }
+const KINDS = [
+  { label: 'Semua perubahan', value: 'all' }, { label: 'Data klien', value: 'client' },
+  { label: 'Tim', value: 'team' }, { label: 'Akun sosial', value: 'account_link' }
+]
+const kind = ref('all')
+const search = ref('')
+const shown = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  return items.value.filter(h => (kind.value === 'all' || h.entity === kind.value)
+    && (!q || [FIELD[h.field] ?? h.field, show(h.old_value, h.field), show(h.new_value, h.field), h.person]
+      .some(x => x.toLowerCase().includes(q))))
+})
+const { page, pageRows, pageSize, total } = usePaged(shown)
 
 function show(value: unknown, field: string): string {
   if (value === null || value === undefined || value === '') return '—'
@@ -38,34 +51,67 @@ function show(value: unknown, field: string): string {
     icon="i-lucide-server-off"
     :title="hubError(error).message"
   />
-  <UEmpty
-    v-else-if="!items.length"
-    icon="i-lucide-history"
-    title="Belum ada perubahan"
-    description="Perubahan data klien, tim, dan akun akan tercatat di sini."
-  />
-  <ol
+  <div
     v-else
-    class="relative space-y-3 border-s border-default ps-5"
+    class="space-y-4"
   >
-    <li
-      v-for="h in items"
-      :key="h.id"
-      class="relative"
+    <div
+      v-if="items.length"
+      class="flex flex-wrap items-center gap-2"
     >
-      <span class="absolute -start-[1.6rem] top-1.5 size-2.5 rounded-full bg-primary ring-4 ring-default" />
-      <p class="text-sm">
-        <span class="font-medium">{{ FIELD[h.field] ?? h.field }}</span>
-        <template v-if="h.field !== 'created'">
-          : <template v-if="h.old_value !== null && h.old_value !== undefined">
-            <span class="text-muted line-through decoration-1 break-words">{{ show(h.old_value, h.field) }}</span> →
+      <UInput
+        v-model="search"
+        icon="i-lucide-search"
+        placeholder="Cari perubahan atau nama…"
+        class="w-full sm:w-64"
+        aria-label="Cari riwayat"
+      />
+      <USelect
+        v-model="kind"
+        :items="KINDS"
+        class="w-44"
+        aria-label="Filter jenis perubahan"
+      />
+    </div>
+    <UEmpty
+      v-if="!items.length"
+      icon="i-lucide-history"
+      title="Belum ada perubahan"
+      description="Perubahan data klien, tim, dan akun akan tercatat di sini."
+    />
+    <UEmpty
+      v-else-if="!shown.length"
+      icon="i-lucide-search-x"
+      title="Tidak ada perubahan yang cocok dengan filter"
+    />
+    <ol
+      v-else
+      class="relative space-y-3 border-s border-default ps-5"
+    >
+      <li
+        v-for="h in pageRows"
+        :key="h.id"
+        class="relative"
+      >
+        <span class="absolute -start-[1.6rem] top-1.5 size-2.5 rounded-full bg-primary ring-4 ring-default" />
+        <p class="text-sm">
+          <span class="font-medium">{{ FIELD[h.field] ?? h.field }}</span>
+          <template v-if="h.field !== 'created'">
+            : <template v-if="h.old_value !== null && h.old_value !== undefined">
+              <span class="text-muted line-through decoration-1 break-words">{{ show(h.old_value, h.field) }}</span> →
+            </template>
+            <span class="break-words">{{ show(h.new_value, h.field) }}</span>
           </template>
-          <span class="break-words">{{ show(h.new_value, h.field) }}</span>
-        </template>
-      </p>
-      <p class="text-xs text-muted">
-        {{ h.person }} · {{ formatDate(h.at) }}
-      </p>
-    </li>
-  </ol>
+        </p>
+        <p class="text-xs text-muted">
+          {{ h.person }} · {{ formatDate(h.at) }}
+        </p>
+      </li>
+    </ol>
+    <ListPager
+      v-model:page="page"
+      :total="total"
+      :page-size="pageSize"
+    />
+  </div>
 </template>

@@ -107,3 +107,43 @@ async def test_project_manager_cannot_manage_people(hub_db, api):
         await add_person(conn, "pm@noktah.co", "PM Eskala", "project_manager", "eskala")
     r = await api("pm@noktah.co").post("/v1/people", json={"display_name": "X", "emails": []})
     assert r.status_code == 403
+
+
+async def test_create_with_several_roles_at_once(hub_db, api):
+    bm = api(BM_ESKALA)
+    r = await bm.post("/v1/people", json={"display_name": "Sari Ganda", "emails": ["sari@noktah.co"], "roles": [
+        {"role": "field_associate", "brand": "eskala"}, {"role": "content_editor", "brand": "eskala"}]})
+    assert r.status_code == 200, r.text
+    assert sorted(x["role"] for x in r.json()["roles"]) == ["content_editor", "field_associate"]
+
+
+async def test_one_save_applies_details_emails_and_roles(hub_db, api):
+    bm = api(BM_ESKALA)
+    p = await _new(bm)
+    await bm.post(f"/v1/people/{p['id']}/roles", json={"role": "qc", "brand": "eskala"})
+    p = (await bm.get(f"/v1/people/{p['id']}")).json()
+    r = await bm.put(f"/v1/people/{p['id']}", json={
+        "version": p["version"], "display_name": "  Rina   Baru Sekali ", "jira_account_id": "abc", "slack_user_id": None,
+        "emails": ["rina@noktah.co", "RINA.KANTOR@noktah.co"],
+        "roles": [{"role": "field_associate", "brand": "eskala"}, {"role": "content_editor", "brand": "eskala"}]})
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["display_name"] == "Rina Baru Sekali" and out["jira_account_id"] == "abc"
+    assert sorted(out["emails"]) == ["rina.kantor@noktah.co", "rina@noktah.co"]
+    assert sorted(x["role"] for x in out["roles"]) == ["content_editor", "field_associate"], "qc ended, two granted"
+    assert out["version"] > p["version"]
+
+    r = await bm.put(f"/v1/people/{p['id']}", json={
+        "version": p["version"], "display_name": "Lagi", "emails": [], "roles": []})
+    assert r.status_code == 409, "stale version refused"
+
+
+async def test_a_refused_role_rolls_the_whole_save_back(hub_db, api):
+    bm = api(BM_ESKALA)
+    p = await _new(bm)
+    r = await bm.put(f"/v1/people/{p['id']}", json={
+        "version": p["version"], "display_name": "Nama Baru", "emails": ["rina@noktah.co"],
+        "roles": [{"role": "field_associate", "brand": "eskala"}, {"role": "brand_manager", "brand": "eskala"}]})
+    assert r.status_code == 403
+    after = (await bm.get(f"/v1/people/{p['id']}")).json()
+    assert after["display_name"] == "Rina Baru" and after["roles"] == [] and len(after["emails"]) == 2

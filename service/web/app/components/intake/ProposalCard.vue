@@ -257,7 +257,7 @@ function openEdit() {
           <UButton
             label="Terima"
             :loading="busy"
-            :disabled="!requestText.trim()"
+            :disabled="!requestText.trim() || sameForm(requestText, p.proposed_value)"
             @click="decide('edit', requestText.trim())"
           />
         </div>

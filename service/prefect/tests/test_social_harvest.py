@@ -14,6 +14,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -766,9 +767,13 @@ async def test_observation_covers_items_the_window_filter_excludes(patched_engin
     never build a series on anything older than a month, and two observations
     are the minimum for any velocity at all.
     """
+    # Relative to today: a fixed "recent" date ages out of the 31-day window and the
+    # test starts failing on the calendar, not on the code (it did, 2026-09-25).
+    recent = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     async def fake_list(profile_url, platform, max_items=30, stories_only=False):
         return {"profile": {"handle": "acct"}, "items": [
-            _item("recent", published_at="2026-08-01T00:00:00Z"),
+            _item("recent", published_at=recent),
             _item("old", published_at="2026-01-01T00:00:00Z"),
         ]}
 
