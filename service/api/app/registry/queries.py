@@ -62,7 +62,8 @@ async def list_clients(conn: asyncpg.Connection, brands: List[str], include_unbr
             "id": r["id"], "name": r["display_name"], "status": r["status"], "is_internal": r["is_internal"],
             "brand": r["brand_key"], "brand_name": r["brand_name"],
             "quotas": {"post": r["quota_post"], "story": r["quota_story"], "short_video": r["quota_short_video"]},
-            "team_summary": {k: team_by.get(r["id"], {}).get(k) for k in ("account_executive", "field_associate")},
+            "team_summary": {k: team_by.get(r["id"], {}).get(k)
+                             for k in ("account_executive", "field_associate", "content_editor")},
             "card_completeness": {
                 "profil": f"{comp['profil']['filled']}/{comp['profil']['required']}",
                 "guideline": f"{comp['guideline']['filled']}/{comp['guideline']['total']}",
