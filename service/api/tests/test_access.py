@@ -13,7 +13,7 @@ async def _seed(hub_db):
     async with hub_db.acquire() as conn:
         eskala = await add_client(conn, "Klinik Mata Sampang", "eskala")
         venyu = await add_client(conn, "Venyu Demo Venue", "venyu")
-        await add_person(conn, "pm@noktah.co", "PM Eskala", "project_manager", "eskala")
+        await add_person(conn, "pm@noktah.co", "PM Eskala", "production_manager", "eskala")
         await add_person(conn, "fa@gmail.com", "Field Associate", "field_associate", "eskala")
         await add_person(conn, "nobody@gmail.com", "No Role", None, None)
     return eskala, venyu

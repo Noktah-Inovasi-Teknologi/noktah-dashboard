@@ -365,8 +365,10 @@ automations keep reading until they switch to the Registry (`docs/DEFERRED.md` A
 `roster-sync` is paused by the real import — don't unpause it: it would rewrite the roster
 from the sheet, and migration 011 makes it fail on any new Client (no Noktah Brand).
 The sheet copy refuses to write until the import has run, so its schedule is safe to deploy
-early. Roles are the Hub's own (email → Person → role; G-11); the first three are seeded by
-migration 010. Card, Intake and AI rules: `service/api/README.md`.
+early. Access is the Hub's own (email → Person → Units, roles, permissions; G-11, migration 012).
+Roles live in one catalog (`unit_roles`: Noktah, Eskala, Venyu); a role grants nothing by
+itself except Owner, and a Client team slot takes only someone holding its role. Card,
+Intake and AI rules: `service/api/README.md`.
 ```bash
 # UI gate: two halves. Static rules run after every edit under service/web/app
 # (post-edit hook); the rendered sweep (every page × width × light/dark × data

@@ -30,6 +30,7 @@ CHAIN = [
     "004_relational_spine", "005_link_existing", "006_enforce_account_link", "007_signal_field_coverage",
     "008_observation_history", "009_structured_extraction", "010_hub_registry_card",
     "011_client_brand_required",
+    "012_hub_units_roles_permissions",
 ]
 
 
@@ -124,14 +125,24 @@ async def api(hub_db):
 
 
 async def add_person(conn, email: str, name: str, role: str, brand_key):
-    """Seed a Person with one active role (brand_key None for owner)."""
+    """Seed a Person with one active role, its Unit, and the role's default permissions
+    from the catalog (brand_key None means the Noktah group, as for the Owner)."""
+    unit = brand_key or "noktah"
     pid = await conn.fetchval("INSERT INTO people (display_name) VALUES ($1) RETURNING id", name)
     await conn.execute("INSERT INTO person_emails (person_id, email) VALUES ($1, $2)", pid, email)
     if role:
         await conn.execute(
             """INSERT INTO person_roles (person_id, role, noktah_brand_id)
                VALUES ($1, $2, (SELECT id FROM noktah_brands WHERE brand_key = $3))""",
-            pid, role, brand_key)
+            pid, role, unit)
+        await conn.execute(
+            """INSERT INTO person_units (person_id, noktah_brand_id)
+               SELECT $1, id FROM noktah_brands WHERE brand_key = $2""", pid, unit)
+        await conn.execute(
+            """INSERT INTO person_permissions (person_id, permission)
+               SELECT $1, unnest(u.default_permissions) FROM unit_roles u
+               JOIN noktah_brands b ON b.id = u.noktah_brand_id WHERE b.brand_key = $2 AND u.role = $3""",
+            pid, unit, role)
     return str(pid)
 
 

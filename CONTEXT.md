@@ -7,23 +7,35 @@ The vocabulary of Noktah's work: Eskala's content agency operations, and the aut
 ### The company
 
 **Noktah Brand**:
-One of Noktah's business lines, each run by its own Brand Manager: Eskala (the content agency) and Venyu (the software product). Every Client belongs to exactly one Noktah Brand.
+One of Noktah's business lines, each run by its own Brand Manager: Eskala (the content agency) and Venyu (the software product). Every Client belongs to exactly one Noktah Brand. Noktah itself is the company group, not a Noktah Brand.
 _Avoid_: Brand (on its own, for Eskala or Venyu), lini bisnis, divisi
 
+**Unit**:
+Where a Person works: Noktah (the company group, for roles that span every Noktah Brand, such as Owner and Sales & Marketing), Eskala or Venyu. A Person may be in several Units; their permissions apply to the Clients of their Units, and Noktah covers every Noktah Brand.
+_Avoid_: divisi, departemen, tim (that is a Client's Team), Brand (for Noktah)
+
+**Role**:
+What a Person is in one Unit, from that Unit's catalog. Noktah: Owner, Sales & Marketing. Eskala: Brand Manager, Production Manager, Account Executive, Content Planner, Field Associate, Content Editor, Quality Assurance. Venyu: Brand Manager, Production Manager, Quality Assurance, Front-end Developer, Back-end Developer, DevOps, Mobile Developer. A role decides which Client team slots a Person may fill; apart from Owner it grants nothing in the Hub by itself (that is the Permission).
+_Avoid_: jabatan, QC (write Quality Assurance), Project Manager (the role is Production Manager), PM (in written text)
+
+**Permission**:
+One thing a Person may do in the Hub (Izin): Masuk Hub, Ubah Registry, Ubah Profil, Setujui Guideline, Kelola permintaan, Jalankan Intake, Kelola orang. Picking a role pre-ticks its usual permissions; the Person's own set is what counts. Nobody gives a permission they don't hold; the Owner holds them all.
+_Avoid_: akses (loosely), hak, privilege
+
 **Owner**:
-The role that sees and can do everything across every Noktah Brand, and appoints Brand Managers.
+The Noktah role that sees and can do everything across every Noktah Brand, and appoints Brand Managers.
 _Avoid_: admin, superuser, CEO (as a Hub role)
 
 **Brand Manager**:
-The highest position within one Noktah Brand. Project Managers, Account Executives and Sales & Marketing report to them, and they approve changes to a Client's brand.
+The highest position within one Noktah Brand. Production Managers, Account Executives and the Noktah Brand's staff report to them, and they approve changes to a Client's brand.
 _Avoid_: BM (in written text), head, lead
 
 **Manager**:
-Anyone holding a role that may sign in to the Hub: Owner, Brand Manager, Project Manager, Account Executive, or Sales & Marketing. Staff (Content Planner, Field Associate, Content Editor, QC) are not Managers.
+Anyone who may sign in to the Hub: the Owner, or a Person with the Masuk Hub permission. Staff hold roles but usually no permissions, so they are not Managers.
 _Avoid_: admin, user (for a Manager)
 
 **Person**:
-Someone at Noktah on the Hub's people list: a Manager or a staff member. One Person may sign in with several emails and hold several roles, each within one Noktah Brand; history always names the Person, never just an email.
+Someone at Noktah on the Hub's people list: a Manager or a staff member. One Person may sign in with several emails, be in several Units and hold several roles, each within one of their Units; history always names the Person, never just an email.
 _Avoid_: user, worker, account (for a Person)
 
 ### Clients and their facts
@@ -69,7 +81,7 @@ One submission of raw information (a pasted chat, notes, or a screenshot) for on
 _Avoid_: upload, import, ingestion
 
 **Team**:
-The staff assigned to one Client: its Account Executive, Content Planner, Field Associate, Content Editor and QC, each a Person from the people list.
+The staff assigned to one Client, one Person per team-slot role of its Noktah Brand's catalog (for Eskala: Account Executive, Content Planner, Field Associate, Content Editor and Quality Assurance). Each slot takes only a Person holding that role in the Client's Noktah Brand; ending the role releases the slot.
 _Avoid_: crew, PIC (that is the Client's person)
 
 **Approval**:

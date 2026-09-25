@@ -307,6 +307,29 @@ writer. Details that are easy to get wrong:
   `spine_db` fixture skips 011 as it skips 006: roster-sync predates brands and
   never sets one (it is paused once the Hub owns the roster).
 
+## Hub Units, role catalog and permissions (migration 012)
+
+Migration 012 splits a Person's access into Units (`person_units`), roles from one
+catalog (`unit_roles`), and permissions (`person_permissions`). `noktah_brands` gains
+`kind` and a `noktah` row of kind `group`: the Unit for Owner and Sales & Marketing.
+Details that are easy to get wrong:
+
+- **Clients never belong to the group.** `clients.noktah_brand_id` can't check the
+  referenced row's `kind`, so the API does (`create_client` and `all_brand_keys` filter
+  `kind = 'brand'`).
+- **The role CHECK is a superset, not the catalog.** `chk_person_roles_role` still
+  allows `project_manager` and `qc`, so ended rows with the old keys stay valid. Which
+  role exists in which Unit is `unit_roles`, enforced by the API on every grant. An FK
+  to the catalog would reject ended history rows (e.g. an ended Account Executive in
+  Venyu), so there is none.
+- **Every role now has a Unit** (`chk_person_roles_unit`, NOT VALID → VALIDATE), which
+  replaced 010's `chk_person_roles_brand_scope` (Owner ⇔ no brand).
+- **Data steps run in a fixed order**: rename keys, move Owner and Sales & Marketing to
+  Noktah (ending duplicate Sales & Marketing rows first, or the move collides on
+  `uq_person_roles_active`), end active roles the catalog doesn't list, then grant each
+  team member their team role, then fill Units and permissions from active roles.
+  `tests/test_migration_012.py` runs it on the pre-012 shape, twice, then down and up.
+
 ## Naming
 
 Flows: `roster-sync`, `spine-backfill`, `field-availability-sync`,

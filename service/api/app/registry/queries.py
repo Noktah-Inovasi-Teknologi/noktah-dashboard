@@ -5,8 +5,8 @@ import asyncpg
 
 from ..card.definition import completeness
 from ..deps import definition
+from ..people import catalog
 
-TEAM_ROLES = ["account_executive", "content_planner", "field_associate", "content_editor", "qc"]
 
 
 async def current_card_values(conn: asyncpg.Connection, client_ids: List[str]) -> Dict[str, Dict[str, Dict[str, Any]]]:
@@ -101,7 +101,9 @@ async def client_record(conn: asyncpg.Connection, client_id: str) -> Optional[Di
            ORDER BY car.role, a.platform, ah.handle_text""",
         client_id,
     )
-    team = {role: None for role in TEAM_ROLES}
+    # The brand's team slots, in catalog order; a slot filled under a role the
+    # catalog no longer lists still shows, so it can be seen and cleared.
+    team = {role: None for role in await catalog.team_slots(conn, r["brand_key"])}
     for t in team_rows:
         team[t["team_role"]] = {"person_id": t["person_id"], "name": t["display_name"], "status": t["status"]}
     return {

@@ -159,7 +159,7 @@ async def list_approvals(caller: Caller = Depends(current_caller)) -> list:
 
 def require_quiet(caller: Caller, brand: str) -> bool:
     from ..permissions import can
-    return can(caller.assignments, Action.APPROVE_GUIDELINE, brand) is Decision.ALLOW
+    return can(caller.access, Action.APPROVE_GUIDELINE, brand) is Decision.ALLOW
 
 
 async def _pending_brand(conn, caller: Caller, value_id: str) -> None:

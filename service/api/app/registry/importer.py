@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 import asyncpg
 
 from ..errors import HubError
+from ..people import service as people_service
 from . import names, service
 from .changes import record_change
 from .sheet_layout import clients_table, pair_rows, social_rows
@@ -230,6 +231,7 @@ async def _import(conn: asyncpg.Connection, clients_rows: List[List[Any]], hashm
             if current and current["display_name"] == people[pid]["display_name"]:
                 continue
             version = await conn.fetchval("SELECT version FROM clients WHERE id = $1::uuid", cid)
+            await people_service.ensure_role(conn, pid, role, "eskala", None)  # a team slot needs its role
             await service.set_team(conn, cid, version, role, pid, None)
             report["team"].append({"client": resolver.names[cid], "role": role,
                                    "database": current["display_name"] if current else None,

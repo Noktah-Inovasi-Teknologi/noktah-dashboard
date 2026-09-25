@@ -1,23 +1,35 @@
 """
-What a role may do, in which Noktah Brand. Pure: no I/O, no framework.
+What a Person may do, in which Noktah Brand. Pure: no I/O, no framework.
 
-The table is G-9 (grill ledger), scoped by G-10:
+A Person has three separate parameters (migration 012):
 
-  Owner              whole company   everything, every Noktah Brand; appoints Brand Managers
-  Brand Manager      own Noktah Brand everything there, incl. approving Guideline changes and
-                                     granting roles (never brand_manager/owner)
-  Project Manager,   own Noktah Brand edit Clients, teams, accounts, Client Cards; run Intake.
-  Account Executive                  Guideline changes need the Brand Manager's approval
-  Sales & Marketing  own Noktah Brand read only
-  staff roles        —               cannot sign in at all
+  Units        Noktah (the company group), Eskala, Venyu. Clients belong to a
+               brand; the group covers every brand.
+  roles        from the central catalog (`unit_roles`), each in one Unit. A role
+               says what someone IS; it grants nothing by itself, except Owner.
+  permissions  what they may DO in the Hub (PERMISSIONS below). A new role
+               suggests its catalog defaults; the stored set is the authority.
+
+A permission applies in the brands of the Person's Units, or in every brand when
+one of their Units is the Noktah group. The Owner role may do everything,
+everywhere, whatever its stored permissions say, so the company can't lock itself out.
 
 `can()` answers ALLOW, DENY or NEEDS_APPROVAL. Only `edit_guideline` can return
-NEEDS_APPROVAL: the change is stored as pending and waits for the Brand Manager
-(or the Owner, G-12).
+NEEDS_APPROVAL: `edit_profil` without `approve_guideline` stores the change as
+pending, for someone with `approve_guideline` to decide (G-12).
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Iterable, Optional, Set
+from typing import FrozenSet, Iterable, Optional, Set, Tuple
+
+GROUP_UNIT = "noktah"
+
+# In the order the Hub lists them. `hub_access` is implied by any other.
+PERMISSIONS = ("hub_access", "edit_clients", "edit_profil", "approve_guideline", "edit_requests",
+               "run_intake", "manage_people")
+
+# Roles only the Owner may grant or end.
+OWNER_ONLY_ROLES = {"owner", "brand_manager"}
 
 
 class Decision(str, Enum):
@@ -38,84 +50,107 @@ class Action(str, Enum):
     APPOINT_BRAND_MANAGER = "appoint_brand_manager"
 
 
-MANAGER_ROLES = {"owner", "brand_manager", "project_manager", "account_executive", "sales_marketing"}
-STAFF_ROLES = {"content_planner", "field_associate", "content_editor", "qc"}
-ALL_ROLES = MANAGER_ROLES | STAFF_ROLES
-
-_EDITOR_ACTIONS = {
-    Action.READ, Action.EDIT_REGISTRY, Action.EDIT_PROFIL, Action.EDIT_REQUESTS, Action.RUN_INTAKE,
+_NEEDS = {
+    Action.READ: "hub_access",
+    Action.EDIT_REGISTRY: "edit_clients",
+    Action.EDIT_PROFIL: "edit_profil",
+    Action.APPROVE_GUIDELINE: "approve_guideline",
+    Action.EDIT_REQUESTS: "edit_requests",
+    Action.RUN_INTAKE: "run_intake",
+    Action.MANAGE_PEOPLE: "manage_people",
 }
 
 
 @dataclass(frozen=True)
 class Assignment:
-    """One active role held by the caller. `brand` is None only for the Owner."""
+    """One active role held by a Person, in one Unit."""
     role: str
     brand: Optional[str]
 
 
-def is_manager(assignments: Iterable[Assignment]) -> bool:
-    """May this Person sign in to the Hub at all? (G-9, G-11)"""
-    return any(a.role in MANAGER_ROLES for a in assignments)
+@dataclass(frozen=True)
+class Access:
+    """Everything the rules below need to know about a Person."""
+    assignments: Tuple[Assignment, ...] = ()
+    units: FrozenSet[str] = field(default_factory=frozenset)
+    permissions: FrozenSet[str] = field(default_factory=frozenset)
 
 
-def visible_brands(assignments: Iterable[Assignment], all_brands: Iterable[str]) -> Set[str]:
+def normalize_permissions(perms: Iterable[str]) -> Set[str]:
+    """Any permission implies hub_access: it can't be used without signing in."""
+    perms = set(perms)
+    if perms:
+        perms.add("hub_access")
+    return perms
+
+
+def is_owner(access: Access) -> bool:
+    return any(a.role == "owner" for a in access.assignments)
+
+
+def is_manager(access: Access) -> bool:
+    """May this Person sign in to the Hub at all? (G-11)"""
+    return is_owner(access) or "hub_access" in access.permissions
+
+
+def covers_everything(access: Access) -> bool:
+    return is_owner(access) or GROUP_UNIT in access.units
+
+
+def in_scope(access: Access, unit: Optional[str]) -> bool:
+    """Does the Person's reach include this Unit (a brand, or the group itself)?"""
+    if covers_everything(access):
+        return True
+    return unit is not None and unit in access.units
+
+
+def visible_brands(access: Access, all_brands: Iterable[str]) -> Set[str]:
     """Noktah Brands whose Clients this Person may see (G-10)."""
-    assignments = list(assignments)
-    if any(a.role == "owner" for a in assignments):
-        return set(all_brands)
-    return {a.brand for a in assignments if a.role in MANAGER_ROLES and a.brand}
+    if not is_manager(access):
+        return set()
+    return {b for b in all_brands if in_scope(access, b)}
 
 
-def _one(role: str, action: Action) -> Decision:
-    if role == "owner" or role == "brand_manager":
-        if action is Action.APPOINT_BRAND_MANAGER and role != "owner":
-            return Decision.DENY
-        return Decision.ALLOW
-    if role in {"project_manager", "account_executive"}:
-        if action in _EDITOR_ACTIONS:
-            return Decision.ALLOW
-        if action is Action.EDIT_GUIDELINE:
-            return Decision.NEEDS_APPROVAL
-        return Decision.DENY
-    if role == "sales_marketing":
-        return Decision.ALLOW if action is Action.READ else Decision.DENY
-    return Decision.DENY  # staff roles, unknown roles
-
-
-def can(assignments: Iterable[Assignment], action: Action, brand: Optional[str]) -> Decision:
-    """The best decision any of the caller's roles gives for `action` in `brand`.
+def can(access: Access, action: Action, brand: Optional[str]) -> Decision:
+    """May the Person do `action` in `brand`?
 
     `brand` is the Noktah Brand of the thing acted on; None for company-wide
-    actions (only the Owner can act company-wide).
+    actions, which only the Owner may take.
     """
-    best = Decision.DENY
-    for a in assignments:
-        if a.role == "owner":
-            in_scope = True
-        else:
-            in_scope = brand is not None and a.brand == brand
-        if not in_scope:
-            continue
-        d = _one(a.role, action)
-        if d is Decision.ALLOW:
+    if is_owner(access):
+        return Decision.ALLOW
+    if action is Action.APPOINT_BRAND_MANAGER or brand is None or not in_scope(access, brand):
+        return Decision.DENY
+    perms = access.permissions
+    if action is Action.EDIT_GUIDELINE:
+        if "approve_guideline" in perms:
             return Decision.ALLOW
-        if d is Decision.NEEDS_APPROVAL:
-            best = Decision.NEEDS_APPROVAL
-    return best
+        return Decision.NEEDS_APPROVAL if "edit_profil" in perms else Decision.DENY
+    return Decision.ALLOW if _NEEDS[action] in perms else Decision.DENY
 
 
-def may_grant(assignments: Iterable[Assignment], role: str, brand: Optional[str]) -> bool:
-    """May the caller grant `role` in `brand`?
+def may_manage(access: Access) -> bool:
+    return is_owner(access) or "manage_people" in access.permissions
 
-    Owner: any role, incl. brand_manager and owner. Brand Manager: any role in their
-    own Noktah Brand except brand_manager and owner. Nobody else.
+
+def may_grant(access: Access, role: str, unit: Optional[str]) -> bool:
+    """May the Person grant or end `role` in `unit`?
+
+    The Owner: any role. Anyone else with manage_people: any role in a Unit within
+    their reach, except Owner and Brand Manager.
     """
-    assignments = list(assignments)
-    if role not in ALL_ROLES:
-        return False
-    if any(a.role == "owner" for a in assignments):
+    if is_owner(access):
         return True
-    if role in {"owner", "brand_manager"}:
+    return may_manage(access) and role not in OWNER_ONLY_ROLES and in_scope(access, unit)
+
+
+def may_set_unit(access: Access, unit: str) -> bool:
+    """May the Person add someone to, or take them out of, `unit`?"""
+    return is_owner(access) or (may_manage(access) and in_scope(access, unit))
+
+
+def may_give_permission(access: Access, permission: str) -> bool:
+    """Nobody hands out a permission they don't hold themselves (the Owner holds all)."""
+    if permission not in PERMISSIONS:
         return False
-    return brand is not None and any(a.role == "brand_manager" and a.brand == brand for a in assignments)
+    return is_owner(access) or (may_manage(access) and permission in access.permissions)

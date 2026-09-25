@@ -1,18 +1,68 @@
 <script setup lang="ts">
-import type { PersonForm } from '~/composables/usePersonForm'
+import type { Choice, PersonForm } from '~/composables/usePersonForm'
 
-/** Name, IDs, emails and roles: the fields of "Tambah orang" and of a Person's profile. */
-const props = defineProps<{ roleItems: { label: string, value: string, disabled?: boolean }[], disabled?: boolean }>()
+/**
+ * Name, emails, Units, roles, permissions and IDs: the fields of "Tambah orang" and
+ * of a Person's page. Picking a role adds the permissions its catalog entry suggests
+ * (only those the manager may give); taking a Unit away takes its roles with it.
+ */
+const props = defineProps<{
+  choices: {
+    units: Choice[]
+    roles: Choice[]
+    permissions: { key: string, label: string, help: string, disabled: boolean }[]
+    mayPermission: (p: string) => boolean
+  }
+  /** The Person's current client teams, to warn when a removed role releases them. */
+  team?: { client_id: string, team_role: string, brand: string | null }[]
+  disabled?: boolean
+}>()
 const form = defineModel<PersonForm>({ required: true })
-// "Manager" is not an option in the picker, so name the roles that sign in.
-const roleHelp = computed(() => [
-  'Boleh lebih dari satu. Hanya Owner, Brand Manager, Project Manager, Account Executive, dan Sales & Marketing yang bisa masuk ke Hub.',
-  ...(props.roleItems.some(i => i.disabled) ? ['Peran yang terkunci di luar wewenang Anda; minta Owner untuk mengubahnya.'] : [])
-].join(' '))
+const { roleIn, roleName } = useCatalog()
+
+function onUnits(units: string[]) {
+  form.value.units = units
+  form.value.roles = form.value.roles.filter(v => units.includes(parseRole(v).brand ?? ''))
+}
+
+function onRoles(roles: string[]) {
+  const added = roles.filter(v => !form.value.roles.includes(v))
+  form.value.roles = roles
+  const perms = new Set(form.value.permissions)
+  for (const v of added) {
+    const { role, brand } = parseRole(v)
+    for (const p of roleIn(role, brand)?.default_permissions ?? []) {
+      if (props.choices.mayPermission(p)) perms.add(p)
+    }
+  }
+  form.value.permissions = PERMISSIONS.map(p => p.key).filter(k => perms.has(k))
+}
+
+function onPermissions(perms: string[]) {
+  form.value.permissions = withHubAccess(perms)
+}
+
+// Removing a role that fills client team slots releases those slots on save.
+const released = computed(() => {
+  const kept = new Set(form.value.roles)
+  return (props.team ?? []).filter(t => !kept.has(roleValue(t.team_role, t.brand)))
+})
+const releasedNote = computed(() => {
+  if (!released.value.length) return ''
+  const roles = [...new Set(released.value.map(t => roleName(t.team_role)))].join(', ')
+  const clients = new Set(released.value.map(t => t.client_id)).size
+  return `Saat disimpan, orang ini keluar dari tim ${clients} klien sebagai ${roles}.`
+})
+
+const lockedRoles = computed(() => props.choices.roles.some(i => i.disabled))
+const lockedPermissions = computed(() => props.choices.permissions.some(p => p.disabled))
+const permissionItems = computed(() => props.choices.permissions.map(p => ({
+  label: p.label, description: p.help, value: p.key, disabled: p.disabled || props.disabled
+})))
 </script>
 
 <template>
-  <div class="space-y-3">
+  <div class="space-y-4">
     <UFormField
       label="Nama"
       required
@@ -35,18 +85,54 @@ const roleHelp = computed(() => [
       />
     </UFormField>
     <UFormField
-      label="Peran"
-      :help="roleHelp"
+      label="Unit"
+      help="Noktah untuk peran di semua Noktah Brand, seperti Owner dan Sales & Marketing."
     >
       <USelectMenu
-        v-model="form.roles"
-        :items="roleItems"
+        :model-value="form.units"
+        :items="choices.units"
+        value-key="value"
+        multiple
+        :search-input="false"
+        placeholder="Pilih unit…"
+        :disabled="disabled"
+        class="w-full"
+        @update:model-value="onUnits"
+      />
+    </UFormField>
+    <UFormField
+      label="Peran"
+      :help="`Boleh lebih dari satu. Tim klien hanya bisa diisi orang yang memegang perannya.${lockedRoles ? ' Peran yang terkunci di luar wewenang Anda.' : ''}`"
+    >
+      <USelectMenu
+        :model-value="form.roles"
+        :items="choices.roles"
         value-key="value"
         multiple
         :search-input="{ placeholder: 'Cari peran…' }"
-        placeholder="Pilih peran…"
-        :disabled="disabled"
+        :placeholder="form.units.length ? 'Pilih peran…' : 'Pilih unit dulu'"
+        :disabled="disabled || !form.units.length"
         class="w-full"
+        @update:model-value="onRoles"
+      />
+    </UFormField>
+    <UAlert
+      v-if="releasedNote && !disabled"
+      color="warning"
+      variant="subtle"
+      icon="i-lucide-users"
+      :title="releasedNote"
+    />
+    <UFormField
+      label="Izin"
+      :help="`Menentukan apa yang bisa dilakukan di Hub. Memilih peran ikut mencentang izin bawaannya; ubah bila perlu.${lockedPermissions ? ' Anda hanya bisa mengatur izin yang Anda punya sendiri.' : ''}`"
+    >
+      <UCheckboxGroup
+        :model-value="form.permissions"
+        :items="permissionItems"
+        :disabled="disabled"
+        :ui="{ fieldset: 'grid gap-3 sm:grid-cols-2' }"
+        @update:model-value="v => onPermissions(v as string[])"
       />
     </UFormField>
     <div class="grid gap-3 sm:grid-cols-2">

@@ -24,8 +24,16 @@ Prefect (Docker network only) ─X-Hub-Internal-Token─▶ hub-api:8000/interna
 - **Two proofs per `/v1` request** (`app/auth.py`): the Access JWT for this API's
   application (the call came through Access with the Hub's service token), and the
   manager's own Hub login JWT (*who* is acting). A plain email header is never trusted.
-- **Roles are the Hub's, not Cloudflare's** (G-11). Email → Person → active roles; only
-  Manager roles sign in. What each role may do is `app/permissions.py` (tested as a table).
+- **Access is the Hub's, not Cloudflare's** (G-11). Email → Person → Units, roles and
+  permissions (migration 012). Only the `hub_access` permission (or the Owner role) signs
+  in. Roles come from the catalog table `unit_roles` (`app/people/catalog.py`): which roles
+  each Unit has, which are Client team slots, and the permissions a new holder starts
+  with. A role grants nothing by itself except Owner; the Person's stored permissions
+  decide, within their Units (the Noktah Unit reaches every brand). The rules are
+  `app/permissions.py`: a manager gives only permissions they hold, grants roles only in
+  their Units, and only the Owner grants Owner or Brand Manager.
+- **A team slot needs its role.** `PUT /v1/clients/{id}/team/{role}` takes only a Person
+  holding that role in the Client's brand, and ending the role releases their slots.
 - **`/internal/*`** needs `X-Hub-Internal-Token` AND no Cloudflare headers; anything else
   gets 404, so the routes aren't advertised.
 
@@ -38,7 +46,7 @@ Prefect (Docker network only) ─X-Hub-Internal-Token─▶ hub-api:8000/interna
 | `app/intake/` | Sources (text, screenshot, Google Doc, PDF), the `intake_v1` prompt, deterministic checks, the pipeline |
 | `app/summary/` | The Ringkasan, from confirmed values only, at most once a day |
 | `app/ai/` | OpenRouter call (length checked before parsing, one quoted retry, no salvage), the monthly cap |
-| `app/people/` | People, emails, roles (grant rules in `permissions.may_grant`) |
+| `app/people/` | People, emails, Units, roles, permissions; the role catalog (`catalog.py`) |
 
 ## Rules that are easy to undo by accident
 

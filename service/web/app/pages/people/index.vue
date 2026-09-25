@@ -3,53 +3,69 @@ import type { TableColumn } from '@nuxt/ui'
 import type { PersonForm } from '~/composables/usePersonForm'
 import type { Person } from '~/types/hub'
 
-/** Orang (US5): everyone the Hub knows, their roles and emails. Roles are internal (G-11). */
+/** Orang (US5): everyone the Hub knows, with their Units, roles and emails (G-11, migration 012). */
 const STATUS = [{ label: 'Aktif', value: 'active' }, { label: 'Keluar', value: 'left' }, { label: 'Semua status', value: 'all' }]
 const ALL = '__all__'
-const NO_ROLE = '__none__'
+const NONE = '__none__'
 const status = ref('active')
 const search = ref('')
 const role = ref(ALL)
-const brand = ref(ALL)
+const unit = ref(ALL)
 const toast = useToast()
 const router = useRouter()
 const { data: me } = await useMe()
 const { data: people, error, status: loading } = await useFetch<Person[]>('/api/hub/v1/people', { query: { status }, default: () => [] })
 useSeoMeta({ title: 'Orang · Noktah Hub' })
 
-const showBrand = computed(() => (me.value?.brands.length ?? 0) > 1)
-const ROLE_FILTER = [{ label: 'Semua peran', value: ALL }, ...Object.entries(ROLE_LABELS).map(([value, label]) => ({ label, value })), { label: 'Belum ada peran', value: NO_ROLE }]
-const brandFilter = computed(() => [{ label: 'Semua Noktah Brand', value: ALL }, ...(me.value?.brands ?? []).map(b => ({ label: brandName(b), value: b }))])
-const filtered = computed(() => (role.value !== ALL || brand.value !== ALL || search.value.trim() !== '' || status.value !== 'active'))
+const { roleName, unitName } = useCatalog()
+// Units whose people this manager sees: all of them from the Noktah group, else their own.
+const seenUnits = computed(() => {
+  const all = (me.value?.catalog ?? []).map(u => u.key)
+  return me.value?.can.appoint_bm || me.value?.units.includes('noktah') ? all : all.filter(u => me.value?.units.includes(u))
+})
+const showUnit = computed(() => seenUnits.value.length > 1)
+const roleFilter = computed(() => {
+  const keys = new Map<string, string>()
+  for (const u of me.value?.catalog ?? []) {
+    if (seenUnits.value.includes(u.key)) for (const r of u.roles) keys.set(r.key, r.name)
+  }
+  return [{ label: 'Semua peran', value: ALL }, ...[...keys].map(([value, label]) => ({ label, value })),
+    { label: 'Belum ada peran', value: NONE }]
+})
+const unitFilter = computed(() => [{ label: 'Semua unit', value: ALL },
+  ...seenUnits.value.map(u => ({ label: unitName(u), value: u })), { label: 'Belum ada unit', value: NONE }])
+const filtered = computed(() => (role.value !== ALL || unit.value !== ALL || search.value.trim() !== '' || status.value !== 'active'))
 function clearFilters() {
   status.value = 'active'
   search.value = ''
   role.value = ALL
-  brand.value = ALL
+  unit.value = ALL
 }
 
 const rows = computed(() => {
   const q = search.value.trim().toLowerCase()
   return people.value.filter(p =>
     (!q || p.display_name.toLowerCase().includes(q) || p.emails.some(e => e.includes(q)))
-    && (role.value === ALL || (role.value === NO_ROLE ? !p.roles.length : p.roles.some(r => r.role === role.value)))
-    && (brand.value === ALL || p.roles.some(r => r.noktah_brand === brand.value)))
+    && (role.value === ALL || (role.value === NONE ? !p.roles.length : p.roles.some(r => r.role === role.value)))
+    && (unit.value === ALL || (unit.value === NONE ? !p.units.length : p.units.includes(unit.value))))
 })
 const { page, pageRows, pageSize, total } = usePaged(rows)
 
 const columns: TableColumn<Person>[] = [
   { accessorKey: 'display_name', header: 'Nama', meta: { class: { td: 'whitespace-normal' } } },
-  { id: 'roles', header: 'Peran', meta: { class: { td: 'whitespace-normal' } } },
+  { id: 'roles', header: 'Peran', meta: { class: { th: 'hidden sm:table-cell', td: 'hidden sm:table-cell whitespace-normal' } } },
   { id: 'emails', header: 'Email', meta: { class: { th: 'hidden md:table-cell', td: 'hidden md:table-cell whitespace-normal' } } }
 ]
 
 // ── add ──────────────────────────────────────────────────────────────────────
 const addOpen = ref(false)
 const draft = ref<PersonForm>(personForm())
-const roleItems = useRoleItems(me, () => [])
+const choices = reactive(usePersonChoices(me, () => null, () => draft.value.units))
 const adding = ref(false)
 watch(addOpen, (open) => {
-  if (open) draft.value = personForm()
+  // A manager with one Unit adds people to it; others pick.
+  const mine = me.value?.manageable_units ?? []
+  if (open) draft.value = { ...personForm(), units: mine.length === 1 ? [...mine] : [] }
 })
 async function add() {
   adding.value = true
@@ -99,17 +115,17 @@ async function add() {
           aria-label="Filter status"
         />
         <USelect
-          v-model="role"
-          :items="ROLE_FILTER"
-          class="w-full sm:w-44"
-          aria-label="Filter peran"
+          v-if="showUnit"
+          v-model="unit"
+          :items="unitFilter"
+          class="w-full sm:w-40"
+          aria-label="Filter unit"
         />
         <USelect
-          v-if="showBrand"
-          v-model="brand"
-          :items="brandFilter"
-          class="w-full sm:w-44"
-          aria-label="Filter Noktah Brand"
+          v-model="role"
+          :items="roleFilter"
+          class="w-full sm:w-48"
+          aria-label="Filter peran"
         />
         <UButton
           v-if="filtered"
@@ -151,6 +167,9 @@ async function add() {
             <p class="md:hidden mt-1 text-xs text-muted break-all">
               {{ row.original.emails.join(', ') || 'Belum ada email' }}
             </p>
+            <p class="sm:hidden mt-1 text-xs text-muted">
+              {{ row.original.roles.map(r => showUnit ? `${roleName(r.role)} · ${unitName(r.noktah_brand)}` : roleName(r.role)).join(', ') || 'Belum ada peran' }}
+            </p>
           </template>
           <template #roles-cell="{ row }">
             <div
@@ -160,7 +179,7 @@ async function add() {
               <UBadge
                 v-for="r in row.original.roles"
                 :key="r.id"
-                :label="r.noktah_brand && showBrand ? `${ROLE_LABELS[r.role] ?? r.role} · ${brandName(r.noktah_brand)}` : (ROLE_LABELS[r.role] ?? r.role)"
+                :label="showUnit ? `${roleName(r.role)} · ${unitName(r.noktah_brand)}` : roleName(r.role)"
                 color="neutral"
                 variant="subtle"
               />
@@ -189,7 +208,7 @@ async function add() {
         <template #body>
           <PersonFields
             v-model="draft"
-            :role-items="roleItems"
+            :choices="choices"
           />
         </template>
         <template #footer>

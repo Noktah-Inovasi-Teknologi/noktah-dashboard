@@ -21,13 +21,15 @@ The readers are Noktah's own Managers: busy, not technical, reading on a phone a
   ("Silakan melakukan penyimpanan data"), not chatty ("Yuk simpan!"). No exclamation marks.
   Address the reader as "Anda" only when a sentence needs a subject; most don't. A tick box
   the user confirms is first person ("Nilai di atas sudah saya cocokkan dengan gambarnya.").
-- **Keep in English** what the team says in English: role names (Account Executive, Brand
-  Manager, Field Associate, Content Editor, Content Planner, Project Manager, QC, Owner),
-  card and app terms from the glossary (Profil, Guideline, Intake, Registry, Noktah Brand,
-  PIC), product and platform names (Jira, Slack, Drive, Instagram, TikTok), and
-  "Post / Story / Short Video". Don't translate them, don't italicise them.
-- **Use the house words**, not synonyms: klien, orang, peran, tim, kartu, usulan,
-  permintaan, persetujuan, riwayat, kuota, akun sosial, pesaing. Same thing, same word, on
+- **Keep in English** what the team says in English: role names as the catalog spells them
+  (Owner, Sales & Marketing, Brand Manager, Production Manager, Account Executive, Content
+  Planner, Field Associate, Content Editor, Quality Assurance, Front-end Developer, Back-end
+  Developer, DevOps, Mobile Developer; never "QC" or "Project Manager"), card and app terms
+  from the glossary (Profil, Guideline, Intake, Registry, Noktah Brand, Unit, PIC), product
+  and platform names (Jira, Slack, Drive, Instagram, TikTok), and "Post / Story / Short
+  Video". Don't translate them, don't italicise them.
+- **Use the house words**, not synonyms: klien, orang, unit, peran, izin, tim, kartu,
+  usulan, permintaan, persetujuan, riwayat, kuota, akun sosial, pesaing. Same thing, same word, on
   every screen.
 - **Buttons:** a verb, one to three words, sentence case: "Simpan", "Batal", "Tambah klien",
   "Hapus filter", "Tandai keluar". A button that creates names what it creates.

@@ -41,6 +41,7 @@ FULL_CHAIN = [
     "009_structured_extraction",
     "010_hub_registry_card",
     "011_client_brand_required",
+    "012_hub_units_roles_permissions",
 ]
 
 # `spine_db` skips 006: it enforces account_id IS NOT NULL and fails by design

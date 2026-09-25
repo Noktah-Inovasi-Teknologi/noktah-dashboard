@@ -3,14 +3,15 @@ import type { PersonForm } from '~/composables/usePersonForm'
 import type { Person, RegistryChange } from '~/types/hub'
 
 /**
- * One Person: profile (name, IDs, emails that all sign in as this Person (G-16), and
- * any number of roles, granted by the rules in G-9), current teams, and history. "Tandai keluar" ends roles and
- * team assignments and stops sign-in; the Person and their history stay (G-32).
+ * One Person: their data (name, IDs, emails that all sign in as this Person (G-16),
+ * Units, roles and permissions; migration 012), current client teams, and history.
+ * "Tandai keluar" ends roles, team assignments and permissions and stops sign-in;
+ * the Person and their history stay (G-32).
  */
 interface PersonDetail extends Person {
   version: number
   left_at: string | null
-  team: { client_id: string, client: string, team_role: string }[]
+  team: { client_id: string, client: string, team_role: string, brand: string | null }[]
   history: RegistryChange[]
 }
 
@@ -22,10 +23,7 @@ const { data: person, error } = await useFetch<PersonDetail>(() => `/api/hub/v1/
 useSeoMeta({ title: () => (person.value ? `${person.value.display_name} · Noktah Hub` : 'Orang · Noktah Hub') })
 
 const canManage = computed(() => (me.value?.can.manage_people ?? false) && person.value?.status === 'active')
-const TEAM_LABEL: Record<string, string> = {
-  account_executive: 'Account Executive', content_planner: 'Content Planner', field_associate: 'Field Associate',
-  content_editor: 'Content Editor', qc: 'QC'
-}
+const { roleName, unitName } = useCatalog()
 
 async function call(path: string, method: 'POST' | 'PATCH' | 'PUT', body?: Record<string, unknown>, done = 'Tersimpan') {
   try {
@@ -39,11 +37,11 @@ async function call(path: string, method: 'POST' | 'PATCH' | 'PUT', body?: Recor
   }
 }
 
-// ── profile: details, emails and roles, one Save ─────────────────────────────
+// ── profile: details, emails, Units, roles and permissions, one Save ──────────
 const form = ref<PersonForm>(personForm(person.value))
 const reset = () => (form.value = personForm(person.value))
 watch(person, reset)
-const roleItems = useRoleItems(me, () => person.value?.roles ?? [])
+const choices = reactive(usePersonChoices(me, () => person.value, () => form.value.units))
 const dirty = computed(() => !!person.value && !sameForm(personFormKey(form.value), personFormKey(personForm(person.value))))
 const saving = ref(false)
 async function save() {
@@ -63,18 +61,26 @@ const HISTORY_FIELD: Record<string, string> = {
   status: 'Status', email: 'Email', linked_to_workers: 'Ditautkan ke WORKERS'
 }
 function historyLine(h: RegistryChange): string {
-  const label = h.entity === 'person_role' ? (ROLE_LABELS[h.field] ?? h.field) : (HISTORY_FIELD[h.field] ?? h.field)
+  const label = h.entity === 'person_role' ? roleName(h.field) : (HISTORY_FIELD[h.field] ?? h.field)
   const show = (v: unknown): string => {
     if (v === null || v === undefined || v === '') return '—'
     if (typeof v === 'object') {
       const o = v as Record<string, unknown>
-      if ('role' in o) return `${ROLE_LABELS[String(o.role)] ?? o.role}${o.noktah_brand ? ` · ${brandName(String(o.noktah_brand))}` : ''}`
+      if ('role' in o) return `${roleName(String(o.role))}${o.noktah_brand ? ` · ${unitName(String(o.noktah_brand))}` : ''}`
       if ('name' in o) return String(o.name)
       return Object.values(o).filter(Boolean).join(' · ')
     }
     return String(v)
   }
-  if (h.entity === 'person_role') return h.new_value ? `Peran diberikan: ${show(h.new_value)}` : `Peran berakhir: ${label}`
+  if (h.entity === 'person_role') {
+    if (h.new_value && typeof h.new_value === 'object') return `Peran diberikan: ${show(h.new_value)}`
+    return `Peran berakhir: ${h.old_value && typeof h.old_value === 'object' ? show(h.old_value) : label}`
+  }
+  if (h.entity === 'person_unit') return h.new_value ? `Unit ditambahkan: ${unitName(h.field)}` : `Unit dilepas: ${unitName(h.field)}`
+  if (h.entity === 'person_permission') {
+    const name = PERMISSIONS.find(p => p.key === h.field)?.label ?? h.field
+    return h.new_value ? `Izin diberikan: ${name}` : `Izin dicabut: ${name}`
+  }
   if (h.field === 'created') return 'Orang ditambahkan'
   if (h.old_value === null || h.old_value === undefined) return `${label}: ${show(h.new_value)}`
   if (h.new_value === null || h.new_value === undefined) return `${label} dihapus: ${show(h.old_value)}`
@@ -130,7 +136,8 @@ function historyLine(h: RegistryChange): string {
             </template>
             <PersonFields
               v-model="form"
-              :role-items="roleItems"
+              :choices="choices"
+              :team="person.team"
               :disabled="!canManage"
             />
             <div
@@ -181,7 +188,7 @@ function historyLine(h: RegistryChange): string {
                   :to="`/clients/${t.client_id}?tab=registry`"
                   class="font-medium text-highlighted hover:underline"
                 >{{ t.client }}</NuxtLink>
-                <span class="text-muted"> · {{ TEAM_LABEL[t.team_role] ?? t.team_role }}</span>
+                <span class="text-muted"> · {{ roleName(t.team_role) }}</span>
               </li>
             </ul>
             <p
@@ -226,7 +233,7 @@ function historyLine(h: RegistryChange): string {
         <UModal
           v-model:open="leaveOpen"
           :title="`Tandai ${person.display_name} keluar?`"
-          description="Semua peran dan tim kliennya berakhir, dan dia tidak bisa masuk lagi. Riwayat tetap tersimpan."
+          description="Semua peran, izin, dan tim kliennya berakhir, dan dia tidak bisa masuk lagi. Riwayat tetap tersimpan."
         >
           <template #footer>
             <div class="flex justify-end gap-2 w-full">

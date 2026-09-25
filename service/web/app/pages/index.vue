@@ -51,7 +51,8 @@ const TEAM = [
 ] as const
 
 const showBrand = computed(() => (me.value?.brands?.length ?? 0) > 1)
-const brandItems = computed(() => (me.value?.brands ?? []).map(b => ({ label: brandName(b), value: b })))
+const { unitName } = useCatalog()
+const brandItems = computed(() => (me.value?.brands ?? []).map(b => ({ label: unitName(b), value: b })))
 const brandFilter = computed(() => [{ label: 'Semua Noktah Brand', value: ALL }, ...brandItems.value])
 const memberFilter = computed(() => {
   const names = new Set<string>()
