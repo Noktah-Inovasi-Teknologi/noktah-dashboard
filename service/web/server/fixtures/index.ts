@@ -78,7 +78,7 @@ function clientsList() {
   return CLIENT_NAMES.map((name, i) => ({
     id: idOf(i), name, status: name === 'Klinik Utama Gasa' ? 'inactive' : 'active', is_internal: false,
     brand: 'eskala', brand_name: 'Eskala', quotas: { post: 4, story: 4, short_video: 4 },
-    team_summary: { account_executive: i % 3 ? 'Ardella Bernica' : null, field_associate: 'Nadya Safira Alia Adinda' },
+    team_summary: { account_executive: i % 3 ? 'Ardella Bernica' : null, field_associate: 'Nadya Safira Alia Adinda', content_editor: i % 4 ? 'Putri Indah Lestari' : null },
     card_completeness: { profil: `${i % 6}/5`.replace('5/5', '5/5'), guideline: `${i % 11}/10` },
     pending_approvals: i === 7 ? 1 : 0
   })).filter(c => c.status === 'active')
