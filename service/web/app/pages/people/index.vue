@@ -51,11 +51,18 @@ const rows = computed(() => {
 })
 const { page, pageRows, pageSize, total } = usePaged(rows)
 
-const columns: TableColumn<Person>[] = [
+// Unit and Peran are separate columns; the Unit one only when more than one Unit is in view.
+const columns = computed<TableColumn<Person>[]>(() => [
   { accessorKey: 'display_name', header: 'Nama', meta: { class: { td: 'whitespace-normal' } } },
+  ...(showUnit.value
+    ? [{ id: 'units', header: 'Unit', meta: { class: { th: 'hidden sm:table-cell', td: 'hidden sm:table-cell whitespace-normal' } } }]
+    : []),
   { id: 'roles', header: 'Peran', meta: { class: { th: 'hidden sm:table-cell', td: 'hidden sm:table-cell whitespace-normal' } } },
   { id: 'emails', header: 'Email', meta: { class: { th: 'hidden md:table-cell', td: 'hidden md:table-cell whitespace-normal' } } }
-]
+])
+// The same role in two Units (Quality Assurance in Eskala and Venyu) is listed once.
+const roleNames = (p: Person) => [...new Set(p.roles.map(r => roleName(r.role)))]
+const unitNames = (p: Person) => p.units.map(u => unitName(u))
 
 // ── add ──────────────────────────────────────────────────────────────────────
 const addOpen = ref(false)
@@ -167,9 +174,25 @@ async function add() {
             <p class="md:hidden mt-1 text-xs text-muted break-all">
               {{ row.original.emails.join(', ') || 'Belum ada email' }}
             </p>
-            <p class="sm:hidden mt-1 text-xs text-muted">
-              {{ row.original.roles.map(r => showUnit ? `${roleName(r.role)} · ${unitName(r.noktah_brand)}` : roleName(r.role)).join(', ') || 'Belum ada peran' }}
+            <p
+              v-if="showUnit"
+              class="sm:hidden mt-1 text-xs text-muted"
+            >
+              {{ unitNames(row.original).join(', ') || 'Belum ada unit' }}
             </p>
+            <p class="sm:hidden mt-1 text-xs text-muted">
+              {{ roleNames(row.original).join(', ') || 'Belum ada peran' }}
+            </p>
+          </template>
+          <template #units-cell="{ row }">
+            <span
+              v-if="row.original.units.length"
+              class="text-sm"
+            >{{ unitNames(row.original).join(', ') }}</span>
+            <span
+              v-else
+              class="text-sm text-muted"
+            >Belum ada unit</span>
           </template>
           <template #roles-cell="{ row }">
             <div
@@ -177,9 +200,9 @@ async function add() {
               class="flex flex-wrap gap-1"
             >
               <UBadge
-                v-for="r in row.original.roles"
-                :key="r.id"
-                :label="showUnit ? `${roleName(r.role)} · ${unitName(r.noktah_brand)}` : roleName(r.role)"
+                v-for="name in roleNames(row.original)"
+                :key="name"
+                :label="name"
                 color="neutral"
                 variant="subtle"
               />
