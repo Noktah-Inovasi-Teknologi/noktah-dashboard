@@ -37,8 +37,9 @@ async def hub_summary_refresh_flow() -> Dict[str, Any]:
     try:
         summary = hub_internal_call("summaries/refresh")
         log.info(f"summaries: {summary}")
-        if summary.get("failed"):
-            error = f"{summary['failed']} summary refresh(es) failed at the AI step"
+        # Per-Client reasons ride in summary["failures"], which the alert hook lists.
+        for name, reason in (summary.get("failures") or {}).items():
+            log.warning(f"{name}: {reason}")
     except Exception as e:  # noqa: BLE001 - flows report, never raise
         error = f"{type(e).__name__}: {e}"
         log.error(error)

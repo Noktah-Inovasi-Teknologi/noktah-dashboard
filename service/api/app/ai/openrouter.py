@@ -21,11 +21,18 @@ every call went to DeepInfra, whose shared OpenRouter pool answered 7 of 10 call
 with "temporarily rate-limited upstream". Xiaomi's own endpoint (98% uptime) and
 Novita support JSON mode. Our validator was always the authority, so nothing
 weaker gets through.
+
+PROVIDER_ORDER only chooses among the providers the OpenRouter ACCOUNT allows
+(openrouter.ai/settings/privacy). Measured 2026-09-25: the account allowed only
+google-vertex, parasail and deepinfra, so every call still went to DeepInfra and
+about half were refused with 429 `engine_overloaded`
+(`limit_source: upstream_provider_shared_pool`). If calls keep landing on DeepInfra,
+check that setting before this list.
 """
 import asyncio
 import json
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import httpx
 
@@ -100,8 +107,13 @@ async def chat_json(
     max_tokens: int = 6000,
     timeout: float = 90.0,
     transport: Optional[httpx.AsyncBaseTransport] = None,
+    rate_limit_backoff: Sequence[float] = RATE_LIMIT_BACKOFF,
 ) -> AiResult:
-    """One structured call with one validation retry. Raises AiFailure."""
+    """One structured call with one validation retry. Raises AiFailure.
+
+    `rate_limit_backoff`: seconds to wait before each retry of a 429. Intake keeps
+    the short default (someone is waiting); background jobs pass a longer one.
+    """
     if not api_key:
         raise AiFailure("provider_error", "OPENROUTER_API_KEY is not set")
     convo = with_schema(messages, schema)
@@ -121,7 +133,7 @@ async def chat_json(
                 "response_format": {"type": "json_object"},
                 "provider": {"order": PROVIDER_ORDER, "allow_fallbacks": True},
             }
-            body = await _post(client, api_key, payload, call_site)
+            body = await _post(client, api_key, payload, call_site, rate_limit_backoff)
             usage = body.get("usage") or {}
             totals["prompt"] += int(usage.get("prompt_tokens") or 0)
             totals["completion"] += int(usage.get("completion_tokens") or 0)
@@ -151,7 +163,8 @@ async def chat_json(
     raise AiFailure("validation_failed", "no valid answer")  # unreachable
 
 
-async def _post(client: httpx.AsyncClient, api_key: str, payload: Dict[str, Any], call_site: str) -> Dict[str, Any]:
+async def _post(client: httpx.AsyncClient, api_key: str, payload: Dict[str, Any], call_site: str,
+                rate_limit_backoff: Sequence[float] = RATE_LIMIT_BACKOFF) -> Dict[str, Any]:
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -159,7 +172,7 @@ async def _post(client: httpx.AsyncClient, api_key: str, payload: Dict[str, Any]
         "X-Title": f"Noktah Hub ({call_site})",
         "HTTP-Referer": "https://hub.noktah.co",
     }
-    for attempt, backoff in enumerate([*RATE_LIMIT_BACKOFF, None]):
+    for attempt, backoff in enumerate([*rate_limit_backoff, None]):
         try:
             response = await client.post(OPENROUTER_URL, headers=headers, json=payload)
         except httpx.TimeoutException as e:
@@ -169,10 +182,23 @@ async def _post(client: httpx.AsyncClient, api_key: str, payload: Dict[str, Any]
         if response.status_code == 429 and backoff is not None:
             await asyncio.sleep(backoff)
             continue
+        if response.status_code == 429:
+            raise AiFailure("provider_error", _rate_limit_detail(response))
         if response.status_code >= 400:
             raise AiFailure("provider_error", f"HTTP {response.status_code}: {response.text[:300]}")
         body = response.json()
         if body.get("error"):
             raise AiFailure("provider_error", str(body["error"])[:300])
         return body
-    raise AiFailure("provider_error", "rate limited")
+    raise AiFailure("provider_error", "HTTP 429: no answer after retries")
+
+
+def _rate_limit_detail(response: httpx.Response) -> str:
+    """Who throttled, from OpenRouter's error metadata. Starts "HTTP 429" (summary.refresh_all
+    reads that); the reason stays provider_error, the vocabulary intakes.failure_reason allows."""
+    try:
+        meta = (response.json().get("error") or {}).get("metadata") or {}
+    except ValueError:
+        return "HTTP 429"
+    provider = meta.get("provider_name") or "?"
+    return f"HTTP 429 from {provider} ({meta.get('limit_source') or meta.get('provider_error_code') or 'rate limit'})"

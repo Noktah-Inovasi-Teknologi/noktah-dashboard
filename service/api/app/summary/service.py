@@ -10,11 +10,15 @@ Requests). Never pending values, never raw Intake material.
   - the AI cap applies: at the cap, nothing is generated and the last summary
     stays visible, marked out of date (`cap_paused`).
   - it is marked "dibuat otomatis", never edited by hand, never a source.
+  - a throttled model is retried patiently (SUMMARY_BACKOFF: nobody is waiting),
+    and once one Client still fails after that, the run leaves the rest for the
+    next hour instead of queueing more calls behind an overloaded provider. Every
+    failure is reported with its Client and reason, which the flow alerts on.
 """
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import asyncpg
 
@@ -26,6 +30,7 @@ from ..settings import get_settings
 
 PROMPT_VERSION = "summary_v1"
 MIN_INTERVAL = timedelta(hours=24)
+SUMMARY_BACKOFF = (10, 30, 60)  # seconds before each retry of a 429
 
 SCHEMA = {
     "type": "object",
@@ -95,8 +100,12 @@ def _validate(parsed: Any) -> None:
             raise ValueError(f"'{key}' harus daftar teks.")
 
 
-async def refresh_one(conn: asyncpg.Connection, client_id: str, now: Optional[datetime] = None) -> str:
-    """'refreshed' | 'fresh' | 'too_soon' | 'empty' | 'paused' | 'failed'."""
+async def refresh_one(conn: asyncpg.Connection, client_id: str, now: Optional[datetime] = None,
+                      failure: Optional[Dict[str, str]] = None) -> str:
+    """'refreshed' | 'fresh' | 'too_soon' | 'empty' | 'paused' | 'failed'.
+
+    On 'failed', `failure` (when given) receives the reason and detail.
+    """
     now = now or datetime.now(timezone.utc)
     inputs = await _inputs(conn, client_id)
     if is_empty_card(inputs):
@@ -120,8 +129,11 @@ async def refresh_one(conn: asyncpg.Connection, client_id: str, now: Optional[da
             messages=[{"role": "system", "content": SYSTEM},
                       {"role": "user", "content": json.dumps(inputs, ensure_ascii=False, default=str)}],
             schema=SCHEMA, validate=_validate,
-            call_site="hub.summary", max_tokens=1500, timeout=settings.ai_timeout_seconds)
-    except AiFailure:
+            call_site="hub.summary", max_tokens=1500, timeout=settings.ai_timeout_seconds,
+            rate_limit_backoff=SUMMARY_BACKOFF)
+    except AiFailure as e:
+        if failure is not None:
+            failure.update(reason=e.reason, detail=e.detail)
         return "failed"
     async with conn.transaction():
         await budget.record(conn, call_site="hub.summary", client_id=client_id, intake_id=None, model=result.model,
@@ -137,11 +149,24 @@ async def refresh_one(conn: asyncpg.Connection, client_id: str, now: Optional[da
 
 
 async def refresh_all(conn: asyncpg.Connection) -> Dict[str, Any]:
-    ids: List[str] = [r["id"] for r in await conn.fetch(
-        "SELECT id::text AS id FROM clients WHERE COALESCE(status, 'active') <> 'inactive'")]
+    """Counts per outcome, plus `failures` {Client name: reason} (the alert hook lists these)."""
+    rows = await conn.fetch(
+        "SELECT id::text AS id, display_name FROM clients WHERE COALESCE(status, 'active') <> 'inactive' "
+        "ORDER BY display_name")
     counts: Dict[str, int] = {}
-    for cid in ids:
-        outcome = await refresh_one(conn, cid)
+    failures: Dict[str, str] = {}
+    throttled = False
+    for r in rows:
+        if throttled:
+            counts["deferred"] = counts.get("deferred", 0) + 1
+            continue
+        failure: Dict[str, str] = {}
+        outcome = await refresh_one(conn, r["id"], failure=failure)
         counts[outcome] = counts.get(outcome, 0) + 1
+        if outcome == "failed":
+            failures[r["display_name"]] = f"{failure.get('reason')}: {failure.get('detail')}"
+            throttled = failure.get("detail", "").startswith("HTTP 429")
     return {"refreshed": counts.get("refreshed", 0), "skipped_fresh": counts.get("fresh", 0) + counts.get("too_soon", 0),
-            "empty": counts.get("empty", 0), "paused_by_cap": counts.get("paused", 0), "failed": counts.get("failed", 0)}
+            "empty": counts.get("empty", 0), "paused_by_cap": counts.get("paused", 0), "failed": counts.get("failed", 0),
+            # Stale or not, these weren't looked at: a provider was still throttling. Next hour tries them.
+            "deferred": counts.get("deferred", 0), "failures": failures}

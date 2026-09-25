@@ -81,3 +81,45 @@ async def test_cap_pauses_and_keeps_last_summary(hub_db, fake_ai, monkeypatch):
         view = await service.summary_view(conn, cid)
     assert view["stale"] and view["cap_paused"] and view["body"] == BODY
     get_settings.cache_clear()
+
+
+async def _card(conn, name, pid):
+    cid = await add_client(conn, name, "eskala")
+    await conn.execute(
+        """INSERT INTO card_values (client_id, part, field_key, definition_version, value, state, set_by)
+           VALUES ($1::uuid, 'guideline', 'suara', 'v1', $2, 'current', $3)""", cid, {"sapaan": name}, pid)
+
+
+async def test_a_throttled_model_is_reported_by_client_and_defers_the_rest(hub_db, monkeypatch):
+    from app.ai.openrouter import AiFailure
+
+    calls = []
+
+    async def throttled(**kwargs):
+        calls.append(kwargs)
+        raise AiFailure("provider_error", "HTTP 429 from DeepInfra (upstream_provider_shared_pool)")
+
+    monkeypatch.setattr(service, "chat_json", throttled)
+    async with hub_db.acquire() as conn:
+        pid = await conn.fetchval("SELECT id FROM people LIMIT 1")
+        for name in ("A Klinik", "B Klinik", "C Klinik"):
+            await _card(conn, name, pid)
+        out = await service.refresh_all(conn)
+    assert out["failed"] == 1 and out["deferred"] == 2, "after one throttled Client, the rest wait for next hour"
+    assert out["failures"] == {"A Klinik": "provider_error: HTTP 429 from DeepInfra (upstream_provider_shared_pool)"}
+    assert calls[0]["rate_limit_backoff"] == service.SUMMARY_BACKOFF, "background job retries patiently"
+
+
+async def test_other_failures_do_not_stop_the_run(hub_db, monkeypatch):
+    from app.ai.openrouter import AiFailure
+
+    async def invalid(**kwargs):
+        raise AiFailure("validation_failed", "Kunci wajib tidak ada")
+
+    monkeypatch.setattr(service, "chat_json", invalid)
+    async with hub_db.acquire() as conn:
+        pid = await conn.fetchval("SELECT id FROM people LIMIT 1")
+        for name in ("A Klinik", "B Klinik"):
+            await _card(conn, name, pid)
+        out = await service.refresh_all(conn)
+    assert out["failed"] == 2 and out["deferred"] == 0 and set(out["failures"]) == {"A Klinik", "B Klinik"}
