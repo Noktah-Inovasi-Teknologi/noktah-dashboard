@@ -19,7 +19,7 @@ useSeoMeta({ title: 'Orang · Noktah Hub' })
 
 const showBrand = computed(() => (me.value?.brands.length ?? 0) > 1)
 const ROLE_FILTER = [{ label: 'Semua peran', value: ALL }, ...Object.entries(ROLE_LABELS).map(([value, label]) => ({ label, value })), { label: 'Belum ada peran', value: NO_ROLE }]
-const brandFilter = computed(() => [{ label: 'Semua brand', value: ALL }, ...(me.value?.brands ?? []).map(b => ({ label: brandName(b), value: b }))])
+const brandFilter = computed(() => [{ label: 'Semua Noktah Brand', value: ALL }, ...(me.value?.brands ?? []).map(b => ({ label: brandName(b), value: b }))])
 const filtered = computed(() => (role.value !== ALL || brand.value !== ALL || search.value.trim() !== '' || status.value !== 'active'))
 function clearFilters() {
   status.value = 'active'
@@ -108,7 +108,7 @@ async function add() {
           v-if="showBrand"
           v-model="brand"
           :items="brandFilter"
-          class="w-full sm:w-36"
+          class="w-full sm:w-44"
           aria-label="Filter Noktah Brand"
         />
         <UButton
@@ -184,7 +184,7 @@ async function add() {
       <UModal
         v-model:open="addOpen"
         title="Tambah orang"
-        description="Profilnya bisa diubah lagi kapan saja dari halaman orang itu."
+        description="Semua isian bisa diubah lagi nanti di halaman orang ini."
       >
         <template #body>
           <PersonFields

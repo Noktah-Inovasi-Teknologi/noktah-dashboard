@@ -671,3 +671,8 @@ Examples: `feat/project/Noktah-Hub-tweaks`, `fix/web/Client-list-overflow-on-pho
 
 Don't open a PR until the user says so. Stage explicit paths: never sweep unrelated
 uncommitted files into a branch.
+
+Before a PR that adds or changes words people read (Hub UI text, captions and briefs,
+songbird/Intake prompts), have the `copy-editor` agent (`.claude/agents/copy-editor.md`)
+review them. It knows the glossary (`CONTEXT.md`), the Hub's Bahasa conventions and the
+content-voice rules, and it reviews by default; tell it to apply when you want edits.

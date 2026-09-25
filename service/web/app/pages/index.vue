@@ -52,7 +52,7 @@ const TEAM = [
 
 const showBrand = computed(() => (me.value?.brands?.length ?? 0) > 1)
 const brandItems = computed(() => (me.value?.brands ?? []).map(b => ({ label: brandName(b), value: b })))
-const brandFilter = computed(() => [{ label: 'Semua brand', value: ALL }, ...brandItems.value])
+const brandFilter = computed(() => [{ label: 'Semua Noktah Brand', value: ALL }, ...brandItems.value])
 const memberFilter = computed(() => {
   const names = new Set<string>()
   for (const c of clients.value) {
@@ -181,7 +181,7 @@ async function add() {
           v-if="showBrand"
           v-model="brand"
           :items="brandFilter"
-          class="w-full sm:w-36"
+          class="w-full sm:w-44"
           aria-label="Filter Noktah Brand"
         />
         <USelect

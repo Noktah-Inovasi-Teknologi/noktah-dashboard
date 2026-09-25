@@ -80,7 +80,7 @@ async function saveChange() {
       <UInput
         v-model="search"
         icon="i-lucide-search"
-        placeholder="Cari isi atau nama…"
+        placeholder="Cari permintaan atau nama…"
         class="w-full sm:w-64"
         aria-label="Cari permintaan"
       />

@@ -2,8 +2,13 @@
 import type { PersonForm } from '~/composables/usePersonForm'
 
 /** Name, IDs, emails and roles: the fields of "Tambah orang" and of a Person's profile. */
-defineProps<{ roleItems: { label: string, value: string, disabled?: boolean }[], disabled?: boolean }>()
+const props = defineProps<{ roleItems: { label: string, value: string, disabled?: boolean }[], disabled?: boolean }>()
 const form = defineModel<PersonForm>({ required: true })
+// "Manager" is not an option in the picker, so name the roles that sign in.
+const roleHelp = computed(() => [
+  'Boleh lebih dari satu. Hanya Owner, Brand Manager, Project Manager, Account Executive, dan Sales & Marketing yang bisa masuk ke Hub.',
+  ...(props.roleItems.some(i => i.disabled) ? ['Peran yang terkunci di luar wewenang Anda; minta Owner untuk mengubahnya.'] : [])
+].join(' '))
 </script>
 
 <template>
@@ -20,7 +25,7 @@ const form = defineModel<PersonForm>({ required: true })
     </UFormField>
     <UFormField
       label="Email"
-      help="Tekan Enter setelah tiap email. Semua email ini masuk sebagai orang yang sama."
+      help="Tekan Enter setelah tiap email; semua email ini masuk sebagai orang yang sama."
     >
       <UInputTags
         v-model="form.emails"
@@ -31,7 +36,7 @@ const form = defineModel<PersonForm>({ required: true })
     </UFormField>
     <UFormField
       label="Peran"
-      help="Boleh lebih dari satu. Tanpa peran Manager, orang ini tidak bisa masuk ke Hub."
+      :help="roleHelp"
     >
       <USelectMenu
         v-model="form.roles"

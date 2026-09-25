@@ -125,7 +125,7 @@ function historyLine(h: RegistryChange): string {
           <UCard :ui="{ body: 'space-y-4' }">
             <template #header>
               <h3 class="font-medium text-highlighted">
-                Profil
+                Data
               </h3>
             </template>
             <PersonFields

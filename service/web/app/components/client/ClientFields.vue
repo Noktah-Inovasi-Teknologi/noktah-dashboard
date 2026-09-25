@@ -29,7 +29,10 @@ const QUOTAS = [{ key: 'quota_post', label: 'Post' }, { key: 'quota_story', labe
           class="w-full"
         />
       </UFormField>
-      <UFormField label="Komponen Jira">
+      <UFormField
+        label="Komponen Jira"
+        help="ID komponen (angka), mis. 10042."
+      >
         <UInput
           v-model="form.jira_component_id"
           :disabled="disabled"
@@ -70,7 +73,10 @@ const QUOTAS = [{ key: 'quota_post', label: 'Post' }, { key: 'quota_story', labe
           :ui="{ base: 'font-mono text-xs break-all resize-none' }"
         />
       </UFormField>
-      <UFormField label="Folder content plan">
+      <UFormField
+        label="Folder content plan"
+        help="ID folder, bukan tautan."
+      >
         <UTextarea
           v-model="form.content_plan_folder_id"
           :rows="1"
