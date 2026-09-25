@@ -27,6 +27,8 @@ from typing import Any, Dict, List, Optional
 
 import asyncpg
 
+from noktah_ai import rotation
+
 from ..ai import budget
 from ..ai.openrouter import AiFailure, chat_json
 from ..card import values
@@ -144,16 +146,21 @@ async def run_intake(conn: asyncpg.Connection, d: Definition, *, client_id: str,
     outcome = IntakeOutcome(intake_id)
     ctx = await _context(conn, client_id, source)
     settings = get_settings()
+    # Screenshots and scanned PDFs need a model that reads images; text doesn't
+    # (shared/noktah_ai/models.yaml, cases `intake` and `intake_image`).
+    models = rotation.for_case("intake_image" if source.is_image else "intake")
+    model = models.current()
     try:
         result = await chat_json(
-            api_key=settings.openrouter_api_key, model=settings.intake_model,
+            api_key=settings.openrouter_api_key, model=model,
             messages=prompt.build_messages(d, client_name=ctx.client_name, current=ctx.current, pic_name=ctx.pic_name,
                                            source=source),
             schema=prompt.SCHEMA,
             validate=prompt.validate_shape, call_site=call_site, max_tokens=prompt.MAX_TOKENS,
             timeout=settings.ai_timeout_seconds)
     except AiFailure as e:
-        logger.warning("intake %s failed: %s", intake_id, e)
+        models.failure(model)
+        logger.warning("intake %s failed on %s: %s", intake_id, model, e)
         async with conn.transaction():
             if e.cost_usd or e.prompt_tokens:
                 await budget.record(conn, call_site=call_site, client_id=client_id, intake_id=intake_id,
@@ -165,6 +172,7 @@ async def run_intake(conn: asyncpg.Connection, d: Definition, *, client_id: str,
                 intake_id, e.reason, e.model, e.provider, e.cost_usd)
         return outcome
 
+    models.success(model)
     proposals = _proposals(d, result.value.get("items", []), ctx, outcome)
     async with conn.transaction():
         await budget.record(conn, call_site=call_site, client_id=client_id, intake_id=intake_id, model=result.model,

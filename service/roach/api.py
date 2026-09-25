@@ -95,12 +95,15 @@ def health():
 def extraction_config(x_api_key: str | None = Header(default=None)):
     """The model routing and versions THIS SERVICE is actually configured with.
 
+    `video_model` / `image_model` are the models each case is using NOW; `models`
+    has each case's accepted list (shared/noktah_ai/models.yaml) and rotation state.
+
     roach is the authority on its own model selection, and nothing else can be.
-    `OPENROUTER_IMAGE_MODEL` is set in `service/roach/.env`, which the Prefect
-    containers do not load — so a caller that reads its OWN environment to decide
-    "are these two paths different models?" gets the wrong answer. It sees one
-    model where there are two, concludes no cross-model comparison applies, and
-    silently skips a measurement that was entirely possible.
+    Which model a case uses depends on this process's rotation state, which no
+    other container can see — so a caller that reads its OWN configuration to
+    decide "are these two paths different models?" can get the wrong answer. It
+    sees one model where there are two, concludes no cross-model comparison
+    applies, and silently skips a measurement that was entirely possible.
 
     That is a false negative in exactly the shape this feature exists to prevent,
     which is why the calibration flow asks here instead of guessing.
@@ -112,9 +115,10 @@ def extraction_config(x_api_key: str | None = Header(default=None)):
     vocab = analyze_mod.load_vocabulary()
     return {
         "ok": True,
-        "video_model": analyze_mod.MODEL,
-        "image_model": analyze_mod.IMAGE_MODEL,
-        "cross_model": analyze_mod.MODEL != analyze_mod.IMAGE_MODEL,
+        "video_model": analyze_mod.VIDEO_MODELS.current(),
+        "image_model": analyze_mod.IMAGE_MODELS.current(),
+        "cross_model": analyze_mod.VIDEO_MODELS.current() != analyze_mod.IMAGE_MODELS.current(),
+        "models": {"video": analyze_mod.VIDEO_MODELS.state(), "image": analyze_mod.IMAGE_MODELS.state()},
         "prompt_version": analyze_mod.PROMPT_VERSION,
         "schema_version": analyze_mod.SCHEMA_VERSION,
         "vocabulary_version": vocab["version"],

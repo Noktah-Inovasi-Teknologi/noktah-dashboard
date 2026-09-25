@@ -15,6 +15,7 @@ tunnel. Never put database access or OpenRouter calls here.
 | `/clients/[id]` | One Client: tabs Ringkasan, Profil, Guideline, Permintaan, Registry, Riwayat |
 | `/clients/[id]/intake` | Intake: paste text, a screenshot, a Google Doc or a PDF → Proposals to decide |
 | `/approvals` | Persetujuan: Guideline changes waiting for the Brand Manager / Owner |
+| `/ai-costs` | Biaya AI: AI spend per case (summary, Intake text/image, songbird, image and video analysis) and month, the Hub's cap, and each case's models in order. Owner and Brand Managers only |
 | `/people`, `/people/[id]` | Orang: filters (status, Unit, role), pages of 20; one form per Person (name, IDs, emails, Units, roles, permissions), leaving |
 | `/no-access` | Signed in to Cloudflare, but no Masuk Hub permission in the Hub |
 

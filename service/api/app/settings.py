@@ -27,10 +27,8 @@ class Settings(BaseSettings):
     # Prefect → /internal/* (Docker network only). Empty = internal routes disabled.
     internal_token: str = ""
 
-    # AI (spec 008). Models are configuration per call site (constitution II).
+    # AI (spec 008). Models per case: shared/noktah_ai/models.yaml, mounted at /app/noktah_ai.
     openrouter_api_key: str = Field(default="", validation_alias=AliasChoices("OPENROUTER_API_KEY"))
-    intake_model: str = Field(default="xiaomi/mimo-v2.5", validation_alias=AliasChoices("HUB_INTAKE_MODEL"))
-    summary_model: str = Field(default="xiaomi/mimo-v2.5", validation_alias=AliasChoices("HUB_SUMMARY_MODEL"))
     ai_monthly_cap_usd: float = Field(default=5.0, validation_alias=AliasChoices("HUB_AI_MONTHLY_CAP_USD"))
     ai_timeout_seconds: float = 90.0
 

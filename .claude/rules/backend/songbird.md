@@ -200,7 +200,9 @@ docker exec prefect prefect deployment run 'songbird-generate/songbird-generate'
 ## Config
 
 Env (Prefect + prefect-worker): `OPENROUTER_API_KEY` (required — now needed by Prefect, previously
-roach-only), `OPENROUTER_MODEL` (optional), `SONGBIRD_DRIVE_PARENT_ID` (draft location). Optional Clients
+roach-only), `SONGBIRD_DRIVE_PARENT_ID` (draft location). The model is not env: it comes from
+`shared/noktah_ai/models.yaml` (case `generation`), rotating after 3 consecutive failures
+(`shared/noktah_ai/rotation.py`); pass `model=` to `openrouter_chat` only to force one. Optional Clients
 sheet overrides: `SONGBIRD_CLIENTS_SPREADSHEET_ID`/`_TAB`/`_NAME_COLUMN`,
 `SONGBIRD_CONTENT_TYPE_COLUMNS`.
 Defaults match the live sheet: name column `Name`, content-type columns `Post,Story,Short Video`.

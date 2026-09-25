@@ -27,3 +27,7 @@ dev = [
 
 [tool.uv]
 package = false
+
+[tool.pytest.ini_options]
+# shared/noktah_ai (the AI model list and rotation) is mounted at /app/noktah_ai in the container.
+pythonpath = [".", "../../shared"]

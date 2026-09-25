@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from . import db, deps, errors, internal
+from .ai.routes import router as ai_router
 from .card import definition as card_definition
 from .card.routes import router as card_router
 from .intake.routes import router as intake_router
@@ -45,6 +46,7 @@ app.include_router(registry_router)
 app.include_router(card_router)
 app.include_router(requests_router)
 app.include_router(intake_router)
+app.include_router(ai_router)
 app.include_router(internal.router)
 
 

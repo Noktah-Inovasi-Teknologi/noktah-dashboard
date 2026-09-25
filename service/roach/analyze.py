@@ -1,4 +1,4 @@
-"""Per-item content analysis via OpenRouter (xiaomi/mimo-v2.5).
+"""Per-item content analysis via OpenRouter, on the accepted models in shared/noktah_ai/models.yaml.
 
 Video items send the full video (visuals + audio) in one call and get a subtitle
 transcript, content-flow breakdown, and summary. Image/carousel items (no audio)
@@ -18,12 +18,16 @@ from pathlib import Path
 
 import requests
 import yaml
+from noktah_ai import rotation
 
 from extraction_models import ExtractionInvalid, validate_extraction
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-# Video analysis needs an audio+video-capable model (default mimo). Image/carousel
-# analysis uses a separate vision model via OPENROUTER_IMAGE_MODEL.
+# Video analysis needs an audio+video-capable model. Image/carousel analysis uses
+# a separate, cheaper vision model. Both come from shared/noktah_ai/models.yaml (cases
+# `video` and `image`), each an ordered list that rotates to the next model after
+# repeated failures (noktah_ai.rotation). OPENROUTER_MODEL / OPENROUTER_IMAGE_MODEL
+# no longer choose anything; a warning at startup says so if they are still set.
 #
 # NOTE ON WHY: this split originally existed because the video model's providers
 # did not reliably accept image input ("image-422 failures"). **That is no longer
@@ -35,8 +39,11 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # capability rationale in this comment would have made a stale constraint look
 # like a live one, and it is exactly the kind of inherited "we can't" that stops
 # anyone re-testing it.
-MODEL = os.environ.get("OPENROUTER_MODEL", "xiaomi/mimo-v2.5")
-IMAGE_MODEL = os.environ.get("OPENROUTER_IMAGE_MODEL", MODEL)
+VIDEO_MODELS = rotation.for_case("video")
+IMAGE_MODELS = rotation.for_case("image")
+for _var in ("OPENROUTER_MODEL", "OPENROUTER_IMAGE_MODEL"):
+    if os.environ.get(_var):
+        print(f"[models] {_var} is set but ignored: models come from {rotation.MODELS_FILE}", flush=True)
 
 # OpenRouter provider routing: same model, deterministic providers. Xiaomi is the
 # primary (it hosts MiMo directly); the rest are ordered fallbacks used only when
@@ -675,6 +682,30 @@ def _validated_call(
     raise AssertionError("unreachable")  # pragma: no cover
 
 
+def _rotated_call(models: rotation.Rotation, model_override: str | None, prompt: str, parts: list[dict],
+                  max_tokens: int, call_site: str, client: str | None, vocab: dict, schema: dict):
+    """`_validated_call` on the case's current model, reporting the outcome to its rotation.
+
+    A named model (`model_override`, the calibration comparison) bypasses rotation:
+    it must get exactly the model it asked for, and its failures say nothing about
+    the harvest's routing. Only the model call is counted, so a broken media file
+    (which fails before this) never rotates a healthy model away.
+    """
+    model = model_override or models.current()
+    try:
+        out = _validated_call(prompt, parts, model, max_tokens, call_site, client, vocab, schema)
+    except INTERNAL_BUG_ERRORS:
+        raise
+    except Exception as e:
+        if not model_override:
+            models.failure(model)
+        e.model_requested = model  # for provenance: the rotation may have moved on already
+        raise
+    if not model_override:
+        models.success(model)
+    return out
+
+
 def analyze_video(video_path: Path, client: str | None = None, vocab: dict | None = None,
                   schema: dict | None = None, model_override: str | None = None):
     vocab = vocab or load_vocabulary()
@@ -683,10 +714,10 @@ def analyze_video(video_path: Path, client: str | None = None, vocab: dict | Non
     try:
         video_b64 = base64.b64encode(clip.read_bytes()).decode()
         video_data_url = f"data:video/mp4;base64,{video_b64}"
-        return _validated_call(
-            _prompt_for("video", vocab),
+        return _rotated_call(
+            VIDEO_MODELS, model_override, _prompt_for("video", vocab),
             [{"type": "video_url", "video_url": {"url": video_data_url}}],
-            model_override or MODEL, VIDEO_MAX_TOKENS, "analyze.video", client, vocab, schema,
+            VIDEO_MAX_TOKENS, "analyze.video", client, vocab, schema,
         )
     finally:
         if is_temp:
@@ -712,9 +743,9 @@ def analyze_images(image_paths: list[Path], client: str | None = None, vocab: di
         # "this post has no audio" indistinguishable from "transcription failed"
         # and from "extraction never ran" (FR-010). The prompt now asks for an
         # explicit `subtitle_absence` and the validator requires one.
-        return _validated_call(
-            _prompt_for("image", vocab), parts,
-            model_override or IMAGE_MODEL, IMAGE_MAX_TOKENS, "analyze.images", client, vocab, schema,
+        return _rotated_call(
+            IMAGE_MODELS, model_override, _prompt_for("image", vocab), parts,
+            IMAGE_MAX_TOKENS, "analyze.images", client, vocab, schema,
         )
     finally:
         for t in temps:
@@ -781,10 +812,10 @@ def analyze_item(local_paths: list[str], content_type: str, client: str | None =
     vocab = load_vocabulary()
     schema = load_schema(vocabulary=vocab)
 
-    def _provenance(call=None) -> dict:
+    def _provenance(call=None, error=None) -> dict:
         return {
-            "model_requested": getattr(call, "model_requested", None) or model_override or (
-                MODEL if media_path == "video" else IMAGE_MODEL),
+            "model_requested": getattr(call, "model_requested", None) or getattr(error, "model_requested", None)
+            or model_override or (VIDEO_MODELS if media_path == "video" else IMAGE_MODELS).current(),
             "model_served": getattr(call, "model_served", None),
             "provider": getattr(call, "provider", None),
             "media_path": media_path,
@@ -846,7 +877,7 @@ def analyze_item(local_paths: list[str], content_type: str, client: str | None =
             # this would bias the measured baseline low and make a pathological
             # item that quarantines every time look free.
             "usage": getattr(call, "usage", None),
-            "provenance": _provenance(call),
+            "provenance": _provenance(call, invalid),
         }
     except INTERNAL_BUG_ERRORS:
         raise
@@ -861,7 +892,7 @@ def analyze_item(local_paths: list[str], content_type: str, client: str | None =
             # Reported as absent rather than as zero — a zero here would be an
             # assertion that nothing was spent (Constitution VI).
             "usage": None,
-            "provenance": _provenance(None),
+            "provenance": _provenance(None, e),
         }
 
 

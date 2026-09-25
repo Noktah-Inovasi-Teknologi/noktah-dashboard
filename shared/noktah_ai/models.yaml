@@ -1,0 +1,93 @@
+# Accepted AI models per case, best value first. The one place a model is chosen,
+# shared by every service that calls a model (see README.md next to this file).
+#
+# Mounted read-only into hub-api (summary, intake, intake_image), roach (image,
+# video) and Prefect (generation), so a change here needs only a restart:
+#   docker-compose restart api roach prefect prefect-worker
+#
+# Rotation (rotation.py): each service starts on the FIRST model of a case. After
+# `rotate_after` consecutive failures on the model in use (provider errors, rate
+# limits that outlast the retries, timeouts, answers that fail validation twice)
+# it moves to the next one, wrapping round at the end. A success resets the count.
+# After `back_to_first_after_minutes` on a fallback it tries the first model again.
+# State lives in memory: a restart starts every case on its first model again.
+#
+# Every model must be served by a provider the OpenRouter account allows
+# (openrouter.ai/settings/privacy), or every call to it fails with 404. No model
+# thinks (reasoning): it made Intake worse and songbird slower and costlier.
+#
+# `label` and `description` are shown in the Hub's Biaya AI page (Bahasa).
+# Costs in the comments are USD per call as OpenRouter billed them, measured
+# 2026-09-25/26 on real data through each service's own prompt and validator.
+
+rotate_after: 3
+back_to_first_after_minutes: 60
+
+cases:
+  summary:
+    label: Ringkasan klien
+    used_by: Hub
+    description: Ringkasan singkat tiap klien dari Profil, Guideline, dan permintaan yang masih terbuka. Diperbarui paling sering sekali sehari, dan hanya bila isi kartunya berubah.
+    models:
+      - deepseek/deepseek-v4-flash   # $0.0003; the most faithful (kept every banned claim word for word)
+      - qwen/qwen3.7-flash           # $0.00005; cheapest, but once listed the regular menu as "promo berjalan"
+      - xiaomi/mimo-v2.5             # $0.0005; the previous default, dropped two banned claims
+
+  # Scored on the 10 old notes with managers' decisions (12 accepted fields, 4
+  # rejected) plus 5 that held nothing.
+  intake:
+    label: Intake teks
+    used_by: Hub
+    description: Membaca teks yang ditempel, Google Doc, atau PDF berteks, lalu mengusulkan fakta untuk kartu klien. Setiap usulan tetap diputuskan Manager.
+    models:
+      - deepseek/deepseek-v4-flash   # $0.0004/Intake, 2.8 s; found 10/12, proposed 2 of the 4 rejected, copies verbatim
+      - xiaomi/mimo-v2.5             # $0.0003, 8 s; found 11/12 but all 4 rejected (it wrote the originals)
+      - qwen/qwen3.7-flash           # $0.0001, 7 s; found 10/12, 4 rejected, 4 extras
+
+  # Scored on 6 of those notes rendered as phone screenshots.
+  intake_image:
+    label: Intake gambar
+    used_by: Hub
+    description: Sama seperti Intake teks, tetapi dari tangkapan layar atau PDF hasil pindaian, dibaca sebagai gambar.
+    models:
+      - xiaomi/mimo-v2.6-flash       # $0.0003, 4 s; found 5/6, fewest rejected
+      - xiaomi/mimo-v2.5             # $0.0002, 12 s; found 5/6
+      - qwen/qwen3.5-flash-02-23     # $0.0004, 8 s; found 4/6 (qwen3.7-flash found only 3/6 here)
+
+  # Scored blind by two judges per group (2 clients x Post/Short Video, 12 ideas per
+  # model) on coherency, clarity and hit probability (hit weighted double). Costs are
+  # for all 12 ideas. Out: xiaomi/mimo-v2.5 (the previous default) was rate-limited
+  # 25 times and never finished; qwen3.7-flash with thinking delivered 0 of 6 clinic
+  # ideas; deepseek-v4-flash and qwen3.7-flash invented prices and offers.
+  generation:
+    label: Ide konten (songbird)
+    used_by: songbird
+    description: Menyusun ide content plan bulanan dan konten tambahan untuk klien, lengkap dengan Shoot Guide, Visualisasi Konten, dan caption.
+    models:
+      - xiaomi/mimo-v2.6-flash       # 7.19 overall, best hit score (7.1); $0.005; the best value
+      - xiaomi/mimo-v2.6-pro         # 7.34 overall, most executable; $0.018
+      - deepseek/deepseek-v4.1-flash # 6.47 overall; $0.034
+
+  image:
+    label: Analisis gambar
+    used_by: roach
+    description: Membaca post gambar dan carousel hasil harvest (isi, teks di layar, alur konten) supaya songbird tahu konten apa yang berhasil.
+    models:
+      - qwen/qwen3.7-flash               # $0.00008 single / $0.00013 carousel; read the doctor's name off the screen
+      - qwen/qwen3.5-flash-02-23         # $0.00016 / $0.00026
+      - inclusionai/ling-3.0-flash-vl    # $0.00010 / $0.00019; shortest summaries
+      - xiaomi/mimo-v2.6-flash           # $0.00022 / $0.00043
+      - google/gemini-2.5-flash-lite     # $0.00035 / $0.00034; the previous default, kept last
+
+  # MUST take audio: the subtitle is a verbatim transcript. qwen/qwen3.7-flash is
+  # deliberately absent: it has no audio input and only "transcribed" the test clips
+  # by reading their burned-in captions.
+  video:
+    label: Analisis video
+    used_by: roach
+    description: Menonton video hasil harvest, menuliskan transkrip ucapannya kata per kata, dan memetakan alur kontennya.
+    models:
+      - xiaomi/mimo-v2.6-flash           # $0.0007–0.0016; names and on-screen text exact
+      - xiaomi/mimo-v2.5                 # the previous default; same price, rate-limited on every benchmark call
+      - qwen/qwen3.8-omni-flash          # $0.0008–0.0018; misread one name
+      - google/gemini-2.5-flash-lite     # $0.0011–0.0026

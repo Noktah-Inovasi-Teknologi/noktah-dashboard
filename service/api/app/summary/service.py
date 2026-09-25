@@ -10,13 +10,21 @@ Requests). Never pending values, never raw Intake material.
   - the AI cap applies: at the cap, nothing is generated and the last summary
     stays visible, marked out of date (`cap_paused`).
   - it is marked "dibuat otomatis", never edited by hand, never a source.
+  - the model comes from the accepted list in shared/noktah_ai/models.yaml (case
+    `summary`), rotating to the next after repeated failures (noktah_ai.rotation). A
+    throttled model is retried a little first (SUMMARY_BACKOFF: nobody is waiting).
+    When every accepted model has failed its turn in one run, the rest of the
+    Clients wait for the next hour. Every failure is reported with its Client,
+    model and reason, which the flow alerts on.
 """
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import asyncpg
+
+from noktah_ai import rotation
 
 from ..ai import budget
 from ..ai.openrouter import AiFailure, chat_json
@@ -26,6 +34,7 @@ from ..settings import get_settings
 
 PROMPT_VERSION = "summary_v1"
 MIN_INTERVAL = timedelta(hours=24)
+SUMMARY_BACKOFF = (10, 30)  # seconds before each retry of a 429; rotation covers the rest
 
 SCHEMA = {
     "type": "object",
@@ -95,8 +104,12 @@ def _validate(parsed: Any) -> None:
             raise ValueError(f"'{key}' harus daftar teks.")
 
 
-async def refresh_one(conn: asyncpg.Connection, client_id: str, now: Optional[datetime] = None) -> str:
-    """'refreshed' | 'fresh' | 'too_soon' | 'empty' | 'paused' | 'failed'."""
+async def refresh_one(conn: asyncpg.Connection, client_id: str, now: Optional[datetime] = None,
+                      failure: Optional[Dict[str, str]] = None) -> str:
+    """'refreshed' | 'fresh' | 'too_soon' | 'empty' | 'paused' | 'failed'.
+
+    On 'failed', `failure` (when given) receives the model, reason and detail.
+    """
     now = now or datetime.now(timezone.utc)
     inputs = await _inputs(conn, client_id)
     if is_empty_card(inputs):
@@ -114,15 +127,22 @@ async def refresh_one(conn: asyncpg.Connection, client_id: str, now: Optional[da
     except AiCapReached:
         return "paused"
     settings = get_settings()
+    models = rotation.for_case("summary")
+    model = models.current()
     try:
         result = await chat_json(
-            api_key=settings.openrouter_api_key, model=settings.summary_model,
+            api_key=settings.openrouter_api_key, model=model,
             messages=[{"role": "system", "content": SYSTEM},
                       {"role": "user", "content": json.dumps(inputs, ensure_ascii=False, default=str)}],
             schema=SCHEMA, validate=_validate,
-            call_site="hub.summary", max_tokens=1500, timeout=settings.ai_timeout_seconds)
-    except AiFailure:
+            call_site="hub.summary", max_tokens=1500, timeout=settings.ai_timeout_seconds,
+            rate_limit_backoff=SUMMARY_BACKOFF)
+    except AiFailure as e:
+        models.failure(model)
+        if failure is not None:
+            failure.update(model=model, reason=e.reason, detail=e.detail)
         return "failed"
+    models.success(model)
     async with conn.transaction():
         await budget.record(conn, call_site="hub.summary", client_id=client_id, intake_id=None, model=result.model,
                             provider=result.provider, prompt_tokens=result.prompt_tokens,
@@ -137,11 +157,29 @@ async def refresh_one(conn: asyncpg.Connection, client_id: str, now: Optional[da
 
 
 async def refresh_all(conn: asyncpg.Connection) -> Dict[str, Any]:
-    ids: List[str] = [r["id"] for r in await conn.fetch(
-        "SELECT id::text AS id FROM clients WHERE COALESCE(status, 'active') <> 'inactive'")]
+    """Counts per outcome, plus `failures` {Client name: reason} (the alert hook lists these)."""
+    rows = await conn.fetch(
+        "SELECT id::text AS id, display_name FROM clients WHERE COALESCE(status, 'active') <> 'inactive' "
+        "ORDER BY display_name")
     counts: Dict[str, int] = {}
-    for cid in ids:
-        outcome = await refresh_one(conn, cid)
+    failures: Dict[str, str] = {}
+    models = rotation.for_case("summary")
+    # Enough failures in a row for every accepted model to have had its turn.
+    give_up_after = models.rotate_after * len(models.models)
+    in_a_row = 0
+    for r in rows:
+        if in_a_row >= give_up_after:
+            counts["deferred"] = counts.get("deferred", 0) + 1
+            continue
+        failure: Dict[str, str] = {}
+        outcome = await refresh_one(conn, r["id"], failure=failure)
         counts[outcome] = counts.get(outcome, 0) + 1
+        if outcome == "failed":
+            failures[r["display_name"]] = f"{failure['model']}: {failure['reason']}: {failure['detail']}"
+            in_a_row += 1
+        elif outcome == "refreshed":
+            in_a_row = 0
     return {"refreshed": counts.get("refreshed", 0), "skipped_fresh": counts.get("fresh", 0) + counts.get("too_soon", 0),
-            "empty": counts.get("empty", 0), "paused_by_cap": counts.get("paused", 0), "failed": counts.get("failed", 0)}
+            "empty": counts.get("empty", 0), "paused_by_cap": counts.get("paused", 0), "failed": counts.get("failed", 0),
+            # Not looked at: every accepted model had just failed. Next hour tries them.
+            "deferred": counts.get("deferred", 0), "failures": failures, "model": models.state()}
