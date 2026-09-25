@@ -27,10 +27,16 @@ except ImportError:
     sys.path.append(os.path.dirname(__file__))
     from common.songbird import run_generation
 
+try:
+    from .common.alerts import alert_hooks
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from common.alerts import alert_hooks
+
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 
-@flow(name="songbird-monthly-plan", description="Generate a client's monthly content plan")
+@flow(name="songbird-monthly-plan", description="Generate a client's monthly content plan", **alert_hooks())
 async def songbird_monthly_plan_flow(
     client: str,
     month: str,
@@ -67,7 +73,8 @@ async def songbird_monthly_plan_flow(
         signal_half_life_days: Half-life of the recency tilt on exemplar scores.
         exemplar_limit: Total exemplars across own + competitor (None ⇒ auto-scale).
         allocation_seed: Seed for theme sampling; set to make a plan reproducible.
-        live_spreadsheet_id, live_tab: live content-plan worksheet target (target="live").
+        live_spreadsheet_id, live_tab: optional explicit plan sheet/tab for target="live". Default:
+            the client's own "Content Plan - {client} - {month}" sheet (tasks/content_plan_files.py).
         credentials_block_name: Google credentials block name.
 
     Returns:

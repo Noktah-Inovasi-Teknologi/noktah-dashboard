@@ -42,6 +42,12 @@ except ImportError:
     from tasks.roster_tasks import _db_pool
     from common.roster import reconcile_roster, SHEET_NAME_COLUMN
 
+try:
+    from .common.alerts import alert_hooks
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from common.alerts import alert_hooks
+
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 CLIENTS_SPREADSHEET_ID = os.environ.get(
@@ -86,7 +92,7 @@ async def _distinct_knowledge_base_client_names() -> List[str]:
         await pool.close()
 
 
-@flow(name="roster-sync", description="Reconcile clients/accounts/roles from the Clients + Hashmaps worksheets")
+@flow(name="roster-sync", description="Reconcile clients/accounts/roles from the Clients + Hashmaps worksheets", **alert_hooks())
 async def roster_sync_flow(dry_run: bool = False, credentials_block_name: str = "google-creds") -> Dict[str, Any]:
     """
     Reconcile the datastore's roster from the operator-maintained spreadsheets.

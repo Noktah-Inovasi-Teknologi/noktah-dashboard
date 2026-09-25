@@ -675,38 +675,6 @@ def _resolve_handle(profile_url: str, profile_meta: Dict[str, Any]) -> str:
     return urlparse(profile_url).path.strip("/").split("/")[-1] or profile_url
 
 
-async def _send_completion_notification(run_id: str, summary: Dict[str, Any], error: Optional[str]) -> None:
-    """Send a completion notification via a configurable Prefect notification block (FR-018)."""
-    block_name = os.environ.get("HARVEST_NOTIFICATION_BLOCK")
-    if not block_name:
-        logger.info("HARVEST_NOTIFICATION_BLOCK not configured; skipping completion notification")
-        return
-    try:
-        from prefect.blocks.notifications import AppriseNotificationBlock
-
-        block = await AppriseNotificationBlock.load(block_name)
-        status = "FAILED" if error else "COMPLETED"
-        message = (
-            f"Social harvest run {run_id} {status}. "
-            f"Profiles: {summary.get('profiles_processed')}, "
-            f"Items: {summary.get('items_collected')}, "
-            f"Failed: {summary.get('items_failed')}, "
-            f"Blocked profiles: {summary.get('profiles_blocked')}."
-        )
-        if error:
-            message += f" Error: {error}"
-        # When several profiles were blocked in one run, the shared egress IP is
-        # likely throttled — prompt the operator to rotate it (toggle the mobile
-        # hotspot's data / airplane mode to acquire a fresh carrier IP).
-        blocked = summary.get("profiles_blocked") or 0
-        threshold = int(os.environ.get("HARVEST_ROTATE_IP_THRESHOLD", "2"))
-        if blocked >= threshold:
-            message += " ⚠ Egress likely throttled — rotate the hotspot IP (toggle mobile data / airplane mode)."
-        await block.notify(message)
-    except Exception as e:
-        logger.warning(f"Failed to send completion notification via block '{block_name}': {e}")
-
-
 async def run_harvest(
     profiles: List[str],
     depth_selector: DepthSelector,
@@ -1188,8 +1156,8 @@ async def run_harvest(
                 pass
         end_time = datetime.now(timezone.utc)
 
-    run_id = f"{harvest_name}-{start_time.strftime('%Y%m%dT%H%M%S')}"
-    await _send_completion_notification(run_id, summary, error)
+    # Problems (error, blocked profiles, failed items) are reported to Slack by
+    # the flow's alert hook (flows/common/alerts.py), which reads this return value.
 
     if run_record_id:
         try:

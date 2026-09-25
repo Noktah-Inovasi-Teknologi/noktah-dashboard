@@ -47,10 +47,16 @@ except ImportError:
     from db import maybe_transaction
     from tasks.velocity_tasks import _observation_backfill_impl
 
+try:
+    from .common.alerts import alert_hooks
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from common.alerts import alert_hooks
+
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 
-@flow(name="observation-backfill", description="One-time seeding of pre-feature signal rows as legacy observations")
+@flow(name="observation-backfill", description="One-time seeding of pre-feature signal rows as legacy observations", **alert_hooks())
 async def observation_backfill_flow(dry_run: bool = False) -> Dict[str, Any]:
     """
     Args:

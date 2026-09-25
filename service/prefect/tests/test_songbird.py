@@ -89,6 +89,12 @@ def patched_engine(monkeypatch):
         "sheet_own_handles": [],
         "themes": [{"theme": "Edukasi Mata", "scores": [0.8, 0.7, 0.9]}],
         "draft_folder": "client-content-plan-folder",
+        # What the client's Content Plan folder holds (live target lookup).
+        "plan_files": [{"id": "plan-sheet-id", "name": "Content Plan - Acme - Agustus 2026",
+                        "mimeType": "application/vnd.google-apps.spreadsheet"}],
+        "plan_tabs": ["Sheet1"],
+        "plan_rows": [],             # rows already in the live plan
+        "listed_folders": [],
     }
 
     async def fake_context(client):
@@ -160,7 +166,14 @@ def patched_engine(monkeypatch):
         return {"updates": {"updatedRows": len(rows)}}
 
     async def fake_read(spreadsheet_id, sheet_name, credentials_block_name="google-creds", **kw):
-        return {"dataframe_info": {"columns": calls["read_header"]}}
+        return {"dataframe_info": {"columns": calls["read_header"]}, "data": calls["plan_rows"]}
+
+    async def fake_list_folder(folder_id, file_name_pattern=None, credentials_block_name="google-creds", **kw):
+        calls["listed_folders"].append(folder_id)
+        return list(calls["plan_files"])
+
+    async def fake_info(spreadsheet_id, credentials_block_name="google-creds"):
+        return {"sheets": [{"title": t} for t in calls["plan_tabs"]]}
 
     async def fake_run_record_start(**kwargs):
         calls.setdefault("run_record_start", []).append(kwargs)
@@ -177,11 +190,14 @@ def patched_engine(monkeypatch):
     monkeypatch.setattr(engine, "songbird_config_own_handles", fake_own_handles)
     monkeypatch.setattr(engine, "songbird_theme_induction", fake_themes)
     monkeypatch.setattr(engine, "songbird_config_draft_folder", fake_draft_folder)
+    monkeypatch.setattr(engine, "songbird_config_plan_folder", fake_draft_folder)
     monkeypatch.setattr(engine, "openrouter_chat", fake_openrouter)
     monkeypatch.setattr(engine, "drive_folder_ensure", fake_folder)
     monkeypatch.setattr(engine, "sheets_create", fake_create)
     monkeypatch.setattr(engine, "sheets_rows_append", fake_append)
     monkeypatch.setattr(engine, "google_read_sheet_data", fake_read)
+    monkeypatch.setattr(engine, "google_filter_files_in_folder", fake_list_folder)
+    monkeypatch.setattr(engine, "google_read_spreadsheet_info", fake_info)
     monkeypatch.setattr(engine, "run_record_start", fake_run_record_start)
     monkeypatch.setattr(engine, "run_record_finish", fake_run_record_finish)
     monkeypatch.setattr(engine, "CLIENT_SOCIAL", {"Acme": {"own": ["acme"], "competitors": ["rival"]}})
@@ -573,7 +589,7 @@ async def test_on_demand_no_dates_draft_only(patched_engine):
 @pytest.mark.asyncio
 async def test_live_aligns_by_name_and_drops_rationale(patched_engine):
     # Shuffled live header with an extra unrelated column + no rationale columns.
-    patched_engine["read_header"] = ["Bentuk", "Waktu", "Topik", "Tanggal", "Shoot Guide", "Reference"]
+    patched_engine["read_header"] = ["Bentuk", "Waktu", "Topik", "Tanggal", "Shoot Guide", "Visualisasi Konten"]
     result = await engine.run_generation(
         client="Acme", quantity=3, distribute_dates=True, month="Agustus 2026", target="live",
     )
@@ -590,3 +606,100 @@ async def test_live_aligns_by_name_and_drops_rationale(patched_engine):
     topik_pos, waktu_pos = header.index("Topik"), header.index("Waktu")
     assert rows[0][topik_pos].startswith("Topik")
     assert rows[0][waktu_pos] == ""
+
+
+@pytest.mark.asyncio
+async def test_live_populates_visualisasi_konten_beside_shoot_guide(patched_engine):
+    """
+    Every live plan has BOTH "Shoot Guide" and "Visualisasi Konten" (no "Reference").
+    The name-aligned append blanks any draft column the live header lacks, so the
+    draft must call the column by the live sheet's name or the content silently vanishes.
+    """
+    patched_engine["read_header"] = [
+        "No.", "Tanggal", "Bentuk", "Topik", "Known Facts", "Shoot Guide", "Visualisasi Konten", "Asset",
+    ]
+    result = await engine.run_generation(
+        client="Acme", quantity=2, distribute_dates=True, month="Agustus 2026", target="live",
+    )
+    assert result["error"] is None
+    header = patched_engine["read_header"]
+    rows = patched_engine["appended"][0]["rows"]
+    sg, vk = header.index("Shoot Guide"), header.index("Visualisasi Konten")
+    assert all(r[sg].startswith("Scene 1") for r in rows)
+    assert all(r[vk].startswith("SLIDE 1") for r in rows)
+    assert "Reference" not in engine.CONTENT_PLAN_COLUMNS
+
+
+# --------------------------------------------------------------------------
+# Live target: the client's own monthly plan, never the Clients roster
+# --------------------------------------------------------------------------
+
+LIVE_HEADER = ["No.", "Tanggal", "Waktu", "Bentuk", "Topik", "Shoot Guide", "Visualisasi Konten", "Approval"]
+
+
+@pytest.mark.asyncio
+async def test_live_writes_to_the_clients_own_plan_for_the_month(patched_engine):
+    patched_engine["read_header"] = LIVE_HEADER
+    result = await engine.run_generation(
+        client="Acme", quantity=2, distribute_dates=True, month="August 2026", target="live",
+    )
+    assert result["error"] is None
+    appended = patched_engine["appended"][0]
+    # English month input still finds the Indonesian-named file.
+    assert appended["id"] == "plan-sheet-id" and appended["tab"] == "Sheet1"
+    assert patched_engine["listed_folders"] == ["client-content-plan-folder"]
+
+
+@pytest.mark.asyncio
+async def test_live_refuses_a_worksheet_that_is_not_a_content_plan(patched_engine):
+    """The old default target was the Clients roster; its header must be refused."""
+    patched_engine["read_header"] = ["Name", "Instagram", "TikTok", "Post", "Story", "Short Video"]
+    result = await engine.run_generation(
+        client="Acme", quantity=2, distribute_dates=True, month="Agustus 2026", target="live",
+    )
+    assert "not a content plan" in result["error"]
+    assert patched_engine["appended"] == []
+
+
+@pytest.mark.asyncio
+async def test_missing_plan_fails_before_any_model_spend(patched_engine):
+    patched_engine["plan_files"] = []
+    result = await engine.run_generation(
+        client="Acme", quantity=2, distribute_dates=True, month="Agustus 2026", target="live",
+    )
+    assert "Content Plan - Acme - Agustus 2026" in result["error"]
+    assert patched_engine["prompts"] == [], "the plan lookup must run before generation"
+    assert patched_engine["appended"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_salinan_copy_is_not_the_plan(patched_engine):
+    patched_engine["plan_files"] = [{"id": "copy", "name": "Salinan Content Plan - Acme - Agustus 2026",
+                                     "mimeType": "application/vnd.google-apps.spreadsheet"}]
+    result = await engine.run_generation(
+        client="Acme", quantity=2, distribute_dates=True, month="Agustus 2026", target="live",
+    )
+    assert result["error"] and patched_engine["appended"] == []
+
+
+@pytest.mark.asyncio
+async def test_live_numbering_continues_after_existing_rows(patched_engine):
+    patched_engine["read_header"] = LIVE_HEADER
+    patched_engine["plan_rows"] = [{"No.": "1"}, {"No.": "2"}, {"No.": "3"}]
+    result = await engine.run_generation(
+        client="Acme", quantity=2, distribute_dates=True, month="Agustus 2026", target="live",
+    )
+    assert result["error"] is None
+    rows = patched_engine["appended"][0]["rows"]
+    assert [r[LIVE_HEADER.index("No.")] for r in rows] == ["4", "5"]
+
+
+@pytest.mark.asyncio
+async def test_live_uses_the_first_tab_when_there_is_no_sheet1(patched_engine):
+    patched_engine["read_header"] = LIVE_HEADER
+    patched_engine["plan_tabs"] = ["sheet3", "Arsip"]
+    result = await engine.run_generation(
+        client="Acme", quantity=2, distribute_dates=True, month="Agustus 2026", target="live",
+    )
+    assert result["error"] is None
+    assert patched_engine["appended"][0]["tab"] == "sheet3"

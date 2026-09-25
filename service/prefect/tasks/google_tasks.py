@@ -263,7 +263,7 @@ async def google_filter_files_in_folder(
             
             # Get all subfolders recursively
             def get_subfolders(parent_folder_id):
-                subfolder_query = f"'{parent_folder_id}' in parents and mimeType='application/vnd.google-apps.folder'"
+                subfolder_query = f"'{parent_folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed = false"
                 subfolder_result = drive_service.files().list(
                     q=subfolder_query,
                     spaces='drive',
@@ -280,9 +280,9 @@ async def google_filter_files_in_folder(
             # Search in all folders
             for search_folder_id in folders_to_search:
                 if file_name_pattern:
-                    query = f"'{search_folder_id}' in parents and name contains '{file_name_pattern}'"
+                    query = f"'{search_folder_id}' in parents and name contains '{file_name_pattern}' and trashed = false"
                 else:
-                    query = f"'{search_folder_id}' in parents"
+                    query = f"'{search_folder_id}' in parents and trashed = false"
                 
                 request_params = {
                     'q': query,
@@ -301,9 +301,9 @@ async def google_filter_files_in_folder(
         else:
             # Search only in the specified folder - use proper API parameters
             if file_name_pattern:
-                query = f"'{folder_id}' in parents and name contains '{file_name_pattern}'"
+                query = f"'{folder_id}' in parents and name contains '{file_name_pattern}' and trashed = false"
             else:
-                query = f"'{folder_id}' in parents"
+                query = f"'{folder_id}' in parents and trashed = false"
             
             logger.info(f"Executing Drive API query: {query}")
             

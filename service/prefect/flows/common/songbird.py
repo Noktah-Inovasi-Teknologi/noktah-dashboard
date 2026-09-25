@@ -25,6 +25,7 @@ try:
         songbird_config_content_mix,
         songbird_config_draft_folder,
         songbird_config_own_handles,
+        songbird_config_plan_folder,
         songbird_top_performers,
     )
     from ...tasks.songbird_ranking import (
@@ -41,9 +42,18 @@ try:
     from ...tasks.openrouter_tasks import array_schema, openrouter_chat
     from ...tasks.google_tasks import (
         drive_folder_ensure,
+        google_filter_files_in_folder,
         google_read_sheet_data,
+        google_read_spreadsheet_info,
         sheets_create,
         sheets_rows_append,
+    )
+    from ...tasks.content_plan_files import (
+        expected_plan_name,
+        missing_plan_columns,
+        pick_plan_file,
+        pick_plan_tab,
+        plan_month_label,
     )
     from ...tasks.run_tasks import run_record_finish, run_record_start
     from ...hashmap import CLIENT_SOCIAL
@@ -56,6 +66,7 @@ except ImportError:
         songbird_config_content_mix,
         songbird_config_draft_folder,
         songbird_config_own_handles,
+        songbird_config_plan_folder,
         songbird_top_performers,
     )
     from tasks.songbird_ranking import (
@@ -72,9 +83,18 @@ except ImportError:
     from tasks.openrouter_tasks import array_schema, openrouter_chat
     from tasks.google_tasks import (
         drive_folder_ensure,
+        google_filter_files_in_folder,
         google_read_sheet_data,
+        google_read_spreadsheet_info,
         sheets_create,
         sheets_rows_append,
+    )
+    from tasks.content_plan_files import (
+        expected_plan_name,
+        missing_plan_columns,
+        pick_plan_file,
+        pick_plan_tab,
+        plan_month_label,
     )
     from tasks.run_tasks import run_record_finish, run_record_start
     from hashmap import CLIENT_SOCIAL
@@ -173,11 +193,10 @@ _MONTHS = {
     "november": 11, "nopember": 11, "december": 12, "desember": 12,
 }
 
-# Fallback for the live content-plan worksheet (same workbook the content-plan flow reads).
-DEFAULT_LIVE_SPREADSHEET_ID = os.environ.get(
-    "SONGBIRD_LIVE_SPREADSHEET_ID", "1-aV46TIn4m_zs3vtCNeS_Bvl3Tt-tgg09uuG_NqgNNY"
-)
-DEFAULT_LIVE_TAB = os.environ.get("SONGBIRD_LIVE_TAB", "Clients")
+# There is deliberately NO default live target. The old default was the Clients
+# workbook's `Clients` tab, i.e. the client roster, so a documented
+# `--target live` run appended mostly blank rows to the roster. The live target is
+# now the client's own plan for the month, found by tasks/content_plan_files.py.
 
 # Exemplar budget ceiling. Each exemplar costs ~800 chars of prompt, so 24 keeps the
 # grounding block around 5k input tokens even for a large monthly plan.
@@ -776,6 +795,15 @@ async def run_generation(
         else:
             dates = [""] * quantity
 
+        # Find the live plan BEFORE generating: a missing or ambiguous plan file
+        # should cost nothing, not a full generation's model spend.
+        live_target = None
+        if target == "live" and distribute_dates:
+            live_target = await _resolve_live_target(
+                client, plan_month_label(year, month_num), live_spreadsheet_id, live_tab,
+                credentials_block_name, run_logger,
+            )
+
         # 3. Gather signals.
         #    Exemplar budget scales with the plan size (~2 per idea) and is capped so
         #    the prompt's context cost stays bounded.
@@ -921,7 +949,7 @@ async def run_generation(
         summary["target"] = effective_target
         if effective_target == "live":
             deliverable_id = await _deliver_live(
-                rows_cells, live_spreadsheet_id, live_tab, credentials_block_name, run_logger
+                rows_cells, *live_target, credentials_block_name, run_logger
             )
         else:
             draft_folder_id = await songbird_config_draft_folder(
@@ -1006,22 +1034,66 @@ async def _deliver_draft(
     return sheet_id
 
 
+async def _resolve_live_target(
+    client: str, month_label: str, live_spreadsheet_id: Optional[str], live_tab: Optional[str],
+    credentials_block_name: str, run_logger,
+) -> tuple[str, str]:
+    """(spreadsheet_id, tab) of the client's own content plan for the month.
+
+    The plan is `Content Plan - {client} - {month}` in the client's Content Plan
+    folder, by the same rule the Jira flow reads it with. It is never created
+    here: the planner makes the file, songbird only fills it. An explicit
+    live_spreadsheet_id bypasses the lookup but not the header check in
+    _deliver_live.
+    """
+    spreadsheet_id = live_spreadsheet_id
+    if not spreadsheet_id:
+        folder_id = await songbird_config_plan_folder(client, credentials_block_name=credentials_block_name)
+        files = await google_filter_files_in_folder(
+            folder_id=folder_id, file_name_pattern="Content Plan",
+            credentials_block_name=credentials_block_name,
+        )
+        plan = pick_plan_file(files, client, month_label)
+        if not plan:
+            raise ValueError(
+                f"No sheet named '{expected_plan_name(client, month_label)}' in {client}'s Content Plan "
+                f"folder. Create it (or run with --target draft) and try again."
+            )
+        spreadsheet_id = plan["id"]
+
+    tab = live_tab
+    if not tab:
+        info = await google_read_spreadsheet_info(spreadsheet_id, credentials_block_name)
+        tab = pick_plan_tab([s.get("title") for s in info.get("sheets", [])])
+        if not tab:
+            raise ValueError(f"Live plan {spreadsheet_id} has no tabs")
+    run_logger.info(f"{client}: live target '{tab}' in {spreadsheet_id} ({month_label})")
+    return spreadsheet_id, tab
+
+
 async def _deliver_live(
-    rows_cells: List[Dict[str, str]], live_spreadsheet_id: Optional[str], live_tab: Optional[str],
+    rows_cells: List[Dict[str, str]], spreadsheet_id: str, tab: str,
     credentials_block_name: str, run_logger,
 ) -> str:
-    """Append rows to the live content-plan worksheet, aligned to its header by name (FR-016)."""
-    spreadsheet_id = live_spreadsheet_id or DEFAULT_LIVE_SPREADSHEET_ID
-    tab = live_tab or DEFAULT_LIVE_TAB
+    """Append rows to the client's live content plan, aligned to its header by name (FR-016)."""
     info = await google_read_sheet_data(spreadsheet_id, tab, credentials_block_name=credentials_block_name)
     header = (info.get("dataframe_info") or {}).get("columns") or []
-    if not header:
-        raise ValueError(f"Live worksheet '{tab}' ({spreadsheet_id}) has no readable header row")
+    # Refuse anything that is not a content plan. This, not the lookup, is what
+    # makes a misdirected write impossible (the old default target was the roster).
+    not_a_plan = missing_plan_columns(header)
+    if not_a_plan:
+        raise ValueError(
+            f"Worksheet '{tab}' ({spreadsheet_id}) is not a content plan: missing {not_a_plan}. Nothing written."
+        )
     # Only the columns songbird actually fills matter here — the workflow columns are
     # expected to be absent or empty, so flagging them would be noise.
     missing = [c for c in CONTENT_PLAN_COLUMNS if c in GENERATED_COLUMNS and c not in header]
     if missing:
         run_logger.warning(f"Live worksheet missing content-plan columns {missing}; those cells left blank")
+    # Continue the plan's numbering instead of restarting at 1 under existing rows.
+    existing = len(info.get("data") or [])
+    for i, cells in enumerate(rows_cells):
+        cells["No."] = str(existing + i + 1)
     # Align by column NAME; rationale columns are excluded (not in content-plan header set).
     rows = [[cells.get(col, "") if col in CONTENT_PLAN_COLUMNS else "" for col in header] for cells in rows_cells]
     await sheets_rows_append(spreadsheet_id, rows, sheet_name=tab, credentials_block_name=credentials_block_name)

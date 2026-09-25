@@ -43,10 +43,16 @@ except ImportError:
     from db import maybe_transaction
     from tasks.velocity_tasks import _derive_velocity_impl
 
+try:
+    from .common.alerts import alert_hooks
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from common.alerts import alert_hooks
+
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 
-@flow(name="velocity-derive", description="Derive engagement velocity from stored metric observations")
+@flow(name="velocity-derive", description="Derive engagement velocity from stored metric observations", **alert_hooks())
 async def velocity_derive_flow(
     platform: Optional[str] = None,
     content_ids: Optional[List[str]] = None,

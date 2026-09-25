@@ -72,6 +72,12 @@ except ImportError:
     from tasks.google_tasks import drive_file_download
     from tasks.social_tasks import social_item_analyze
 
+try:
+    from .common.alerts import alert_hooks
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from common.alerts import alert_hooks
+
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
 
 # Media MUST be staged on the volume BOTH containers share.
@@ -145,7 +151,7 @@ async def _select_scope(
     return [dict(r) for r in rows]
 
 
-@flow(name="roach-extract-backfill")
+@flow(name="roach-extract-backfill", **alert_hooks())
 async def roach_extract_backfill(
     dry_run: bool = True,
     pilot: Optional[int] = None,

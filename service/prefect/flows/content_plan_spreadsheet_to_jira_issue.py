@@ -29,6 +29,7 @@ try:
         save_to_json,
         convert_content_plan_row_to_jira_issue
     )
+    from ..tasks.content_plan_files import pick_plan_file
 except ImportError:
     # For running as standalone script
     import sys
@@ -46,6 +47,7 @@ except ImportError:
         save_to_json,
         convert_content_plan_row_to_jira_issue
     )
+    from tasks.content_plan_files import pick_plan_file
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,65 @@ logger = logging.getLogger(__name__)
 SPREADSHEET_ID = "1-aV46TIn4m_zs3vtCNeS_Bvl3Tt-tgg09uuG_NqgNNY"
 SHEET_NAME = "Clients"
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+
+# The tab nearly every content plan uses. Not a requirement — see _read_plan_sheet.
+DEFAULT_PLAN_TAB = "Sheet1"
+
+
+async def _read_plan_sheet(
+    spreadsheet_id: str,
+    credentials_block_name: str = "google-creds"
+):
+    """
+    Read a content plan, tolerating a tab that is not named `Sheet1`.
+
+    Almost every plan uses `Sheet1`, so that is tried first and costs exactly one
+    request. When a plan's tab is named something else the Sheets API answers
+    `400 Unable to parse range`, and the plan is then read from whichever tab
+    comes first — the column layout is what the conversion depends on, not the
+    tab's name.
+
+    Measured 2026-09-03: Klinik Mata Bireuen's September plan had a single tab
+    named `sheet3`, which failed that client for the whole month with no way to
+    recover short of editing the spreadsheet by hand.
+
+    Returns `(sheet_data, tab_name_used)`.
+    """
+    try:
+        data = await google_read_sheet_data(
+            spreadsheet_id=spreadsheet_id,
+            sheet_name=DEFAULT_PLAN_TAB,
+            credentials_block_name=credentials_block_name,
+            header_row=0
+        )
+        return data, DEFAULT_PLAN_TAB
+    except Exception as primary:
+        # Only a *naming* mismatch is recoverable here. Look up the real tabs,
+        # and if that lookup fails, surface the original read error rather than
+        # the lookup's — the first one is what actually went wrong.
+        try:
+            info = await google_read_spreadsheet_info(spreadsheet_id, credentials_block_name)
+            titles = [s.get("title") for s in info.get("sheets", []) if s.get("title")]
+        except Exception:
+            raise primary
+
+        # `Sheet1` exists, so the failure was something else (permissions, an
+        # outage, a malformed sheet) and retrying another tab would only mask it.
+        if not titles or DEFAULT_PLAN_TAB in titles:
+            raise primary
+
+        fallback = titles[0]
+        logger.warning(
+            f"Spreadsheet {spreadsheet_id} has no '{DEFAULT_PLAN_TAB}' tab "
+            f"(tabs: {titles}); reading '{fallback}' instead"
+        )
+        data = await google_read_sheet_data(
+            spreadsheet_id=spreadsheet_id,
+            sheet_name=fallback,
+            credentials_block_name=credentials_block_name,
+            header_row=0
+        )
+        return data, fallback
 
 
 @flow(name="read-content-plan", description="Read content plan data from Google Spreadsheet")
@@ -205,18 +266,10 @@ async def search_content_plan_files_flow(
                     active=True
                 )
                 
-                # Look for exact match (more robust matching)
-                exact_match = None
-                for file in matching_files:
-                    file_name = file.get("name", "").strip()
-                    # Try exact match first
-                    if file_name == expected_filename:
-                        exact_match = file
-                        break
-                    # Try substring match as fallback
-                    elif expected_filename in file_name:
-                        exact_match = file
-                        break
+                # Exact name only: a "contains" match picked up "Salinan Content Plan - …"
+                # copies. Two same-named sheets raise, and the except below records
+                # the message for that client (see tasks/content_plan_files.py).
+                exact_match = pick_plan_file(matching_files, client_name, search_month)
                 
                 # Add to output list with required format
                 if exact_match:
@@ -452,19 +505,19 @@ async def read_content_plan_data_flow(
                 continue
             
             try:
-                # Read content plan spreadsheet data
-                content_plan_data = await google_read_sheet_data(
+                # Read content plan spreadsheet data. The tab is usually `Sheet1`
+                # but is not required to be — see _read_plan_sheet.
+                content_plan_data, sheet_tab = await _read_plan_sheet(
                     spreadsheet_id=content_plan_id,
-                    sheet_name="Sheet1",  # Default sheet name
-                    credentials_block_name=credentials_block_name,
-                    header_row=0
+                    credentials_block_name=credentials_block_name
                 )
-                
+
                 # Store the result
                 client_result = {
                     "number": content_plan["number"],
                     "client_name": client_name,
                     "content_plan_id": content_plan_id,
+                    "sheet_tab": sheet_tab,
                     "data": content_plan_data["data"],
                     "dataframe_info": content_plan_data["dataframe_info"],
                     "processing_timestamp": datetime.now().isoformat()

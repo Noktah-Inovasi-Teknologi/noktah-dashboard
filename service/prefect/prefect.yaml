@@ -49,6 +49,21 @@ deployments:
       - prefect.deployments.steps.set_working_directory:
           directory: /app
 
+  # Nightly backup of the company database to Company > Backups > Database in
+  # Drive, keeping the newest 14. Runs at 02:00, clear of the 03:00 sync and
+  # 03:30 roster jobs. Failures post to #noktah-otomasi.
+  - name: db-backup
+    entrypoint: flows/db_backup.py:db_backup_flow
+    work_pool:
+      name: noktah-pool
+    schedules:
+      - cron: "0 2 * * *"
+        timezone: "Asia/Jakarta"
+    parameters: {}
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
   # Social harvest — Sheet→DB sync. Reconciles harvested_signals + detail sheets
   # from the canonical Account Social Harvest sheets (reviewer-edited `advertisement`
   # flag). Scheduled daily; tighten the cron if staff edits need to reflect sooner.

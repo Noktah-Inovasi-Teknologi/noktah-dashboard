@@ -337,6 +337,22 @@ Reads are cached in-process for `HASHMAP_TTL_SECONDS` (default 300) and snapshot
 absent from a block simply get no mapping (e.g. no Jira component, or no competitor signal for
 songbird) — so a client must exist in the sheet to be wired up.
 
+### Database Backup (nightly)
+```bash
+# db-backup deployment: 02:00 WIB daily. pg_dump of noktah_dashboard →
+# Drive: Company (restricted shared drive) > Backups > Database, newest 14 kept.
+# Failures, and a backup under half the previous size (rotation is then skipped),
+# post to #noktah-otomasi.
+docker exec prefect python flows/db_backup.py --validate-only   # dump + verify, no upload
+docker exec prefect python flows/db_backup.py                   # full run
+
+# Restore into a SCRATCH database first, never over the live one. The
+# "transaction_timeout" error is expected (pg_dump 17 vs server 15) and harmless.
+docker exec postgres createdb -U noktah restore_check
+docker cp noktah_dashboard_<date>.dump postgres:/tmp/b.dump
+docker exec postgres pg_restore -U noktah -d restore_check --no-owner /tmp/b.dump
+```
+
 ### Docker Environment
 ```bash
 # Start all services
@@ -455,13 +471,19 @@ HARVEST_DRIVE_PARENT_ID=your_google_drive_parent_folder_id
 # ROACH_API_URL and HARVEST_DB_URL are set automatically in docker-compose.yml
 # (http://roach:8080 and a DSN built from POSTGRES_USER/PASSWORD/DB above) — no need to set here
 
+# Failure alerts to Slack (every deployed flow, via flows/common/alerts.py)
+SLACK_AUTOMATION_NOKTAH=https://hooks.slack.com/services/...  # #noktah-otomasi
+SLACK_AUTOMATION_ESKALA=https://hooks.slack.com/services/...  # #eskala-otomasi
+SLACK_AUTOMATION_VENYU=https://hooks.slack.com/services/...   # #venyu-otomasi
+
 # Songbird content generation (songbird-* flows)
 OPENROUTER_API_KEY=your_openrouter_api_key  # now needed by the Prefect services (was roach-only)
 OPENROUTER_MODEL=xiaomi/mimo-v2.5           # optional; house generation model
 SONGBIRD_DRIVE_PARENT_ID=your_drive_folder_id_for_draft_content_plans
-# Optional Clients-sheet / live-target overrides (defaults target the content-plan workbook):
+# Optional Clients-sheet overrides (defaults target the content-plan workbook):
 # SONGBIRD_CLIENTS_SPREADSHEET_ID, SONGBIRD_CLIENTS_TAB, SONGBIRD_CLIENTS_NAME_COLUMN,
-# SONGBIRD_CONTENT_TYPE_COLUMNS, SONGBIRD_LIVE_SPREADSHEET_ID, SONGBIRD_LIVE_TAB
+# SONGBIRD_CONTENT_TYPE_COLUMNS
+# (--target live has no env override: it writes to the client's own monthly plan sheet)
 ```
 
 ### Required External Services

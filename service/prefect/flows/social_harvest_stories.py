@@ -34,10 +34,16 @@ except ImportError:
     sys.path.append(os.path.dirname(__file__))
     from common.social_harvest import make_all_selector, run_harvest
 
+try:
+    from .common.alerts import alert_hooks
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from common.alerts import alert_hooks
+
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 
-@flow(name="social-harvest-stories", description="Harvest only currently-active Stories per profile")
+@flow(name="social-harvest-stories", description="Harvest only currently-active Stories per profile", **alert_hooks())
 async def social_harvest_stories_flow(
     profiles: List[str],
     harvest_name: Optional[str] = None,
