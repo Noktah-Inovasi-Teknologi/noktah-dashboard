@@ -11,13 +11,29 @@ dependencies = [
     "pydantic-settings>=2.11.0",
     # Verifies Cloudflare Access JWTs (RS256) against the team's published keys
     "pyjwt[crypto]>=2.10.1",
+    # OpenRouter (AI intake + summaries), Slack webhooks, Prefect API
+    "httpx>=0.28.0",
+    # Google Docs intake + the read-only Clients/Hashmaps sheet copy
+    "google-api-python-client>=2.187.0",
+    "google-auth>=2.40.3",
+    # PDF intake: text layer, and scanned pages rendered to images (Apache-2.0,
+    # chosen over AGPL PyMuPDF)
+    "pypdf>=5.0.0",
+    "pypdfium2>=4.30.0",
+    # encodes rendered scan pages as JPEG for the model call
+    "pillow>=11.0.0",
+    "pyyaml>=6.0.2",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.3.0",
-    "httpx>=0.28.0",
+    "pytest-asyncio>=0.24.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "schema: requires a real disposable PostgreSQL database (HUB_TEST_DATABASE_URL); auto-skipped when unreachable",
+]

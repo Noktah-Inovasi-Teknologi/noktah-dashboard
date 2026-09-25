@@ -83,6 +83,12 @@ except ImportError:
     from tasks.google_tasks import drive_file_download
     from tasks.social_tasks import social_extraction_config, social_item_analyze
 
+try:
+    from .common.alerts import alert_hooks
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from common.alerts import alert_hooks
+
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
 
 # Same reason as roach_extract_backfill: roach is a SEPARATE container and takes a
@@ -110,7 +116,7 @@ async def _configured_models() -> tuple:
     return config["video_model"], config["image_model"]
 
 
-@flow(name="roach-extract-calibrate")
+@flow(name="roach-extract-calibrate", **alert_hooks())
 async def roach_extract_calibrate(
     sample: str = "image_overlap_v1",
     dry_run: bool = True,

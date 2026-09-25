@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun scripts/claude-hooks/pre-push-ui-sweep-gate.ts",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun scripts/claude-hooks/post-edit-ui-gate.ts",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

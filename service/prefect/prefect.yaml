@@ -49,6 +49,100 @@ deployments:
       - prefect.deployments.steps.set_working_directory:
           directory: /app
 
+  # Noktah Hub (spec 008): hub-api does the work; these only schedule it.
+  - name: hub-summary-refresh
+    entrypoint: flows/hub_summary_refresh.py:hub_summary_refresh_flow
+    work_pool:
+      name: noktah-pool
+    schedules:
+      - cron: "15 * * * *"
+        timezone: "Asia/Jakarta"
+    parameters: {}
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
+  # One-time Registry import (FR-014). No schedule. validate_only defaults to true;
+  # the real run is a deliberate `--param validate_only=false` after review.
+  - name: hub-registry-import
+    entrypoint: flows/hub_registry_import.py:hub_registry_import_flow
+    work_pool:
+      name: noktah-pool
+    parameters:
+      validate_only: true
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
+  # Registry → Clients/Hashmaps sheet copies within 5 minutes (FR-016). hub-api
+  # refuses to write until the import has run, so deploying this early is safe.
+  - name: hub-sheet-sync
+    entrypoint: flows/hub_sheet_sync.py:hub_sheet_sync_flow
+    work_pool:
+      name: noktah-pool
+    schedules:
+      - cron: "*/5 * * * *"
+        timezone: "Asia/Jakarta"
+    parameters: {}
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
+  # Weekly full check (FR-018): rewrites cells edited in the sheet, reports them.
+  - name: hub-sheet-check
+    entrypoint: flows/hub_sheet_sync.py:hub_sheet_sync_flow
+    work_pool:
+      name: noktah-pool
+    schedules:
+      - cron: "0 6 * * 1"
+        timezone: "Asia/Jakarta"
+    parameters:
+      check: true
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
+  # Old AnythingLLM notes → Intakes (FR-040). No schedule. dry_run defaults to true
+  # (zero model calls, projected spend); the real run is `--param dry_run=false`.
+  - name: hub-notes-process
+    entrypoint: flows/hub_notes_process.py:hub_notes_process_flow
+    work_pool:
+      name: noktah-pool
+    parameters:
+      dry_run: true
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
+  # Removes Intake raw material older than 12 months (FR-036); excerpts stay forever.
+  # 01:30, before the 02:00 backup, so the backup never holds material past its term.
+  - name: hub-intake-purge
+    entrypoint: flows/hub_intake_purge.py:hub_intake_purge_flow
+    work_pool:
+      name: noktah-pool
+    schedules:
+      - cron: "30 1 * * *"
+        timezone: "Asia/Jakarta"
+    parameters: {}
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
+  # Nightly backup of the company database to Company > Backups > Database in
+  # Drive, keeping the newest 14. Runs at 02:00, clear of the 03:00 sync and
+  # 03:30 roster jobs. Failures post to #noktah-otomasi.
+  - name: db-backup
+    entrypoint: flows/db_backup.py:db_backup_flow
+    work_pool:
+      name: noktah-pool
+    schedules:
+      - cron: "0 2 * * *"
+        timezone: "Asia/Jakarta"
+    parameters: {}
+    pull:
+      - prefect.deployments.steps.set_working_directory:
+          directory: /app
+
   # Social harvest — Sheet→DB sync. Reconciles harvested_signals + detail sheets
   # from the canonical Account Social Harvest sheets (reviewer-edited `advertisement`
   # flag). Scheduled daily; tighten the cron if staff edits need to reflect sooner.

@@ -39,12 +39,18 @@ except ImportError:
         availability_determination_sync,
     )
 
+try:
+    from .common.alerts import alert_hooks
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from common.alerts import alert_hooks
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-@flow(name="field-availability-sync")
+@flow(name="field-availability-sync", **alert_hooks())
 async def field_availability_sync(
     path: Optional[str] = None,
     validate_only: bool = False,

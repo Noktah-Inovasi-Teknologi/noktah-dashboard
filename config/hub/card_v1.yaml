@@ -1,0 +1,261 @@
+# Client Card definition v1 (spec 008: G-24, G-28, G-29, G-30)
+#
+# The SOURCE OF TRUTH for what a Client Card holds. hub-api syncs it into the
+# `card_definitions` table at startup. Once any card value references v1, v1 is
+# FROZEN: the sync refuses to change it. A changed field list is a new file,
+# card_v2.yaml; old values keep the version they were entered under
+# (constitution XII).
+#
+# Field shapes:
+#   text         free text, word for word
+#   list         list of short strings
+#   object       named sub-fields (each `text`, `list`, `rating` or `choice`)
+#   lines        repeated objects with the given sub-fields (e.g. price lines)
+#   rating       integer 1..5
+#   choice       one key from `choices.<name>`
+#
+# `required: true` on a field means the field must have a current value.
+# `required_subfields` means those sub-fields must be non-empty (positioning).
+
+version: v1
+
+parts:
+  profil:
+    label: Profil
+    fields:
+      - key: nama_penulisan
+        label: Nama & penulisan
+        required: true
+        shape: object
+        help: Nama resmi persis seperti ditulis klien, dan nama yang tidak boleh dipakai (mis. nama cabang lain).
+        subfields:
+          - {key: nama_resmi, label: Nama resmi, shape: text}
+          - {key: jangan_ditulis, label: Jangan ditulis, shape: list}
+          - {key: grup, label: Grup / induk, shape: text}
+
+      - key: tentang_usaha
+        label: Tentang usaha
+        required: false
+        shape: object
+        help: Apa yang dikerjakan klien, industrinya, visi dan misi, dalam satu paragraf.
+        subfields:
+          - {key: ringkasan, label: Ringkasan, shape: text}
+          - {key: industri, label: Industri, shape: text}
+          - {key: visi_misi, label: Visi & misi, shape: text}
+
+      - key: lokasi_kontak_jam
+        label: Lokasi, kontak & jam buka
+        required: true
+        shape: object
+        help: Hanya untuk cabang ini. Nomor yang boleh dicantumkan di konten.
+        subfields:
+          - {key: alamat, label: Alamat, shape: text}
+          - {key: google_maps, label: Google Maps, shape: text}
+          - {key: nomor_publik, label: Nomor untuk konten, shape: text}
+          - {key: jam_buka, label: Jam buka, shape: text}
+
+      - key: akun_hashtag
+        label: Akun & hashtag
+        required: true
+        shape: object
+        subfields:
+          - {key: akun_tag, label: Akun untuk di-tag, shape: list}
+          - {key: hashtag_wajib, label: Hashtag wajib, shape: list}
+          - {key: hashtag_dilarang, label: Hashtag jangan dipakai, shape: list}
+
+      - key: produk_layanan
+        label: Produk & layanan
+        required: true
+        shape: object
+        help: Layanan, menu, atau katalog. Tulis juga yang TIDAK tersedia di cabang ini.
+        subfields:
+          - {key: daftar, label: Daftar, shape: list}
+          - {key: tidak_tersedia, label: Tidak tersedia, shape: list}
+
+      - key: harga_promo
+        label: Harga & promo
+        required: false
+        shape: lines
+        help: Setiap baris wajib punya satuan (per mata, per paket, per sesi…) dan syarat. Harga tanpa satuan bukan fakta.
+        subfields:
+          - {key: item, label: Item, shape: text}
+          - {key: harga, label: Harga, shape: text}
+          - {key: satuan, label: Satuan, shape: text}
+          - {key: syarat, label: Syarat, shape: text}
+          - {key: berlaku_sampai, label: Berlaku sampai, shape: text}
+
+      - key: orang_yang_tampil
+        label: Orang yang tampil
+        required: false
+        shape: lines
+        help: Dokter, barista, pelatih… Nama dan gelar persis seperti ditulis.
+        subfields:
+          - {key: nama_gelar, label: Nama & gelar, shape: text}
+          - {key: peran, label: Peran, shape: text}
+          - {key: jadwal, label: Jadwal, shape: text}
+          - {key: izin_tampil, label: Izin tampil, shape: text}
+
+      - key: target_audiens
+        label: Target audiens
+        required: false
+        shape: text
+
+      - key: pic
+        label: PIC
+        required: true
+        shape: object
+        help: Satu-satunya orang di klien yang ucapannya secara tertulis bisa mengubah fakta di kartu.
+        subfields:
+          - {key: nama, label: Nama, shape: text}
+          - {key: jabatan, label: Jabatan, shape: text}
+          - {key: nomor, label: Nomor, shape: text}
+          - {key: boleh_approve, label: Boleh menyetujui konten, shape: list}
+
+      - key: aturan_produksi_privasi
+        label: Aturan produksi & privasi
+        required: false
+        shape: list
+        help: Batasan syuting, privasi pasien/pelanggan, area yang tidak boleh direkam.
+
+  guideline:
+    label: Guideline
+    approval: brand_manager
+    fields:
+      - key: inti_brand
+        label: Inti brand
+        required: false
+        shape: object
+        help: Mengapa brand ada (purpose), visi, misi, nilai, dan janji brand dalam satu kalimat. (Sinek, Aaker)
+        subfields:
+          - {key: purpose, label: Mengapa brand ada, shape: text}
+          - {key: visi, label: Visi, shape: text}
+          - {key: misi, label: Misi, shape: text}
+          - {key: nilai, label: Nilai, shape: list}
+          - {key: janji_brand, label: Janji brand, shape: text}
+
+      - key: positioning
+        label: Positioning
+        required: true
+        required_subfields: [pernyataan]
+        shape: object
+        help: Target, kategori, pembeda (points of difference), kesamaan wajib (points of parity), alasan untuk percaya. (Keller)
+        subfields:
+          - {key: target, label: Target, shape: text}
+          - {key: kategori, label: Kategori, shape: text}
+          - {key: pembeda, label: Points of difference, shape: list}
+          - {key: kesamaan, label: Points of parity, shape: list}
+          - {key: alasan_percaya, label: Reasons to believe, shape: list}
+          - {key: pernyataan, label: Pernyataan positioning (satu kalimat), shape: text}
+          - {key: tagline, label: Tagline (persis), shape: text}
+
+      - key: identitas_prism
+        label: Identitas (Prism)
+        required: false
+        shape: object
+        help: Enam sisi identitas brand. (Kapferer)
+        subfields:
+          - {key: fisik, label: Fisik (tampilan & produk khas), shape: text}
+          - {key: kepribadian, label: Kepribadian, shape: text}
+          - {key: budaya, label: Budaya (nilai yang dibela), shape: text}
+          - {key: relasi, label: Relasi (cara memperlakukan pelanggan), shape: text}
+          - {key: refleksi, label: Refleksi (pelanggan yang digambarkan), shape: text}
+          - {key: citra_diri, label: Citra diri (rasa pelanggan saat memakai), shape: text}
+
+      - key: kepribadian_arketipe
+        label: Kepribadian & arketipe
+        required: false
+        shape: object
+        help: Lima sifat Aaker (1–5) serta arketipe utama dan pendukung dari 12 arketipe. (Aaker, Mark & Pearson)
+        subfields:
+          - {key: sincerity, label: Tulus (sincerity), shape: rating}
+          - {key: excitement, label: Seru (excitement), shape: rating}
+          - {key: competence, label: Kompeten (competence), shape: rating}
+          - {key: sophistication, label: Berkelas (sophistication), shape: rating}
+          - {key: ruggedness, label: Tangguh (ruggedness), shape: rating}
+          - {key: arketipe_utama, label: Arketipe utama, shape: choice, choices: arketipe}
+          - {key: arketipe_pendukung, label: Arketipe pendukung, shape: choice, choices: arketipe}
+
+      - key: suara
+        label: Suara
+        required: true
+        shape: object
+        help: Empat skala suara (1–5) dan kebiasaan bahasa. (NN/g voice dimensions)
+        subfields:
+          - {key: serius_jenaka, label: "Serius (1) ↔ Jenaka (5)", shape: rating}
+          - {key: formal_santai, label: "Formal (1) ↔ Santai (5)", shape: rating}
+          - {key: hormat_berani, label: "Hormat (1) ↔ Berani (5)", shape: rating}
+          - {key: antusias_datar, label: "Antusias (1) ↔ Datar (5)", shape: rating}
+          - {key: sapaan, label: Sapaan (Anda / kamu / Kak …), shape: text}
+          - {key: campur_bahasa, label: Campur Bahasa–Inggris, shape: text}
+          - {key: emoji, label: Emoji, shape: text}
+          - {key: gaya_judul, label: Gaya judul, shape: text}
+          - {key: gaya_jualan, label: Gaya jualan, shape: text}
+          - {key: kata_dipakai, label: Kata dipakai, shape: list}
+          - {key: kata_dihindari, label: Kata dihindari, shape: list}
+          - {key: contoh, label: Contoh kalimat, shape: list}
+
+      - key: visual
+        label: Visual
+        required: true
+        shape: object
+        subfields:
+          - {key: logo_file, label: Logo & file resmi (link), shape: text}
+          - {key: aturan_logo, label: Aturan pemakaian logo, shape: text}
+          - {key: logo_dilarang, label: Logo yang tidak boleh dipakai, shape: list}
+          - {key: warna, label: Warna (dengan kode), shape: list}
+          - {key: font, label: Font, shape: list}
+          - {key: gaya_foto_video, label: Gaya foto & video, shape: text}
+          - {key: tata_letak_format, label: Tata letak & format, shape: text}
+
+      - key: pesan_pilar
+        label: Pesan & pilar
+        required: false
+        shape: object
+        subfields:
+          - {key: pilar, label: Pilar konten (3–5), shape: list}
+          - {key: pesan_kunci, label: Pesan kunci & buktinya, shape: list}
+          - {key: cta, label: Ajakan (CTA) yang disukai, shape: list}
+
+      - key: wajib_ada
+        label: Wajib ada
+        required: false
+        shape: list
+        help: Yang harus ada di setiap posting (letak logo, disclaimer, baris kontak, CTA).
+
+      - key: batasan
+        label: Batasan
+        required: true
+        shape: object
+        help: Klaim yang selalu dilarang ditambah larangan klien sendiri, topik sensitif, aturan menyebut pesaing.
+        subfields:
+          - {key: klaim_dilarang_klien, label: Klaim dilarang (khusus klien), shape: list}
+          - {key: topik_sensitif, label: Topik sensitif, shape: list}
+          - {key: aturan_pesaing, label: Aturan menyebut pesaing, shape: text}
+
+      - key: referensi_pembeda
+        label: Referensi & pembeda
+        required: false
+        shape: object
+        subfields:
+          - {key: dokumen, label: Dokumen guideline klien (link), shape: list}
+          - {key: contoh_disukai, label: Contoh yang disukai, shape: list}
+          - {key: contoh_tidak_disukai, label: Contoh yang tidak disukai, shape: list}
+          - {key: pembeda_dari_pesaing, label: Pembeda dari pesaing, shape: text}
+
+choices:
+  arketipe:
+    - {key: innocent, label: Si Polos (Innocent)}
+    - {key: sage, label: Si Bijak (Sage)}
+    - {key: explorer, label: Si Penjelajah (Explorer)}
+    - {key: outlaw, label: Si Pemberontak (Outlaw)}
+    - {key: magician, label: Si Penyihir (Magician)}
+    - {key: hero, label: Si Pahlawan (Hero)}
+    - {key: lover, label: Si Pencinta (Lover)}
+    - {key: jester, label: Si Penghibur (Jester)}
+    - {key: everyman, label: Si Orang Biasa (Everyman)}
+    - {key: caregiver, label: Si Pengasuh (Caregiver)}
+    - {key: ruler, label: Si Penguasa (Ruler)}
+    - {key: creator, label: Si Pencipta (Creator)}
+
+# Claims banned for every Client, on top of each Client's own (Guideline → Batasan).
+always_banned: [terbaik, nomor 1, "100%", pasti sembuh, dijamin, tanpa risiko]

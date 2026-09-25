@@ -34,6 +34,12 @@ except ImportError:
     sys.path.append(os.path.dirname(__file__))
     from common.social_harvest import make_date_range_selector, make_time_window_selector, run_harvest
 
+try:
+    from .common.alerts import alert_hooks
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from common.alerts import alert_hooks
+
 DEFAULT_DAYS = 7
 # Non-video listing depth. A time window can reach back weeks/months, and
 # Instagram is listed newest-first, so we page deeper than the recent flow to
@@ -51,7 +57,7 @@ def _validate_date(label: str, value: Optional[str]) -> None:
         raise ValueError(f"{label} must be in YYYY-MM-DD format, got {value!r}")
 
 
-@flow(name="social-harvest-window", description="Harvest items within a relative or absolute time window")
+@flow(name="social-harvest-window", description="Harvest items within a relative or absolute time window", **alert_hooks())
 async def social_harvest_window_flow(
     profiles: List[str],
     days: Optional[int] = None,

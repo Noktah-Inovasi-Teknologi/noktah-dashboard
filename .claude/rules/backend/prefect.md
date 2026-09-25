@@ -39,6 +39,16 @@ The service follows a modular structure:
 
 **Result Structure**: Include metadata (timestamps, input params), main data array, summary statistics, and error details if applicable
 
+**Failure Alerts**: Every deployed flow's decorator ends with `**alert_hooks()` (from
+`flows/common/alerts.py`), e.g. `@flow(name="velocity-derive", **alert_hooks())`. When a run
+returns an `error`, per-client `summary.failures`, blocked profiles or failed items, or when it
+raises or crashes, the hook posts one message in Bahasa to `#eskala-otomasi`
+(`alert_hooks("noktah")` / `("venyu")` for the other channels). Healthy runs post nothing. Because
+flows return their errors instead of raising, Prefect marks a broken run COMPLETED, so its built-in
+failure notifications miss almost everything. The hook reads the returned dict instead. Webhooks:
+`SLACK_AUTOMATION_NOKTAH` / `_ESKALA` / `_VENYU` in `.env` (Slack app "Noktah Otomasi"). A new
+flow without the hook is a silent failure waiting to happen.
+
 **Best Practices**:
 - Always use async def for concurrent execution capability
 - Log at appropriate levels (info for progress, warning for recoverable issues, error for failures)

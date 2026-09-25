@@ -109,6 +109,11 @@ Load only the minimal necessary context from each artifact:
 
 - Load `.specify/memory/constitution.md` for principle validation
 
+**From CONTEXT.md and grill.md (each only if present):**
+
+- Glossary terms and their `_Avoid_` lists
+- Ledger rows `G-n` with their "Lands in" target
+
 ### 3. Build Semantic Models
 
 Create internal representations (do not include raw artifacts in output):
@@ -146,12 +151,13 @@ Focus on high-signal findings. Limit to 50 findings total; aggregate remainder i
 #### E. Coverage Gaps
 
 - Requirements with zero associated tasks
+- Grill ledger rows (G-n) with no matching requirement, scenario, edge case, or assumption in spec.md — and rows whose spec wording softened a verbatim decision (a number changed, a "never" became "should")
 - Tasks with no mapped requirement/story
 - Success Criteria requiring buildable work (performance, security, availability) not reflected in tasks
 
 #### F. Inconsistency
 
-- Terminology drift (same concept named differently across files)
+- Terminology drift (same concept named differently across files) — including any use of a CONTEXT.md `_Avoid_` word, or a term used against its glossary definition
 - Data entities referenced in plan but absent in spec (or vice versa)
 - Task ordering contradictions (e.g., integration tasks before foundational setup tasks without dependency note)
 - Conflicting requirements (e.g., one requires Next.js while other specifies Vue)

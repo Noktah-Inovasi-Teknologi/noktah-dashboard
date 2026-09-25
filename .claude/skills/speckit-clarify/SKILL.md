@@ -72,6 +72,8 @@ Execution steps:
 
 2. **IF EXISTS**: Load `.specify/memory/constitution.md` for project principles and governance constraints.
 
+2a. **IF EXISTS**: Load `CONTEXT.md` (the glossary) and `FEATURE_DIR/grill.md` (the decision ledger). A question the ledger already answers is not a question: correct the spec to match the ledger row instead, and report the fix. The glossary is the reference for the Terminology & Consistency category below.
+
 3. Load the current spec file. Perform a structured ambiguity & coverage scan using this taxonomy. For each category, mark status: Clear / Partial / Missing. Produce an internal coverage map used for prioritization (do not output raw map unless no questions will be asked).
 
    Functional Scope & Behavior:
@@ -113,7 +115,7 @@ Execution steps:
    - Explicit tradeoffs or rejected alternatives
 
    Terminology & Consistency:
-   - Canonical glossary terms
+   - Canonical glossary terms (CONTEXT.md — a word used against its glossary definition, or an `_Avoid_` word, is a finding)
    - Avoided synonyms / deprecated terms
 
    Completion Signals:
@@ -187,7 +189,7 @@ Execution steps:
        - Data shape / entities → Update Data Model (add fields, types, relationships) preserving ordering; note added constraints succinctly.
        - Non-functional constraint → Add/modify measurable criteria in Success Criteria > Measurable Outcomes (convert vague adjective to metric or explicit target).
        - Edge case / negative flow → Add a new bullet under Edge Cases / Error Handling (or create such subsection if template provides placeholder for it).
-       - Terminology conflict → Normalize term across spec; retain original only if necessary by adding `(formerly referred to as "X")` once.
+       - Terminology conflict → Normalize term across spec; retain original only if necessary by adding `(formerly referred to as "X")` once. When the answer coins or sharpens a term, write it to `CONTEXT.md` in the same edit.
     - If the clarification invalidates an earlier ambiguous statement, replace that statement instead of duplicating; leave no obsolete contradictory text.
     - Save the spec file AFTER each integration to minimize risk of context loss (atomic overwrite).
     - Preserve formatting: do not reorder unrelated sections; keep heading hierarchy intact.

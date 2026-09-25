@@ -5,8 +5,10 @@ export default defineNuxtConfig({
     '@nuxt/ui'
   ],
 
+  // Off in the UI sweep's fixture server: its floating toolbar would sit in
+  // every screenshot and could hide what is under it.
   devtools: {
-    enabled: true
+    enabled: process.env.NUXT_HUB_FIXTURES !== '1'
   },
 
   css: ['~/assets/css/main.css'],

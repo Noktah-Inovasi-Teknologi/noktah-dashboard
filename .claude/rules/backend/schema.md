@@ -271,6 +271,41 @@ Five details that are easy to get wrong:
 Contiguity, "≥1 beat", and batch accounting are cross-row invariants with no row
 constraint available; each has a zero-row query asserted by test.
 
+## Noktah Hub: Registry, Client Card, Intake (feature 008)
+
+Migration 010 adds the Hub's tables (`noktah_brands`, `people`, `person_emails`,
+`person_roles`, `client_team_assignments`, `registry_changes`, `card_definitions`,
+`card_values`, `intakes`, `intake_proposals`, `client_requests`,
+`client_request_events`, `client_summaries`, `ai_ledger`, `hub_alerts_sent`,
+`hub_sync_state`) and **additive** columns on `clients`. `hub-api` is the only
+writer. Details that are easy to get wrong:
+
+- **Card values are append-only history.** One field has at most ONE `current` and
+  ONE `pending` row, enforced by two partial unique indexes. Those are checked
+  immediately, so a write moves the old current row to `superseded`/`corrected`
+  BEFORE inserting the new one, and fills the old row's `replaced_by` AFTER (a
+  non-deferrable FK). Same ordering lesson as `knowledge_records`
+  (knowledge-base.md). Don't reorder `card/values.write`.
+- **The card definition freezes on first use.** `card_definitions.frozen_at` is set
+  the first time a value references a version; the startup sync then refuses to
+  change that version's YAML. A changed field list is `card_v2.yaml`, never an edit.
+- **The Intake cache is a unique index**: `(client_id, content_hash) WHERE status <>
+  'failed'`. A failed Intake doesn't block a retry of the same content; a
+  successful one makes the retry a cache hit (no second model call). Old notes are
+  idempotent by `uq_intakes_old_note_source` on `source_ref`.
+- **`chk_intakes_failure_reason` has the load-bearing `IS NOT NULL`**, for the same
+  reason as `capture_outcomes` (a NULL reason would pass the CHECK).
+- **`registry_changes` is the sheet copy's clock.** `hub_sync_state.last_change_id`
+  is advanced only after a successful write, so a failed copy retries the same
+  changes. `last_success_at IS NULL` means "not imported yet", and the copy refuses
+  to write: it would otherwise overwrite the sheet from an empty Registry.
+- **`clients.noktah_brand_id` is enforced later, by migration 011** (the schema.md
+  pattern: `CHECK … NOT VALID` then `VALIDATE`), because the Clients roster-sync
+  created have no brand until the one-time import gives them one. Apply 011 only
+  after the real import; before it, 011 fails by design. `service/prefect`'s
+  `spine_db` fixture skips 011 as it skips 006: roster-sync predates brands and
+  never sets one (it is paused once the Hub owns the roster).
+
 ## Naming
 
 Flows: `roster-sync`, `spine-backfill`, `field-availability-sync`,
@@ -288,7 +323,11 @@ Tasks: `roster.client.upsert`, `roster.alias.upsert`, `roster.account.upsert`, `
 Feature 006 adds the flows `velocity-derive` (monthly) and `observation-backfill`
 (one-time, unscheduled).
 
+Feature 008 adds the flows `hub-summary-refresh`, `hub-sheet-sync` (also deployed as
+`hub-sheet-check`), `hub-intake-purge`, `hub-registry-import` and `hub-notes-process`,
+all calling `hub-api` through the one task `hub.internal.call`.
+
 ---
 
-**Last Updated:** 2026-08-01
+**Last Updated:** 2026-09-25
 **Feature:** 004-relational-spine

@@ -40,12 +40,18 @@ except ImportError:
         extraction_vocabulary_sync as sync_task,
     )
 
+try:
+    from .common.alerts import alert_hooks
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from common.alerts import alert_hooks
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-@flow(name="extraction-vocabulary-sync")
+@flow(name="extraction-vocabulary-sync", **alert_hooks())
 async def extraction_vocabulary_sync(
     path: Optional[str] = None,
     validate_only: bool = False,

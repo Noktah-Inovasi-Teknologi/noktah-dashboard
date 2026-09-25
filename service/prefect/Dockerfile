@@ -3,6 +3,12 @@ FROM prefecthq/prefect:3.6.9-python3.14
 # Install uv package manager
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
+# pg_dump / pg_restore for the nightly db-backup flow (flows/db_backup.py).
+# trixie ships client 17, which can dump the Postgres 15 server.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
 # Set working directory
 WORKDIR /app
 

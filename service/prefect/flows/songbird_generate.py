@@ -26,10 +26,16 @@ except ImportError:
     sys.path.append(os.path.dirname(__file__))
     from common.songbird import run_generation
 
+try:
+    from .common.alerts import alert_hooks
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from common.alerts import alert_hooks
+
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 
-@flow(name="songbird-generate", description="Generate standalone on-demand content ideas")
+@flow(name="songbird-generate", description="Generate standalone on-demand content ideas", **alert_hooks())
 async def songbird_generate_flow(
     client: str,
     quantity: int = 3,

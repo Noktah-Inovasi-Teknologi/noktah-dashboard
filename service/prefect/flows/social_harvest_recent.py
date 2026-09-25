@@ -24,11 +24,17 @@ except ImportError:
     sys.path.append(os.path.dirname(__file__))
     from common.social_harvest import make_recent_n_selector, run_harvest
 
+try:
+    from .common.alerts import alert_hooks
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from common.alerts import alert_hooks
+
 DEFAULT_N = 10
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 
-@flow(name="social-harvest-recent", description="Harvest the N most recent items per profile")
+@flow(name="social-harvest-recent", description="Harvest the N most recent items per profile", **alert_hooks())
 async def social_harvest_recent_flow(
     profiles: List[str],
     n: int = DEFAULT_N,

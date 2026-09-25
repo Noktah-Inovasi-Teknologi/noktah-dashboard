@@ -33,8 +33,18 @@ def client(monkeypatch):
         return KEY.public_key()
 
     monkeypatch.setattr(auth, "_signing_key", fake_key)
-    from app.main import app
-    yield TestClient(app)  # no `with`: the DB lifespan is not started
+    # A bare app exercising only the sign-in check. /v1/me itself also needs the
+    # database (email → Person → roles); that side is covered by test_access.py.
+    from fastapi import Depends, FastAPI
+    from app import errors
+    app = FastAPI()
+    errors.install(app)
+
+    @app.get("/v1/me")
+    async def me(user: auth.User = Depends(auth.current_user)):
+        return {"email": user.email}
+
+    yield TestClient(app)
     get_settings.cache_clear()
 
 

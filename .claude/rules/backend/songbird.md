@@ -202,8 +202,18 @@ docker exec prefect prefect deployment run 'songbird-generate/songbird-generate'
 Env (Prefect + prefect-worker): `OPENROUTER_API_KEY` (required — now needed by Prefect, previously
 roach-only), `OPENROUTER_MODEL` (optional), `SONGBIRD_DRIVE_PARENT_ID` (draft location). Optional Clients
 sheet overrides: `SONGBIRD_CLIENTS_SPREADSHEET_ID`/`_TAB`/`_NAME_COLUMN`,
-`SONGBIRD_CONTENT_TYPE_COLUMNS`; live target overrides: `SONGBIRD_LIVE_SPREADSHEET_ID`/`_TAB`.
+`SONGBIRD_CONTENT_TYPE_COLUMNS`.
 Defaults match the live sheet: name column `Name`, content-type columns `Post,Story,Short Video`.
+
+**`--target live` writes to the client's own plan, and there is no env override.** The target is
+the Google Sheet named exactly `Content Plan - {client} - {Indonesian month}` in the client's
+`Content Plan Folder ID`, on `Sheet1` or else the first tab. This is the same rule the Jira flow
+reads with (`tasks/content_plan_files.py`). It is resolved **before** generation, so a missing
+or ambiguous plan costs no model spend. It is never created: the planner makes the file. Nothing
+is appended to a tab lacking `Tanggal`/`Bentuk`/`Topik`. The old default (`SONGBIRD_LIVE_*`) was
+the Clients workbook's `Clients` tab, so live runs appended blank rows to the client roster. An
+explicit `live_spreadsheet_id` is still accepted for one client, and refused in a multi-client
+batch.
 
 ## How much to generate (per content type)
 

@@ -159,3 +159,23 @@ async def test_dates_are_distributed_and_target_passed_through(patched_batch):
     call = patched_batch["generated"][0]
     assert call["distribute_dates"] is True
     assert call["target"] == "live"
+
+
+@pytest.mark.asyncio
+async def test_one_explicit_live_sheet_is_refused_for_several_clients(patched_batch):
+    """It would put every client's rows into one client's plan."""
+    result = await batch.songbird_batch_plan_flow(
+        clients="Klinik Utama Gresik, Klinik Mata Sampang", month="Agustus 2026",
+        target="live", live_spreadsheet_id="someones-plan",
+    )
+    assert "one client" in result["error"]
+    assert patched_batch["generated"] == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_live_sheet_is_allowed_for_one_client(patched_batch):
+    result = await batch.songbird_batch_plan_flow(
+        clients="Klinik Utama Gresik", month="Agustus 2026", target="live", live_spreadsheet_id="gresik-plan",
+    )
+    assert result["error"] is None
+    assert patched_batch["generated"][0]["live_spreadsheet_id"] == "gresik-plan"

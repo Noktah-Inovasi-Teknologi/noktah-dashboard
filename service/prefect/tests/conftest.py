@@ -40,6 +40,8 @@ FULL_CHAIN = [
     "007_signal_field_coverage",
     "008_observation_history",
     "009_structured_extraction",
+    "010_hub_registry_card",
+    "011_client_brand_required",
 ]
 
 # `spine_db` skips 006: it enforces account_id IS NOT NULL and fails by design
@@ -47,7 +49,10 @@ FULL_CHAIN = [
 # additive and safe, so it IS included — feature 005's tests need
 # field_availability / capture_outcomes, and excluding it by taking a tail slice
 # would silently drop every migration after 006 as the chain grows.
-BASE_CHAIN = [m for m in FULL_CHAIN if m != "006_enforce_account_link"]
+# It skips 011 for the same reason: 011 requires every client to have a Noktah
+# Brand, which roster-sync (written before brands existed, and paused once the
+# Hub owns the roster) never sets.
+BASE_CHAIN = [m for m in FULL_CHAIN if m not in ("006_enforce_account_link", "011_client_brand_required")]
 
 _db_available_cache = None
 

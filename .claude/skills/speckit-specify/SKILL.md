@@ -93,8 +93,12 @@ Given that feature description, do this:
       - Set `SPECIFY_FEATURE_DIRECTORY` to `specs/<directory-name>`
       - If `branch_numbering` was used (and `feature_numbering` was absent), emit a one-line warning: "⚠️ `branch_numbering` in init-options.json is deprecated. Rename to `feature_numbering`."
 
+   **Grilled feature** (`/speckit-grill` ran first): if `.specify/feature.json` names a directory that already contains `grill.md` and no `spec.md`, that directory IS this feature — set `SPECIFY_FEATURE_DIRECTORY` to it and do not allocate a new number or short name. The ledger's feature name wins over a freshly generated one.
+
+   **Grilled draft** (a spec drafted before it was grilled): if that directory contains `grill.md` AND a `spec.md` but no `plan.md`, revise the existing `spec.md` in place instead of copying the template over it. Keep what the ledger confirms, change what it overrides, trace every `G-n` as below, and add a Clarifications entry noting the grill session.
+
    **Create the directory and spec file**:
-   - `mkdir -p SPECIFY_FEATURE_DIRECTORY`
+   - `mkdir -p SPECIFY_FEATURE_DIRECTORY` (a no-op for a grilled feature)
    - Resolve the active `spec-template` through the Spec Kit preset/template resolution stack (equivalent to `specify preset resolve spec-template`)
    - Copy the resolved `spec-template` file to `SPECIFY_FEATURE_DIRECTORY/spec.md` as the starting point
    - Set `SPEC_FILE` to `SPECIFY_FEATURE_DIRECTORY/spec.md`
@@ -115,6 +119,12 @@ Given that feature description, do this:
 4. Load the resolved active `spec-template` file to understand required sections.
 
 5. **IF EXISTS**: Load `.specify/memory/constitution.md` for project principles and governance constraints.
+
+5a. **IF EXISTS**: Load `docs/DEFERRED.md` — the register of findings earlier specs identified but deliberately did not do. Filter to rows whose **Target** names this spec (by number or scope) or says `any`. Each such row MUST be resolved in the spec's **Inherited & Deferred** section: CLAIMED (becomes a requirement here; the row is deleted from the register in the same PR) or RE-DEFERRED (new reason + new target; the row is updated). Write "none in scope" explicitly when nothing matches — silence is not allowed.
+
+5b. **IF EXISTS**: Load `SPECIFY_FEATURE_DIRECTORY/grill.md` — the decision ledger `/speckit-grill` wrote. It is a primary input, on par with the user description. Every ledger row `G-n` MUST land in the spec exactly once — as a functional requirement, an acceptance scenario, an edge case, or an assumption, cited as `(G-n)` where it lands — or be listed under **Assumptions** as dropped, with the reason. Copy numeric defaults, ordering guarantees and negative requirements ("never", "must not", "exactly one") **verbatim**; a grill answer is never softened into weaker prose. Set the spec header's **Grill ledger** line to the file and session date; write "not grilled" when there is no ledger.
+
+5c. **IF EXISTS**: Load `CONTEXT.md` (the glossary). Use its terms — and respect its `_Avoid_` lists — everywhere in the spec; name Key Entities by their glossary term. A term this spec needs that the glossary lacks, or defines differently, is added to or sharpened in `CONTEXT.md` now (one or two sentences, no implementation detail) and named in the completion report.
 
 6. Follow this execution flow:
     1. Parse user description from arguments
@@ -171,6 +181,9 @@ Given that feature description, do this:
       - [ ] Edge cases are identified
       - [ ] Scope is clearly bounded
       - [ ] Dependencies and assumptions identified
+      - [ ] Inherited & Deferred section present; every in-scope row of docs/DEFERRED.md claimed or re-deferred (or "none in scope" stated)
+      - [ ] Every grill ledger row (G-n) is traceable to a requirement, scenario, edge case, or assumption — or dropped with a reason ("not grilled" if there is no grill.md)
+      - [ ] Entity and term names match CONTEXT.md; any term this spec coins or sharpens is in CONTEXT.md
       
       ## Feature Readiness
       
@@ -276,6 +289,8 @@ Report completion to the user with:
 - `SPECIFY_FEATURE_DIRECTORY` — the feature directory path
 - `SPEC_FILE` — the spec file path
 - Checklist results summary
+- Grill ledger coverage: rows landed / dropped (or "not grilled")
+- CONTEXT.md terms added or sharpened (or "none")
 - Readiness for the next phase (`/speckit-clarify` or `/speckit-plan`)
 
 **NOTE:** Branch creation is handled by the `before_specify` hook (git extension). Spec directory and file creation are always handled by this core command.

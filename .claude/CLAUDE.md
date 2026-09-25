@@ -337,6 +337,63 @@ Reads are cached in-process for `HASHMAP_TTL_SECONDS` (default 300) and snapshot
 absent from a block simply get no mapping (e.g. no Jira component, or no competitor signal for
 songbird) — so a client must exist in the sheet to be wired up.
 
+### Noktah Hub (managers' dashboard)
+```bash
+# Web: service/web (Nuxt 4 + Nuxt UI, TypeScript, Bun) → Cloudflare Worker `noktah-hub`
+# at hub.noktah.co, behind Cloudflare Access. Auto-deploys on merge to master.
+# API: service/api (FastAPI) → container `hub-api`, reached only through the tunnel
+# at hub-api.noktah.co (service token). The ONLY writer of company data; the web
+# app never touches the database or OpenRouter. See service/web/README.md and
+# service/api/README.md.
+docker-compose up -d --build api              # after API code changes (source is baked in)
+cd service/api && uv run pytest               # API tests (real-Postgres ones need HUB_TEST_DATABASE_URL)
+
+# Prefect → hub-api over the Docker network (/internal/*, X-Hub-Internal-Token).
+# hub-api does the work; these flows only schedule it and alert #noktah-otomasi.
+#   hub-summary-refresh  hourly :15   stale Ringkasan, max once/day/Client, AI cap applies
+#   hub-sheet-sync       every 5 min  Registry → Clients/Hashmaps tabs (only changed Hub cells)
+#   hub-sheet-check      Mon 06:00    same, full diff; rewrites cells edited in the sheet
+#   hub-intake-purge     01:30 daily  Intake raw material > 12 months (excerpts kept forever)
+#   hub-registry-import  manual       ONE-TIME sheet → Registry import; validate-only default
+#   hub-notes-process    manual       old AnythingLLM notes → Intakes; dry run default
+docker exec prefect python flows/hub_registry_import.py            # difference report, writes nothing
+docker exec prefect python flows/hub_registry_import.py --apply    # real import; pauses roster-sync
+docker exec prefect python flows/hub_sheet_sync.py --validate-only # cells it would write
+docker exec prefect python flows/hub_notes_process.py              # zero model calls, projected spend
+docker exec prefect python flows/hub_notes_process.py --apply      # real run; stops at the AI cap
+```
+**After the import the Hub is the only place Clients, teams and accounts are edited.** The
+Clients and Hashmaps tabs become read-only copies (a note on A1 says so) that the
+automations keep reading until they switch to the Registry (`docs/DEFERRED.md` A-1).
+`roster-sync` is paused by the real import — don't unpause it: it would rewrite the roster
+from the sheet, and migration 011 makes it fail on any new Client (no Noktah Brand).
+The sheet copy refuses to write until the import has run, so its schedule is safe to deploy
+early. Roles are the Hub's own (email → Person → role; G-11); the first three are seeded by
+migration 010. Card, Intake and AI rules: `service/api/README.md`.
+```bash
+# UI gate: two halves. Static rules run after every edit under service/web/app
+# (post-edit hook); the rendered sweep (every page × width × light/dark × data
+# state, on sample data, no Docker needed) must be clean before a push/PR that
+# touches service/web/app (pre-push hook). Full survey with screenshots: /ui-sweep
+cd service/web && bun run test:ui && bun run ui:gate
+```
+
+### Database Backup (nightly)
+```bash
+# db-backup deployment: 02:00 WIB daily. pg_dump of noktah_dashboard →
+# Drive: Company (restricted shared drive) > Backups > Database, newest 14 kept.
+# Failures, and a backup under half the previous size (rotation is then skipped),
+# post to #noktah-otomasi.
+docker exec prefect python flows/db_backup.py --validate-only   # dump + verify, no upload
+docker exec prefect python flows/db_backup.py                   # full run
+
+# Restore into a SCRATCH database first, never over the live one. The
+# "transaction_timeout" error is expected (pg_dump 17 vs server 15) and harmless.
+docker exec postgres createdb -U noktah restore_check
+docker cp noktah_dashboard_<date>.dump postgres:/tmp/b.dump
+docker exec postgres pg_restore -U noktah -d restore_check --no-owner /tmp/b.dump
+```
+
 ### Docker Environment
 ```bash
 # Start all services
@@ -455,13 +512,19 @@ HARVEST_DRIVE_PARENT_ID=your_google_drive_parent_folder_id
 # ROACH_API_URL and HARVEST_DB_URL are set automatically in docker-compose.yml
 # (http://roach:8080 and a DSN built from POSTGRES_USER/PASSWORD/DB above) — no need to set here
 
+# Failure alerts to Slack (every deployed flow, via flows/common/alerts.py)
+SLACK_AUTOMATION_NOKTAH=https://hooks.slack.com/services/...  # #noktah-otomasi
+SLACK_AUTOMATION_ESKALA=https://hooks.slack.com/services/...  # #eskala-otomasi
+SLACK_AUTOMATION_VENYU=https://hooks.slack.com/services/...   # #venyu-otomasi
+
 # Songbird content generation (songbird-* flows)
 OPENROUTER_API_KEY=your_openrouter_api_key  # now needed by the Prefect services (was roach-only)
 OPENROUTER_MODEL=xiaomi/mimo-v2.5           # optional; house generation model
 SONGBIRD_DRIVE_PARENT_ID=your_drive_folder_id_for_draft_content_plans
-# Optional Clients-sheet / live-target overrides (defaults target the content-plan workbook):
+# Optional Clients-sheet overrides (defaults target the content-plan workbook):
 # SONGBIRD_CLIENTS_SPREADSHEET_ID, SONGBIRD_CLIENTS_TAB, SONGBIRD_CLIENTS_NAME_COLUMN,
-# SONGBIRD_CONTENT_TYPE_COLUMNS, SONGBIRD_LIVE_SPREADSHEET_ID, SONGBIRD_LIVE_TAB
+# SONGBIRD_CONTENT_TYPE_COLUMNS
+# (--target live has no env override: it writes to the client's own monthly plan sheet)
 ```
 
 ### Required External Services

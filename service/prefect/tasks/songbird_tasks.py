@@ -351,6 +351,30 @@ async def songbird_config_draft_folder(
     return folder_id
 
 
+@task(name="songbird.config.plan-folder", retries=2, retry_delay_seconds=30)
+async def songbird_config_plan_folder(
+    client_name: str, credentials_block_name: str = "google-creds"
+) -> str:
+    """
+    The client's "Content Plan Folder ID", strictly: raises instead of returning None.
+
+    For `--target live`, where there is no fallback folder. The best-effort
+    `songbird.config.draft-folder` turns every error into None, so a Sheets
+    rate limit (429; measured 2026-09-24 when resolving many clients in a row)
+    was reported as "this client has no folder ID". Here the real error surfaces
+    and the task's retries give a rate limit time to clear.
+    """
+    row, columns = await _load_client_row(client_name, credentials_block_name)
+    if CONTENT_PLAN_FOLDER_COLUMN not in columns:
+        raise ValueError(
+            f"Clients worksheet has no '{CONTENT_PLAN_FOLDER_COLUMN}' column; found {columns}"
+        )
+    folder_id = str(row.get(CONTENT_PLAN_FOLDER_COLUMN) or "").strip()
+    if not folder_id or folder_id == "-":
+        raise ValueError(f"'{client_name}' has no '{CONTENT_PLAN_FOLDER_COLUMN}' in the Clients sheet")
+    return folder_id
+
+
 @task(name="songbird.config.content-mix", retries=2, retry_delay_seconds=30)
 async def songbird_config_content_mix(
     client_name: str, credentials_block_name: str = "google-creds"

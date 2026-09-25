@@ -62,10 +62,16 @@ except ImportError:
     )
     from common.social_harvest import DETAIL_FOLDER_NAME, _platform_display
 
+try:
+    from .common.alerts import alert_hooks
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from common.alerts import alert_hooks
+
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 
-@flow(name="social-harvest-sync", description="Reconcile harvested_signals + detail sheets from the canonical account sheets")
+@flow(name="social-harvest-sync", description="Reconcile harvested_signals + detail sheets from the canonical account sheets", **alert_hooks())
 async def social_harvest_sync_flow(credentials_block_name: str = "google-creds"):
     """
     Sync reviewer-edited fields (advertisement) from the canonical account sheets

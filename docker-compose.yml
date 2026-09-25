@@ -32,6 +32,9 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-xiaomi/mimo-v2.5}
       - SONGBIRD_DRIVE_PARENT_ID=${SONGBIRD_DRIVE_PARENT_ID}
+      # Noktah Hub internal calls (hub_* flows, spec 008)
+      - HUB_API_URL=http://api:8000
+      - HUB_API_INTERNAL_TOKEN=${HUB_API_INTERNAL_TOKEN}
     volumes:
       - ./service/prefect/flows:/app/flows
       - ./service/prefect/tasks:/app/tasks
@@ -107,6 +110,9 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-xiaomi/mimo-v2.5}
       - SONGBIRD_DRIVE_PARENT_ID=${SONGBIRD_DRIVE_PARENT_ID}
+      # Noktah Hub internal calls (hub_* flows, spec 008)
+      - HUB_API_URL=http://api:8000
+      - HUB_API_INTERNAL_TOKEN=${HUB_API_INTERNAL_TOKEN}
     volumes:
       - ./service/prefect/flows:/app/flows
       - ./service/prefect/tasks:/app/tasks
@@ -183,6 +189,26 @@ services:
       - HUB_API_DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       # AUD tag of the "Noktah Hub API" Access application (not a secret)
       - HUB_API_ACCESS_API_AUD=c9804e34dfdec51dd20dac8e8e0c35b323a09985005ac929abcc69d02e5b6c92
+      # Prefect -> /internal/* (Docker network only; refused through Cloudflare)
+      - HUB_API_INTERNAL_TOKEN=${HUB_API_INTERNAL_TOKEN}
+      # AI intake + summaries (spec 008). Model is configuration, per call site.
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - HUB_INTAKE_MODEL=${HUB_INTAKE_MODEL:-xiaomi/mimo-v2.5}
+      - HUB_SUMMARY_MODEL=${HUB_SUMMARY_MODEL:-xiaomi/mimo-v2.5}
+      - HUB_AI_MONTHLY_CAP_USD=${HUB_AI_MONTHLY_CAP_USD:-5}
+      # Google Docs intake + the read-only Clients/Hashmaps sheet copy
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REFRESH_TOKEN=${GOOGLE_REFRESH_TOKEN}
+      # Slack: approval notices per Noktah Brand, AI-cap alerts
+      - SLACK_MANAGERIAL_ESKALA=${SLACK_MANAGERIAL_ESKALA:-}
+      - SLACK_MANAGERIAL_NOKTAH=${SLACK_MANAGERIAL_NOKTAH:-}
+      - SLACK_AUTOMATION_NOKTAH=${SLACK_AUTOMATION_NOKTAH:-}
+      # Prefect API, used only to pause roster-sync after the one-time import
+      - PREFECT_API_URL=http://prefect:4200/api
+    volumes:
+      # Card definition (versioned YAML), read-only, like config/extraction
+      - ./config/hub:/app/config/hub:ro
     depends_on:
       - postgres
     networks:

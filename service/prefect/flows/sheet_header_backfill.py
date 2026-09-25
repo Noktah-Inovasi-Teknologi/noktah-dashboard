@@ -61,12 +61,18 @@ except ImportError:
     )
     from tasks.social_tasks import social_signal_distinct_accounts
 
+try:
+    from .common.alerts import alert_hooks
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from common.alerts import alert_hooks
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-@flow(name="sheet-header-backfill")
+@flow(name="sheet-header-backfill", **alert_hooks())
 async def sheet_header_backfill(
     validate_only: bool = False,
     credentials_block_name: str = "google-creds",

@@ -39,6 +39,12 @@ except ImportError:
     from common.songbird import run_generation
     from tasks.utility_tasks import get_date
 
+try:
+    from .common.alerts import alert_hooks
+except ImportError:
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from common.alerts import alert_hooks
+
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 # Client names never contain these, so any of them may separate entries. Newlines are
@@ -77,7 +83,7 @@ def parse_clients(clients: Union[str, List[str], None]) -> List[str]:
     return list(seen)
 
 
-@flow(name="songbird-batch-plan", description="Generate content plans for one or many clients")
+@flow(name="songbird-batch-plan", description="Generate content plans for one or many clients", **alert_hooks())
 async def songbird_batch_plan_flow(
     clients: str = "",
     month: Optional[str] = None,
@@ -112,7 +118,8 @@ async def songbird_batch_plan_flow(
             to every client in the batch.
         signal_window_days, signal_half_life_days, exemplar_limit, allocation_seed:
             signal/ranking tuning, passed through unchanged.
-        live_spreadsheet_id, live_tab: live content-plan worksheet target.
+        live_spreadsheet_id, live_tab: optional explicit plan sheet/tab, one client only. Default:
+            each client's own "Content Plan - {client} - {month}" sheet.
         credentials_block_name: Google credentials block name.
 
     Returns:
@@ -141,6 +148,13 @@ async def songbird_batch_plan_flow(
             raise ValueError(
                 'No client names given — pass e.g. clients="Klinik Utama Gresik" '
                 'or "Klinik Utama Gresik, Klinik Mata Sampang"'
+            )
+        # One explicit sheet for several clients would put every client's rows
+        # into one client's plan. Without it, each client's own plan is found.
+        if live_spreadsheet_id and len(names) > 1:
+            raise ValueError(
+                "live_spreadsheet_id names one client's plan; it cannot be used with several clients. "
+                "Leave it empty and each client's own 'Content Plan - {client} - {month}' is used."
             )
 
         # Content plans are prepared ahead, so an omitted month means next month.
