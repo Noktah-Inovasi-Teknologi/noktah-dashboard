@@ -1,0 +1,52 @@
+# Extraction vocabulary v1 — feature 007-structured-extraction
+#
+# The versioned closed vocabulary (FR-004, FR-043a). Synced into
+# `extraction_vocabulary_terms` by the `extraction-vocabulary-sync` flow, mirroring
+# how `config/field_availability.yaml` is synced by `field-availability-sync`.
+#
+# This file is the WRITE path (reviewable as a diff); the table is the READ path,
+# which is what lets SC-002 ("every beat function is valid under the vocabulary
+# version its extraction recorded") be a SQL constraint rather than an application
+# walk someone remembers to run.
+#
+# DELIBERATELY MINIMAL (research.md R11). Four functions plus a residual — the
+# concepts FR-004 requires and nothing else. The `unclassified` share is the
+# measurement (FR-005, SC-011) that tells us what v2 should contain. Pre-loading
+# eight plausible terms would pre-empt the very finding this mechanism exists to
+# produce.
+#
+# IMMUTABILITY: once any extraction records a version, that version is frozen
+# (`frozen_at` is set) and the sync flow FAILS rather than altering it. Add a NEW
+# version instead — altering a recorded one makes FR-030 retroactively false for
+# every row already stored. `description` is what the prompt is built from, so
+# editing it changes model behaviour and requires a new version, not an edit.
+
+version: v1
+
+dimensions:
+  # The structural role a beat may carry. This feature's only dimension.
+  # S-05 adds attribute dimensions alongside it, in this same file shape —
+  # the mechanism is shared deliberately (FR-043a), not duplicated.
+  - dimension: beat_function
+    terms:
+      - term: hook
+        ordinal: 1
+        description: >-
+          opens the content and creates the reason to keep watching
+      - term: setup
+        ordinal: 2
+        description: >-
+          establishes context, problem, or premise
+      - term: main_point
+        ordinal: 3
+        description: >-
+          the substantive content — the claim, demonstration, or payload
+      - term: call_to_action
+        ordinal: 4
+        description: >-
+          asks the viewer to do something
+      - term: unclassified
+        ordinal: 5
+        is_residual: true
+        description: >-
+          structure is present but not describable by any of the above

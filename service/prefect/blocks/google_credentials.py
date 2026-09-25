@@ -582,6 +582,63 @@ class GoogleClient:
             if e.resp.status not in (403, 404):
                 raise
 
+    def download_file(self, file_id: str, local_path: str) -> str:
+        """
+        Download a Drive file by id to a local path.
+
+        The counterpart to `upload_file`, and it did not exist before feature 007
+        (research.md R2) — only upload and delete did, because nothing had ever
+        needed to read media back. Backfill does: it re-extracts already-collected
+        items and MUST source their media from the retained Drive copies rather
+        than re-fetching from the platform, which would be both collection
+        expansion and a politeness violation (FR-034, Constitution X).
+
+        Existing OAuth scopes already cover this — `drive.readonly` plus
+        `drive.file` (files this app created) — so no re-consent is required.
+
+        Raises FileNotFoundError when the Drive object is gone (404) or no longer
+        readable (403). The caller classifies that as `media_unavailable` and
+        counts it; there is NO fallback to re-downloading from the platform, and
+        no code path may offer one.
+        """
+        import os as _os
+
+        from googleapiclient.http import MediaIoBaseDownload
+
+        try:
+            # Resolve the ORIGINAL filename first, and inherit its extension when
+            # the caller gave a path without one.
+            #
+            # This is not cosmetic. `analyze_item` branches on file EXTENSION to
+            # decide the video vs image path, and records the branch it took as
+            # `media_path` provenance (FR-024). An extensionless temp file falls
+            # through to the image path regardless of what the media actually is —
+            # so a Reel would be analysed as a still AND recorded as one, which is
+            # precisely the mislabelling this feature exists to make impossible.
+            if not _os.path.splitext(local_path)[1]:
+                meta = self.get_drive_service().files().get(
+                    fileId=file_id, fields="name", supportsAllDrives=True).execute()
+                suffix = _os.path.splitext(meta.get("name") or "")[1]
+                if suffix:
+                    local_path = f"{local_path}{suffix}"
+
+            request = self.get_drive_service().files().get_media(
+                fileId=file_id, supportsAllDrives=True)
+            with open(local_path, "wb") as fh:
+                downloader = MediaIoBaseDownload(fh, request)
+                done = False
+                while not done:
+                    _status, done = downloader.next_chunk()
+            return local_path
+        except HttpError as e:
+            if e.resp.status in (403, 404):
+                # Deletion or a permissions change surfaces only at fetch time —
+                # a stored drive_file_id does not prove the object still exists.
+                raise FileNotFoundError(
+                    f"Drive file {file_id} is no longer retrievable (HTTP {e.resp.status})"
+                ) from e
+            raise
+
     def upload_file(self, local_path: str, folder_id: str, mime_type: Optional[str] = None) -> str:
         """
         Upload a local file into a Drive folder.

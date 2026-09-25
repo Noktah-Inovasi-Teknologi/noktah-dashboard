@@ -637,8 +637,8 @@ async def format_data_processor_flow(
         return results
 
 
-@flow(name="convert-content-plan-to-jira-assets", description="Convert content plan rows to Jira issue type 10009 format")
-async def convert_content_plan_to_jira_assets_flow(
+@flow(name="convert-content-plan-to-jira-content", description="Convert content plan rows to Jira issue type 10009 format")
+async def convert_content_plan_to_jira_content_flow(
     target_month: Optional[str] = None,
     client_numbers: Optional[List[int]] = None,
     client_names: Optional[List[str]] = None,
@@ -647,7 +647,7 @@ async def convert_content_plan_to_jira_assets_flow(
     timestamp: Optional[str] = None
 ):
     """
-    Convert content plan data to Jira issue type 10009 (Asset) format
+    Convert content plan data to Jira issue type 10009 (Content) format
     
     Args:
         target_month: Specific month to search for (e.g., "September 2025")
@@ -657,11 +657,11 @@ async def convert_content_plan_to_jira_assets_flow(
         component_hashmap: Custom mapping of client names to component IDs
         
     Returns:
-        Dict containing converted Jira assets for each content plan row
+        Dict containing converted Jira Content issues for each content plan row
     """
     results = {
         "start_time": datetime.now().isoformat(),
-        "jira_assets": [],
+        "jira_content": [],
         "summary": {}
     }
     
@@ -679,7 +679,7 @@ async def convert_content_plan_to_jira_assets_flow(
             return results
         
         # Process each client's content plan
-        total_assets_created = 0
+        total_content_created = 0
         for client_data in content_plan_results["content_plans"]:
             client_name = client_data["client_name"]
             
@@ -687,27 +687,27 @@ async def convert_content_plan_to_jira_assets_flow(
                 logger.warning(f"Skipping client {client_name} due to missing data")
                 continue
             
-            # Convert each row to Jira asset
-            client_assets = []
+            # Convert each row to a Jira Content issue
+            client_content = []
             for row in client_data["data"]:
                 try:
-                    jira_asset = convert_content_plan_row_to_jira_issue(
+                    jira_content_issue = convert_content_plan_row_to_jira_issue(
                         row=row,
                         client_name=client_name,
                         component_hashmap=component_hashmap
                     )
-                    client_assets.append(jira_asset)
-                    total_assets_created += 1
+                    client_content.append(jira_content_issue)
+                    total_content_created += 1
                 except Exception as e:
                     logger.error(f"Failed to convert row for {client_name}: {str(e)}")
             
             # Add client result
-            if client_assets:
-                results["jira_assets"].append({
+            if client_content:
+                results["jira_content"].append({
                     "client_name": client_name,
                     "content_plan_id": client_data.get("content_plan_id"),
-                    "assets": client_assets,
-                    "asset_count": len(client_assets)
+                    "content": client_content,
+                    "content_count": len(client_content)
                 })
         
         # Save to JSON file
@@ -719,7 +719,7 @@ async def convert_content_plan_to_jira_assets_flow(
         
         # Save separate JSON file for each client
         client_files = []
-        for client_data in results["jira_assets"]:
+        for client_data in results["jira_content"]:
             client_name = client_data["client_name"]
             
             # Create safe filename from client name
@@ -732,11 +732,11 @@ async def convert_content_plan_to_jira_assets_flow(
                     "client_name": client_name,
                     "content_plan_id": client_data.get("content_plan_id"),
                     "converted_at": datetime.now().isoformat() + "Z",
-                    "total_assets": client_data["asset_count"],
+                    "total_content": client_data["content_count"],
                     "target_month": target_month,
-                    "jira_format": "issue_type_10009_asset"
+                    "jira_format": "issue_type_10009_content"
                 },
-                "issue_updates": client_data["assets"]
+                "issue_updates": client_data["content"]
             }
             
             # Save client file
@@ -747,7 +747,7 @@ async def convert_content_plan_to_jira_assets_flow(
             client_files.append({
                 "client_name": client_name,
                 "file_path": client_saved_path,
-                "asset_count": client_data["asset_count"]
+                "content_count": client_data["content_count"]
             })
         
         # Also save combined file for reference
@@ -755,17 +755,17 @@ async def convert_content_plan_to_jira_assets_flow(
             "metadata": {
                 "converted_at": datetime.now().isoformat() + "Z",
                 "total_clients_processed": len([c for c in content_plan_results["content_plans"] if "data" in c]),
-                "total_assets_created": total_assets_created,
+                "total_content_created": total_content_created,
                 "target_month": target_month,
                 "filter_criteria": {
                     "client_numbers": client_numbers,
                     "client_names": client_names
                 }
             },
-            "jira_assets": results["jira_assets"]
+            "jira_content": results["jira_content"]
         }
         
-        combined_output_path = os.path.join(run_output_dir, "content_plan_jira_assets_combined.json")
+        combined_output_path = os.path.join(run_output_dir, "content_plan_jira_content_combined.json")
         combined_saved_path = save_to_json(combined_output_data, combined_output_path)
         
         results["output_files"] = {
@@ -774,7 +774,7 @@ async def convert_content_plan_to_jira_assets_flow(
         }
         results["summary"] = {
             "total_clients_processed": len([c for c in content_plan_results["content_plans"] if "data" in c]),
-            "total_assets_created": total_assets_created,
+            "total_content_created": total_content_created,
             "client_files_created": len(client_files),
             "combined_file_path": combined_saved_path
         }
@@ -783,7 +783,7 @@ async def convert_content_plan_to_jira_assets_flow(
         return results
         
     except Exception as e:
-        logger.error(f"Jira asset conversion flow failed: {str(e)}")
+        logger.error(f"Jira Content conversion flow failed: {str(e)}")
         results["error"] = str(e)
         results["end_time"] = datetime.now().isoformat()
         return results
@@ -929,6 +929,16 @@ async def bulk_create_jira_issues_per_client_flow(
             "total_issues_created": total_issues_created,
             "successful_clients": sum(1 for r in results["client_results"] if r.get("status") == "success"),
             "failed_clients": sum(1 for r in results["client_results"] if r.get("status") == "error"),
+            # Rows Jira would have REJECTED (measured: a newline in the summary
+            # accounts for every loss on record), repaired in flight. Distinct
+            # from rows_formatting_cleaned, which Jira accepts either way.
+            "rows_rejection_prevented": sum(
+                r.get("validation", {}).get("rejections_prevented_count", 0)
+                for r in results["client_results"]
+            ),
+            "rows_formatting_cleaned": sum(
+                r.get("validation", {}).get("repaired_count", 0) for r in results["client_results"]
+            ),
             "validate_only": validate_only
         }
         
@@ -1003,7 +1013,7 @@ async def bulk_create_jira_issues_flow(
                 return results
             
             latest_dir = sorted(data_dirs)[-1]
-            json_file_path = os.path.join(OUTPUT_DIR, latest_dir, "content_plan_jira_asset_issue.json")
+            json_file_path = os.path.join(OUTPUT_DIR, latest_dir, "content_plan_jira_content_issue.json")
             results["latest_directory"] = latest_dir
         
         if not os.path.exists(json_file_path):
@@ -1295,19 +1305,19 @@ Examples:
         )
         print(f"✓ Data formatting complete")
 
-        # Step 6: Convert content plan to Jira assets
+        # Step 6: Convert content plan to Jira Content issues
         print(f"\n[Step 6/8] Converting content plans to Jira issue format...")
-        step6_result = await convert_content_plan_to_jira_assets_flow(
+        step6_result = await convert_content_plan_to_jira_content_flow(
             target_month=target_month,
             client_names=single_client,
             timestamp=timestamp
         )
 
         if "error" not in step6_result:
-            output_path6 = os.path.join(run_output_dir, "step6_jira_assets.json")
+            output_path6 = os.path.join(run_output_dir, "step6_jira_content.json")
             save_to_json(step6_result, output_path6)
             summary = step6_result.get("summary", {})
-            print(f"✓ Created {summary.get('total_assets_created', 0)} Jira assets for {summary.get('total_clients_processed', 0)} clients")
+            print(f"✓ Created {summary.get('total_content_created', 0)} Jira Content issues for {summary.get('total_clients_processed', 0)} clients")
         else:
             print(f"✗ Error: {step6_result['error']}")
             return
@@ -1329,6 +1339,12 @@ Examples:
                 save_to_json(step7_result, output_path7)
                 summary = step7_result.get("summary", {})
                 print(f"✓ Validation complete: {summary.get('clients_processed', 0)} clients validated")
+                # Only the rows Jira would have rejected outright. Rendering-only
+                # cleanups are not printed: they apply to nearly every row, and
+                # would bury the class that actually costs content.
+                if summary.get("rows_rejection_prevented"):
+                    print(f"  ! {summary['rows_rejection_prevented']} row(s) would have been REJECTED"
+                          f" by Jira and were repaired — see step7_validation_per_client.json")
             else:
                 print(f"✗ Validation error: {step7_result['error']}")
 

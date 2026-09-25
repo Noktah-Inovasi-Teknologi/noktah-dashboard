@@ -210,6 +210,69 @@ cannot regenerate it (re-running analysis would cost model spend it forbids).
 
 See `.claude/rules/backend/schema.md` and `specs/006-longitudinal-metric-capture/`.
 
+### Structured Extraction (validated, versioned, queryable)
+```bash
+# Content flow is an ordered array of BEATS over a closed vocabulary, not prose.
+# The forward path writes it automatically on every harvest — nothing to run.
+
+# Vocabulary: config/extraction/vocabulary_v1.yaml -> extraction_vocabulary_terms.
+# Unscheduled: run after editing the YAML. A version that any extraction has
+# recorded is FROZEN and the sync fails loudly rather than altering it.
+docker exec prefect python flows/extraction_vocabulary_sync.py --validate-only
+docker exec prefect python flows/extraction_vocabulary_sync.py
+
+# Backfill (COSTS MONEY). Defaults to --dry-run, which makes ZERO model calls.
+docker exec prefect python flows/roach_extract_backfill.py --dry-run
+docker exec prefect python flows/roach_extract_backfill.py --pilot 12   # establishes the baseline
+docker exec prefect python flows/roach_extract_backfill.py --confirm
+
+# Calibration (COSTS MONEY, ~2x per item — each is extracted by BOTH models).
+docker exec prefect python flows/roach_extract_calibrate.py --dry-run
+docker exec prefect python flows/roach_extract_calibrate.py --confirm
+docker exec prefect python flows/roach_extract_calibrate.py --report    # zero calls
+
+# The question the feature exists to answer — no text matching anywhere:
+docker exec postgres psql -U noktah -d noktah_dashboard -c "
+  SELECT b.function, count(*) AS items,
+         round(avg(s.likes + coalesce(s.comments,0))) AS avg_engagement
+  FROM content_extractions e
+  JOIN extraction_beats b ON b.extraction_id = e.id AND b.position = 1
+  JOIN harvested_signals s ON s.platform = e.platform AND s.content_id = e.content_id
+  WHERE e.purpose = 'production' AND s.advertisement = false
+  GROUP BY 1 ORDER BY 2 DESC;"
+
+# Why does this item have no extraction? Exactly one reason. UNRESOLVED is a bug.
+docker exec postgres psql -U noktah -d noktah_dashboard -c "
+  SELECT reason, count(*) FROM extraction_status GROUP BY 1 ORDER BY 2 DESC;"
+```
+**Nothing unvalidated can reach storage (FR-016).** roach validates client-side, retries
+**exactly once with the validation error fed back to the model**, then quarantines. Provider-side
+`strict` is not relied on — routing crosses four providers with `allow_fallbacks`.
+
+Three rules that are counter-intuitive and easy to undo:
+
+- **A quarantine is `200 OK`, never 4xx/5xx.** The `{ok: false, code}` envelope means *platform*
+  failure and the harvest flow **branches** on it — 429 backs off and rotates egress, 404 skips the
+  profile. A model writing bad JSON would make a healthy profile look blocked.
+- **Backfill writes a strict SUBSET of what the forward path writes** — only the new extraction
+  tables, **never `harvested_signals`**. Re-extraction produces a new subtitle, and
+  `harvested_signals` holds one row per item, so writing it back destroys the stored transcript
+  irreversibly. Two guards enforce this: a static import guard and a before/after snapshot test.
+- **Truncation is checked BEFORE parsing.** A beat array cut off after three complete beats is
+  valid JSON satisfying the schema; only `finish_reason == "length"` can catch it. The old
+  `\{.*\}` salvage regex and `_to_text`'s list coercion are **deleted**, not disabled, and a test
+  greps the module to prove it.
+
+Model routing is **roach's** to report, not something to infer from Prefect's environment
+(`OPENROUTER_IMAGE_MODEL` lives in `service/roach/.env`, which Prefect does not load). Ask
+`GET /extraction-config`. Guessing locally reports "no cross-model comparison applies" while roach
+is demonstrably serving two different models.
+
+Spend: `EXTRACTION_SPEND_THRESHOLD_USD` (per run, default $5) and
+`EXTRACTION_MONTHLY_CEILING_USD` (hard stop, default $25). **Both cover extraction spend only** —
+songbird's generation spend is not counted against them, so neither is a system-wide budget.
+See `.claude/rules/backend/schema.md` and `specs/007-structured-extraction/`.
+
 ### Songbird Content Generation
 ```bash
 # Monthly content plan → reviewable draft (default)
@@ -446,6 +509,55 @@ SONGBIRD_DRIVE_PARENT_ID=your_drive_folder_id_for_draft_content_plans
 
 ### Available Workflows
 - `content_plan_spreadsheet_to_jira_issue.py` - Reads content plans from Google Sheets and creates Jira issues
+
+#### Jira formatting (why rows used to fail)
+
+**Measured, not assumed.** Across the 21 production runs saved under `service/prefect/data/`,
+675 issues were submitted and exactly 10 were rejected — and **all 10 were the same error**:
+
+```
+{"summary": "The summary is invalid because it contains newline characters."}
+```
+
+A `Topik` cell wrapped over two lines in the sheet is invisible to whoever wrote it and fatal
+to the issue. That is the entire observed loss.
+
+**The description is enforced far more loosely than the ADF spec implies.** In the same corpus,
+1,461 of 1,477 issues carried a newline *inside* a description text node and all 1,477 carried
+an empty text node — and Jira accepted every one. So do not "fix" ADF description findings by
+promoting them to rejections: they apply to nearly every row, and merging them with the summary
+class buries the only class that costs content.
+
+`tasks/jira_adf.py` holds the cleaning — pure functions, no Prefect, no I/O — split along
+exactly that line:
+
+- **`find_fatal_problems`** — what Jira actually rejects: a newline, control character,
+  over-length (>255) or empty summary, and a description sent as a plain string.
+- **`find_issue_problems`** — everything, fatal plus rendering-only, for diagnosis.
+- **`sanitize_issue` / `sanitize_document`** — idempotent repair, applied by the converter, by
+  `jira.issue-bulk.validate-issue-data`, and once more in `jira.issue-bulk.create`, so payloads
+  written to disk by an earlier run are fixed on send too.
+
+```bash
+# Which rows would Jira reject, and why (creates nothing):
+docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --validate-only
+# Console prints only rejection-class repairs; step7_validation_per_client.json carries both
+# (`rejections_prevented` vs `formatting_repairs`).
+```
+
+Two things to preserve when touching it:
+
+- **Build description nodes with the builders** (`labelled_paragraph`, `labelled_block`,
+  `document`), not hand-written `{"type": "text"}` dicts — they emit `hardBreak` for newlines
+  and drop empty nodes, which is a *rendering* improvement, not a rejection fix.
+- **The bold label's trailing space is load-bearing.** `"Approval: "` renders as
+  `Approval:Selesai` without it, which is why `scrub` only trims space *before a newline* and
+  leaves the ends of the string to `clean_text`.
+
+Jira's per-issue rejection reasons are logged with the offending summary in
+`jira.issue-bulk.create` — that logging is what made the diagnosis above possible.
+
+Tests: `service/prefect/tests/test_jira_adf.py` (no database, no network).
 
 ### Running Workflows
 ```bash

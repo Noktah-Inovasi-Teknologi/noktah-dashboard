@@ -136,7 +136,7 @@ Both are **best-effort** — a failure logs and generation proceeds without that
 - **Never call Jira.** Handoff is the content-plan worksheet only (FR-018).
 - **The draft matches the "DRAFT v5" content-plan layout exactly** — same 20 columns, same order:
   `No.`, `Tanggal`, `Waktu`, `Bentuk`, `Topik`, `Creator`, `Format`, `Purpose/Theme`,
-  `Strategic Application`, `Kebutuhan Personil`, `Known Facts`, `Shoot Guide`, `Reference`,
+  `Strategic Application`, `Kebutuhan Personil`, `Known Facts`, `Shoot Guide`, `Visualisasi Konten`,
   `Asset`, `Caption`, `Keterangan`, `Approval`, `Link Referensi`, `TicketID`, `Key`.
   Songbird fills only `GENERATED_COLUMNS`; scheduling/production/workflow columns (`Waktu`,
   `Kebutuhan Personil`, `Asset`, `Approval`, `TicketID`, `Key`, …) are deliberately left blank.
@@ -173,9 +173,12 @@ Both are **best-effort** — a failure logs and generation proceeds without that
   bucket stayed short. Now `bentuk` is never requested (the call *is* the type), and
   `_generate_bucket` re-requests any shortfall up to `MAX_TOPUP_ATTEMPTS`, passing the existing topics
   so top-ups don't repeat. Duplicate topics are rejected within a bucket.
-- **`shoot_guide`/`reference` briefs are per content type** (`_FORMAT_BRIEFS`), written to reproduce
-  how v5 fills them: Post → `-` shoot guide + slide-by-slide carousel design with slide 2 as a
-  standalone hook; Story/Short Video → scene-by-scene capture plan with a 3-second hook.
+- **`shoot_guide`/`visualisasi_konten` briefs are per content type** (`_FORMAT_BRIEFS`), written to
+  reproduce how the live plans fill them: `Shoot Guide` is the capture plan (shot/angle/movement per
+  scene, `-` for Posts); `Visualisasi Konten` is the content itself (per-slide Visual/Headline/Body
+  for Posts with slide 2 a standalone hook; per-scene VISUAL/TOS/DIALOG for videos). The live
+  sheets have **both** columns and no `Reference` column — a draft column the live sheet lacks is
+  silently blanked by the name-aligned append, which is how `Reference` used to vanish on `--target live`.
 - **Draft** = content-plan columns + reviewer rationale columns; **live** = name-aligned append, rationale
   columns dropped (FR-016/FR-016a).
 

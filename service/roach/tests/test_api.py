@@ -171,7 +171,7 @@ def test_analyze_success_shape(monkeypatch):
 
     monkeypatch.setattr(
         analyze_mod, "analyze_item",
-        lambda paths, ct, client=None: {"subtitle": "hi", "flow": "1. hook", "summary": "a video", "status": "success", "error": None},
+        lambda paths, ct, client=None, model_override=None: {"subtitle": "hi", "flow": "1. hook", "summary": "a video", "status": "success", "error": None},
     )
     resp = client.post(
         "/analyze",
@@ -188,7 +188,7 @@ def test_analyze_image_leaves_subtitle_empty(monkeypatch):
 
     monkeypatch.setattr(
         analyze_mod, "analyze_item",
-        lambda paths, ct, client=None: {"subtitle": "", "flow": "1. shows a chart", "summary": "a chart", "status": "success", "error": None},
+        lambda paths, ct, client=None, model_override=None: {"subtitle": "", "flow": "1. shows a chart", "summary": "a chart", "status": "success", "error": None},
     )
     resp = client.post(
         "/analyze",
@@ -205,7 +205,7 @@ def test_analyze_forwards_client_attribution(monkeypatch):
 
     seen = {}
 
-    def fake_analyze(paths, ct, client=None):
+    def fake_analyze(paths, ct, client=None, model_override=None):
         seen["client"] = client
         return {"subtitle": "", "flow": "", "summary": "", "status": "success", "error": None}
 

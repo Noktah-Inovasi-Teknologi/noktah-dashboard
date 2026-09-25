@@ -141,18 +141,28 @@ async def social_item_download(
 
 @task(name="social.item.analyze", retries=1, retry_delay_seconds=30)
 async def social_item_analyze(
-    content_id: str, local_paths: List[str], content_type: str, client: Optional[str] = None
+    content_id: str, local_paths: List[str], content_type: str, client: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Analyze a downloaded content item via roach.
 
     Model failures are reported as {"status": "failed", "error": ...} in the
     response body by roach (not raised) so the download is retained and a
-    Sheet row is still written (edge case).
+    Sheet row is still written (edge case). Since feature 007 a third status,
+    "quarantined", reports output that failed validation twice — also inside a
+    200 body, and for the same reason: a model writing bad JSON is not a platform
+    failure, and dressing it as one would make the engine back off from a
+    perfectly healthy profile.
 
     `client` labels whose harvest is spending the tokens. roach is stateless and
     can't know, so it is passed in and echoed into roach's token-usage log —
     otherwise analysis spend can only be seen as one undifferentiated total.
+
+    Returns the analysis body with `usage` and `provenance` FOLDED BACK IN. They
+    ride on the envelope rather than the analysis because they describe the call
+    rather than the content, but every caller here needs all three together, and
+    re-splitting them at each call site is how one of them gets dropped.
     """
     with _roach_client() as http_client:
         # Analysis can involve model retries/back-off on the roach side, so allow
@@ -162,15 +172,44 @@ async def social_item_analyze(
             json={
                 "content_id": content_id, "local_paths": local_paths,
                 "content_type": content_type, "client": client,
+                # None keeps roach's media-based routing. Set ONLY by the
+                # controlled comparison, which must name both models explicitly
+                # or it measures the router instead of the models (FR-027).
+                "model": model,
             },
             timeout=600.0,
         )
         _raise_for_roach_error(resp)
-        return resp.json()["analysis"]
+        body = resp.json()
+        analysis = dict(body["analysis"])
+        analysis["usage"] = body.get("usage")
+        analysis["provenance"] = body.get("provenance") or {}
+        return analysis
 
 
 async def _db_pool() -> asyncpg.Pool:
     return await db_pool()
+
+
+@task(name="social.extraction.config", retries=2, retry_delay_seconds=10)
+async def social_extraction_config() -> Dict[str, Any]:
+    """
+    Ask roach what model routing and versions it is ACTUALLY configured with.
+
+    Do NOT substitute reading `OPENROUTER_MODEL` / `OPENROUTER_IMAGE_MODEL` from
+    this process's environment. They are set in `service/roach/.env`, which the
+    Prefect containers do not load — measured live: roach has
+    `OPENROUTER_IMAGE_MODEL=google/gemini-2.5-flash-lite`, this side has nothing.
+
+    A caller that guesses from its own env sees ONE model where there are TWO,
+    concludes that no cross-model comparison applies, and skips a measurement that
+    was entirely possible — a silent false negative, which is precisely the class
+    of quiet wrong answer feature 007 exists to eliminate.
+    """
+    with _roach_client() as http_client:
+        resp = http_client.get("/extraction-config", timeout=30.0)
+        _raise_for_roach_error(resp)
+        return resp.json()
 
 
 @task(name="social.dedup.check", retries=2, retry_delay_seconds=10)

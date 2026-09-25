@@ -18,12 +18,14 @@ from prefect.logging import get_run_logger
 
 try:
     from ..blocks.jira_credentials import JiraCredentials
+    from . import jira_adf as adf
 except ImportError:
     # For running as standalone script
     import sys
     import os
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from blocks.jira_credentials import JiraCredentials
+    from tasks import jira_adf as adf
 
 logger = logging.getLogger(__name__)
 
@@ -545,7 +547,12 @@ async def create_issues_bulk(
         # Load credentials from block
         jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
         client = jira_creds.get_client()
-        
+
+        # Last line of defence before the payload leaves the process. Idempotent,
+        # so an already-clean issue is unchanged; an unsanitised one loses the
+        # newline / empty text node Jira would reject the whole issue over.
+        issue_updates = [adf.sanitize_issue(issue) for issue in issue_updates]
+
         # Prepare bulk create payload
         bulk_payload = {
             "issueUpdates": issue_updates
@@ -587,8 +594,20 @@ async def create_issues_bulk(
             
             logger.info(f"Successfully created {len(created_issues)} issues in bulk")
             if errors:
+                # Log what Jira actually objected to, per issue. Without this a
+                # rejection is only ever a count, and the row that caused it has
+                # to be guessed at.
                 logger.warning(f"Encountered {len(errors)} errors during bulk creation")
-            
+                for error in errors:
+                    failed_index = error.get("failedElementNumber")
+                    summary = None
+                    if isinstance(failed_index, int) and failed_index < len(issue_updates):
+                        summary = (issue_updates[failed_index].get("fields") or {}).get("summary")
+                    logger.warning(
+                        f"Jira rejected issue #{failed_index} ({summary!r}): "
+                        f"{json.dumps(error.get('elementErrors', error))}"
+                    )
+
             return {
                 "status": "success",
                 "created_issues": created_issues,
@@ -646,16 +665,22 @@ async def read_jira_formatted_json(
         # Extract issue updates from the data structure
         issue_updates = []
         
-        # Handle both old format (jira_assets) and new format (issue_updates)
+        # Handle the flat format (issue_updates) and the nested combined-file
+        # format. The nested key was renamed jira_assets -> jira_content (and
+        # assets -> content) when Jira issue type 10009 was renamed "Asset" ->
+        # "Content"; the old spellings are still read because the run-output
+        # files already written to data/ use them.
         if "issue_updates" in data:
-            # New format: direct issue_updates array
+            # Flat format: direct issue_updates array
             issue_updates = data["issue_updates"]
-        elif "jira_assets" in data:
-            # Old format: nested jira_assets structure
-            for client_data in data["jira_assets"]:
-                if "assets" in client_data:
-                    for asset in client_data["assets"]:
-                        issue_updates.append(asset)
+        else:
+            for outer, inner in (("jira_content", "content"), ("jira_assets", "assets")):
+                if outer not in data:
+                    continue
+                for client_data in data[outer]:
+                    for issue in client_data.get(inner, []):
+                        issue_updates.append(issue)
+                break
         
         return {
             "status": "success",
@@ -696,14 +721,41 @@ async def validate_bulk_issue_data(
         "original_count": len(issue_updates),
         "valid_issues": [],
         "invalid_issues": [],
+        "formatting_repairs": [],
+        "rejections_prevented": [],
         "warnings": []
     }
-    
+
     try:
         for index, issue_update in enumerate(issue_updates):
             issue_valid = True
             issue_errors = []
-            
+
+            # Repair formatting BEFORE validating -- this is the last place it can
+            # be fixed rather than lost. Also covers payloads written to disk by an
+            # earlier run, before the converter sanitised its own output.
+            #
+            # Two classes, kept apart on purpose. FATAL is what Jira actually
+            # rejects the issue over (measured: a newline in the summary caused
+            # 10 of 10 losses across 21 production runs). Everything else is a
+            # rendering repair that Jira would have accepted as-is -- and it
+            # applies to nearly every row, so merging the two would bury the
+            # class that costs content.
+            fatal_problems = adf.find_fatal_problems(issue_update)
+            all_problems = adf.find_issue_problems(issue_update)
+            if all_problems:
+                issue_update = adf.sanitize_issue(issue_update)
+                record = {
+                    "index": index,
+                    "summary": (issue_update.get("fields") or {}).get("summary"),
+                    "problems": all_problems
+                }
+                validation_result["formatting_repairs"].append(record)
+                if fatal_problems:
+                    validation_result["rejections_prevented"].append({
+                        **record, "problems": fatal_problems
+                    })
+
             # Check for required fields structure
             if "fields" not in issue_update:
                 issue_errors.append("Missing 'fields' property")
@@ -733,7 +785,7 @@ async def validate_bulk_issue_data(
                         issue_valid = False
                 
                 # Validate summary is not empty
-                if "summary" in fields and not fields["summary"].strip():
+                if "summary" in fields and not str(fields["summary"] or "").strip():
                     issue_errors.append("Summary cannot be empty")
                     issue_valid = False
             
@@ -755,10 +807,29 @@ async def validate_bulk_issue_data(
         
         validation_result["final_count"] = len(validation_result["valid_issues"])
         validation_result["invalid_count"] = len(validation_result["invalid_issues"])
-        
+        validation_result["repaired_count"] = len(validation_result["formatting_repairs"])
+        validation_result["rejections_prevented_count"] = len(validation_result["rejections_prevented"])
+
         if validation_result["invalid_count"] > 0:
             logger.warning(f"Found {validation_result['invalid_count']} invalid issues")
-        
+
+        # The loud one: without the repair, each of these rows would have been
+        # lost, and Jira's only account of it is a count in the bulk response.
+        if validation_result["rejections_prevented_count"] > 0:
+            logger.warning(
+                f"Prevented {validation_result['rejections_prevented_count']} Jira rejection(s): "
+                + "; ".join(
+                    f"[{r['index']}] {r['summary']!r}: {', '.join(r['problems'])}"
+                    for r in validation_result["rejections_prevented"][:5]
+                )
+            )
+
+        # The quiet one: accepted by Jira either way, cleaned for rendering.
+        if validation_result["repaired_count"] > 0:
+            logger.info(
+                f"Cleaned rendering formatting on {validation_result['repaired_count']} issue(s)"
+            )
+
         logger.info(f"Validated {validation_result['final_count']} valid issues for bulk creation")
         
         return validation_result

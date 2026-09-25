@@ -393,6 +393,49 @@ async def drive_file_upload(
         raise
 
 
+@task(name="google.drive.download-file", retries=2, retry_delay_seconds=30)
+async def drive_file_download(
+    file_id: str,
+    local_path: str,
+    credentials_block_name: str = "google-creds"
+) -> str:
+    """
+    Download a retained Drive file to a local path.
+
+    The counterpart to `drive.file.upload`, added by feature 007 — it did not
+    exist before (research.md R2). Backfill re-extracts already-collected items
+    and sources their media from HERE, never from the platform: re-fetching would
+    be collection expansion and a politeness violation (FR-034, Constitution X).
+
+    Args:
+        file_id: Drive file id (from `harvested_items.drive_file_id`)
+        local_path: Destination path on local disk
+        credentials_block_name: Name of the Google credentials block
+
+    Returns:
+        The local path written.
+
+    Raises:
+        FileNotFoundError: the Drive object is gone or unreadable. The caller
+            records this as `media_unavailable` and COUNTS it (FR-035) — never a
+            silent skip, and never a re-download from the platform.
+    """
+    try:
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
+        client = google_creds.get_client()
+        path = client.download_file(file_id, local_path)
+        logger.info(f"Downloaded Drive file {file_id} -> {path}")
+        return path
+    except FileNotFoundError:
+        # Expected and classifiable — do not log at ERROR, and do not retry into
+        # a 404 three times. Re-raised unchanged for the caller to classify.
+        logger.warning(f"Drive file {file_id} is no longer retrievable")
+        raise
+    except Exception as e:
+        logger.error(f"Failed to download Drive file {file_id}: {str(e)}")
+        raise
+
+
 @task(name="sheets.create", retries=2, retry_delay_seconds=30)
 async def sheets_create(
     title: str,

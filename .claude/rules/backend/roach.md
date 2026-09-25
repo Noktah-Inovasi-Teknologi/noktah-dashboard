@@ -103,6 +103,43 @@ no raw passthrough, so recovering it needs a direct call in the
 `_instagram_clip_stats` mould. Confirming this needs ONE live probe; the
 determination is recorded in `config/field_availability.yaml`.
 
+## Extraction output is validated, versioned, and structured (feature 007)
+
+`/analyze` no longer returns three opaque strings. It returns beats over a closed vocabulary, a
+verbatim subtitle with an explicit absence reason, attributes, and a summary — validated
+**client-side** before it leaves this service.
+
+- **Three statuses, all `200 OK`**: `success`, `quarantined` (failed validation twice), `failed`
+  (the call never produced a validatable response). **A quarantine is NOT an HTTP error** — see the
+  error-contract bullet below; the harvest flow branches on `{ok: false}`, so a model writing bad
+  JSON must not arrive looking like a throttle or a dead profile.
+- **`finish_reason == "length"` is checked BEFORE parsing.** A truncated beat array is valid JSON
+  that satisfies the schema; nothing else can catch it. This is the single most important line in
+  the change.
+- **Two salvage paths were DELETED, not disabled**: `_extract_json`'s `\{.*\}` regex fallback and
+  `_to_text`'s list coercion. `tests/test_analyze_validation.py` parses this module with `ast` and
+  asserts `re` is not even imported — a substring check could not tell code from the comment
+  explaining the deletion, and that comment must stay.
+- **Exactly one retry, carrying the validator's own error text quoted** (not paraphrased), as
+  follow-up turns. **The media is not re-sent** — it is already in the conversation, and
+  re-uploading base64 video to restate a JSON complaint would roughly double every retry's input
+  cost.
+- **The schema and vocabulary are mounted, not baked**: `config/extraction/` is bind-mounted
+  read-only into roach *and* the Prefect service. The `beats.function` enum is **generated from the
+  vocabulary at load time** — the enum in `schema_v1.json` is a placeholder. Editing these files
+  does NOT need an image rebuild; editing `analyze.py` still does.
+- **`GET /extraction-config`** reports the model routing and versions this service is actually
+  configured with. Callers must ask rather than read their own environment:
+  `OPENROUTER_IMAGE_MODEL` lives in `service/roach/.env`, which the Prefect containers do not load,
+  so guessing locally sees one model where there are two and silently skips a real measurement.
+- **`usage` is returned, not just logged.** `_call_model` used to print the usage object and discard
+  it in the same breath, which is why no cost baseline existed anywhere. `model_served` and
+  `provider` are read off the RESPONSE — provider routing runs with `allow_fallbacks`, so what was
+  asked for and what answered are different questions.
+- **Measured 2026-08-07**: video ~$0.0019/item (`xiaomi/mimo-v2.5`), image ~$0.0004 and carousel
+  ~$0.0008 (`google/gemini-2.5-flash-lite`). `ANALYZE_VIDEO_MAX_TOKENS` raised 8000 → 12000 to fit
+  a full transcript alongside the structured fields.
+
 ## Conventions
 
 - **Stateless per call** — no DB in roach; persistence + orchestration are on the Prefect side.

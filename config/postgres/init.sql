@@ -159,7 +159,11 @@ CREATE INDEX IF NOT EXISTS ix_follower_observations_account_time
 
 CREATE TABLE IF NOT EXISTS runs (
     id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    kind               TEXT NOT NULL CHECK (kind IN ('collection', 'generation')),
+    -- The CHECK is added by explicit named ALTER below rather than inline, and
+    -- carries 'extraction' from the start. Migration 009 widens this constraint
+    -- and renames it from the auto-generated `runs_kind_check` to `chk_runs_kind`;
+    -- an inline CHECK here would auto-name differently and fail schema parity.
+    kind               TEXT NOT NULL,
     flow_name          TEXT NOT NULL,
     flow_run_name      TEXT NULL,
     flow_run_id        UUID NULL,
@@ -172,6 +176,17 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE INDEX IF NOT EXISTS ix_runs_client ON runs (client_id);
 CREATE INDEX IF NOT EXISTS ix_runs_flow_run_name ON runs (flow_run_name);
+
+-- Mirrors migration 009's widened constraint, name for name. See the comment on
+-- the `kind` column above.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_runs_kind') THEN
+        ALTER TABLE runs
+            ADD CONSTRAINT chk_runs_kind
+            CHECK (kind IN ('collection', 'generation', 'extraction'));
+    END IF;
+END $$;
 
 DO $$
 BEGIN
@@ -654,3 +669,372 @@ LEFT JOIN last_outcome lo ON lo.platform = i.platform AND lo.content_id = i.cont
 
 INSERT INTO schema_migrations (version) VALUES ('008_observation_history')
 ON CONFLICT (version) DO NOTHING;
+
+-- ===========================================================================
+-- 009_structured_extraction (feature 007-structured-extraction)
+-- ===========================================================================
+-- Mirrors config/postgres/migrations/009_structured_extraction.sql in the same
+-- order, with constraint names matching EXACTLY. The runs.kind widening that
+-- migration performs is mirrored at the runs table above (it already carries
+-- 'extraction'), not here.
+--
+-- Verify with: script/verify_schema_parity.sh
+
+CREATE TABLE IF NOT EXISTS extraction_vocabulary_terms (
+    version            TEXT NOT NULL,
+    dimension          TEXT NOT NULL,
+    term               TEXT NOT NULL,
+    is_residual        BOOLEAN NOT NULL DEFAULT false,
+    ordinal            SMALLINT NULL,
+    description        TEXT NOT NULL,
+    frozen_at          TIMESTAMPTZ NULL,
+    synced_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT pk_vocabulary_term PRIMARY KEY (version, dimension, term)
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_vocabulary_description') THEN
+        ALTER TABLE extraction_vocabulary_terms
+            ADD CONSTRAINT chk_vocabulary_description CHECK (btrim(description) <> '');
+    END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_vocabulary_residual
+    ON extraction_vocabulary_terms (version, dimension) WHERE is_residual;
+
+CREATE TABLE IF NOT EXISTS content_extractions (
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    platform           TEXT NOT NULL,
+    content_id         TEXT NOT NULL,
+    account_id         UUID NULL,
+    run_id             UUID NULL,
+    purpose            TEXT NOT NULL DEFAULT 'production',
+    content_type       TEXT NOT NULL,
+    media_path         TEXT NOT NULL,
+    subtitle           TEXT NULL,
+    subtitle_absence   TEXT NULL,
+    summary            TEXT NOT NULL,
+    model_requested    TEXT NOT NULL,
+    model_served       TEXT NOT NULL,
+    provider           TEXT NULL,
+    prompt_version     TEXT NOT NULL,
+    schema_version     TEXT NOT NULL,
+    vocabulary_version TEXT NOT NULL,
+    content_hash       TEXT NOT NULL,
+    prompt_tokens      INTEGER NULL,
+    completion_tokens  INTEGER NULL,
+    cost_usd           NUMERIC(12,6) NULL,
+    attempts           SMALLINT NOT NULL DEFAULT 1,
+    extracted_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_extraction_platform') THEN
+        ALTER TABLE content_extractions
+            ADD CONSTRAINT chk_extraction_platform CHECK (platform IN ('instagram', 'tiktok'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_extraction_purpose') THEN
+        ALTER TABLE content_extractions
+            ADD CONSTRAINT chk_extraction_purpose CHECK (purpose IN ('production', 'calibration'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_extraction_media_path') THEN
+        ALTER TABLE content_extractions
+            ADD CONSTRAINT chk_extraction_media_path CHECK (media_path IN ('video', 'image'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_extraction_subtitle_absence') THEN
+        ALTER TABLE content_extractions
+            ADD CONSTRAINT chk_extraction_subtitle_absence
+            CHECK (subtitle IS NOT NULL OR subtitle_absence IS NOT NULL);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_extraction_absence_vocab') THEN
+        ALTER TABLE content_extractions
+            ADD CONSTRAINT chk_extraction_absence_vocab
+            CHECK (subtitle_absence IS NULL
+                   OR subtitle_absence IN ('not_applicable_no_audio', 'attempted_none_found'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_extraction_summary_nonempty') THEN
+        ALTER TABLE content_extractions
+            ADD CONSTRAINT chk_extraction_summary_nonempty CHECK (btrim(summary) <> '');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_extraction_attempts') THEN
+        ALTER TABLE content_extractions
+            ADD CONSTRAINT chk_extraction_attempts CHECK (attempts BETWEEN 1 AND 2);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_extraction_account') THEN
+        ALTER TABLE content_extractions
+            ADD CONSTRAINT fk_extraction_account FOREIGN KEY (account_id) REFERENCES accounts(id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_extraction_run') THEN
+        ALTER TABLE content_extractions
+            ADD CONSTRAINT fk_extraction_run FOREIGN KEY (run_id) REFERENCES runs(id);
+    END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_extraction_version
+    ON content_extractions (platform, content_id, purpose, model_requested,
+                            prompt_version, schema_version, vocabulary_version);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'uq_extraction_id_vocab') THEN
+        ALTER TABLE content_extractions
+            ADD CONSTRAINT uq_extraction_id_vocab UNIQUE (id, vocabulary_version);
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS ix_extractions_item
+    ON content_extractions (platform, content_id);
+CREATE INDEX IF NOT EXISTS ix_extractions_run
+    ON content_extractions (run_id);
+CREATE INDEX IF NOT EXISTS ix_extractions_cost_month
+    ON content_extractions (extracted_at) WHERE cost_usd IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_extractions_hash
+    ON content_extractions (content_hash);
+
+CREATE TABLE IF NOT EXISTS extraction_beats (
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    extraction_id      UUID NOT NULL,
+    vocabulary_version TEXT NOT NULL,
+    dimension          TEXT NOT NULL DEFAULT 'beat_function',
+    position           SMALLINT NOT NULL,
+    function           TEXT NOT NULL,
+    description        TEXT NOT NULL
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_beat_position') THEN
+        ALTER TABLE extraction_beats
+            ADD CONSTRAINT chk_beat_position CHECK (position >= 1);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_beat_description') THEN
+        ALTER TABLE extraction_beats
+            ADD CONSTRAINT chk_beat_description CHECK (btrim(description) <> '');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_beat_dimension') THEN
+        ALTER TABLE extraction_beats
+            ADD CONSTRAINT chk_beat_dimension CHECK (dimension = 'beat_function');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_beat_function') THEN
+        ALTER TABLE extraction_beats
+            ADD CONSTRAINT fk_beat_function
+            FOREIGN KEY (vocabulary_version, dimension, function)
+            REFERENCES extraction_vocabulary_terms (version, dimension, term);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_beat_extraction_vocab') THEN
+        ALTER TABLE extraction_beats
+            ADD CONSTRAINT fk_beat_extraction_vocab
+            FOREIGN KEY (extraction_id, vocabulary_version)
+            REFERENCES content_extractions (id, vocabulary_version) ON DELETE CASCADE;
+    END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_beat_position
+    ON extraction_beats (extraction_id, position);
+CREATE INDEX IF NOT EXISTS ix_beats_function
+    ON extraction_beats (function);
+
+CREATE TABLE IF NOT EXISTS extraction_attributes (
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    extraction_id      UUID NOT NULL,
+    dimension          TEXT NOT NULL,
+    value              TEXT NOT NULL,
+    confidence         TEXT NOT NULL,
+    vocabulary_version TEXT NOT NULL
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_attribute_confidence') THEN
+        ALTER TABLE extraction_attributes
+            ADD CONSTRAINT chk_attribute_confidence CHECK (confidence IN ('high', 'medium', 'low'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_attribute_extraction') THEN
+        ALTER TABLE extraction_attributes
+            ADD CONSTRAINT fk_attribute_extraction
+            FOREIGN KEY (extraction_id) REFERENCES content_extractions (id) ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_attribute_term') THEN
+        ALTER TABLE extraction_attributes
+            ADD CONSTRAINT fk_attribute_term
+            FOREIGN KEY (vocabulary_version, dimension, value)
+            REFERENCES extraction_vocabulary_terms (version, dimension, term);
+    END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_attribute_dimension
+    ON extraction_attributes (extraction_id, dimension);
+
+CREATE TABLE IF NOT EXISTS extraction_quarantine (
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    platform           TEXT NOT NULL,
+    content_id         TEXT NOT NULL,
+    run_id             UUID NULL,
+    purpose            TEXT NOT NULL DEFAULT 'production',
+    failure_kind       TEXT NOT NULL,
+    raw_output         TEXT NULL,
+    validation_errors  JSONB NOT NULL DEFAULT '[]'::jsonb,
+    model_requested    TEXT NOT NULL,
+    model_served       TEXT NULL,
+    prompt_version     TEXT NOT NULL,
+    schema_version     TEXT NOT NULL,
+    vocabulary_version TEXT NOT NULL,
+    prompt_tokens      INTEGER NULL,
+    completion_tokens  INTEGER NULL,
+    cost_usd           NUMERIC(12,6) NULL,
+    quarantined_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_quarantine_platform') THEN
+        ALTER TABLE extraction_quarantine
+            ADD CONSTRAINT chk_quarantine_platform CHECK (platform IN ('instagram', 'tiktok'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_quarantine_purpose') THEN
+        ALTER TABLE extraction_quarantine
+            ADD CONSTRAINT chk_quarantine_purpose CHECK (purpose IN ('production', 'calibration'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_quarantine_failure_kind') THEN
+        ALTER TABLE extraction_quarantine
+            ADD CONSTRAINT chk_quarantine_failure_kind
+            CHECK (failure_kind IN (
+                'schema_invalid',
+                'truncated',
+                'empty_content',
+                'out_of_vocabulary',
+                'provider_error',
+                'rate_limited',
+                'media_unavailable',
+                'unsupported_media',
+                'spend_ceiling_reached'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_quarantine_run') THEN
+        ALTER TABLE extraction_quarantine
+            ADD CONSTRAINT fk_quarantine_run FOREIGN KEY (run_id) REFERENCES runs(id);
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS ix_quarantine_item
+    ON extraction_quarantine (platform, content_id);
+CREATE INDEX IF NOT EXISTS ix_quarantine_counts
+    ON extraction_quarantine (failure_kind, model_requested, prompt_version, schema_version);
+CREATE INDEX IF NOT EXISTS ix_quarantine_run
+    ON extraction_quarantine (run_id);
+CREATE INDEX IF NOT EXISTS ix_quarantine_cost_month
+    ON extraction_quarantine (quarantined_at) WHERE cost_usd IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS calibration_sample_members (
+    sample_key         TEXT NOT NULL,
+    platform           TEXT NOT NULL,
+    content_id         TEXT NOT NULL,
+    media_class        TEXT NOT NULL,
+    added_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT pk_calibration_member PRIMARY KEY (sample_key, platform, content_id)
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_calibration_platform') THEN
+        ALTER TABLE calibration_sample_members
+            ADD CONSTRAINT chk_calibration_platform CHECK (platform IN ('instagram', 'tiktok'));
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS extraction_batch_runs (
+    run_id                 UUID PRIMARY KEY,
+    batch_kind             TEXT NOT NULL,
+    mode                   TEXT NOT NULL,
+    scope_description      TEXT NOT NULL,
+    items_in_scope         INTEGER NOT NULL DEFAULT 0,
+    projection_basis       TEXT NOT NULL DEFAULT 'uncalibrated',
+    projection_usd         NUMERIC(12,6) NULL,
+    projection_sample_size INTEGER NULL,
+    ceiling_usd            NUMERIC(12,6) NULL,
+    month_to_date_usd      NUMERIC(12,6) NULL,
+    confirmed              BOOLEAN NOT NULL DEFAULT false,
+    actual_usd             NUMERIC(12,6) NULL,
+    items_extracted        INTEGER NOT NULL DEFAULT 0,
+    items_cached           INTEGER NOT NULL DEFAULT 0,
+    items_quarantined      INTEGER NOT NULL DEFAULT 0,
+    items_skipped          INTEGER NOT NULL DEFAULT 0,
+    items_unclassified     INTEGER NOT NULL DEFAULT 0
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_batch_kind') THEN
+        ALTER TABLE extraction_batch_runs
+            ADD CONSTRAINT chk_batch_kind CHECK (batch_kind IN ('backfill', 'calibration'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_batch_mode') THEN
+        ALTER TABLE extraction_batch_runs
+            ADD CONSTRAINT chk_batch_mode CHECK (mode IN ('dry_run', 'pilot', 'real'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_batch_projection') THEN
+        ALTER TABLE extraction_batch_runs
+            ADD CONSTRAINT chk_batch_projection
+            CHECK (projection_basis <> 'measured'
+                   OR (projection_usd IS NOT NULL AND projection_sample_size IS NOT NULL));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_batch_projection_basis') THEN
+        ALTER TABLE extraction_batch_runs
+            ADD CONSTRAINT chk_batch_projection_basis
+            CHECK (projection_basis IN ('measured', 'uncalibrated'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_batch_run') THEN
+        ALTER TABLE extraction_batch_runs
+            ADD CONSTRAINT fk_batch_run FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
+CREATE OR REPLACE VIEW extraction_status AS
+WITH items AS (
+    SELECT platform, content_id FROM harvested_signals
+    UNION
+    SELECT platform, content_id FROM content_extractions
+), ex AS (
+    SELECT platform, content_id,
+           count(*)                                          AS extraction_count,
+           count(*) FILTER (WHERE purpose = 'production')     AS production_count,
+           count(*) FILTER (WHERE purpose = 'calibration')    AS calibration_count,
+           max(schema_version) FILTER (WHERE purpose = 'production')     AS max_schema_version,
+           max(vocabulary_version) FILTER (WHERE purpose = 'production') AS max_vocab_version
+    FROM content_extractions
+    GROUP BY platform, content_id
+), q AS (
+    SELECT DISTINCT ON (platform, content_id) platform, content_id, failure_kind, quarantined_at
+    FROM extraction_quarantine
+    ORDER BY platform, content_id, quarantined_at DESC
+), cur AS (
+    SELECT max(version) AS version FROM extraction_vocabulary_terms
+)
+SELECT i.platform,
+       i.content_id,
+       COALESCE(ex.production_count, 0) AS production_extractions,
+       CASE
+           WHEN COALESCE(ex.production_count, 0) > 0
+                AND ex.max_vocab_version >= (SELECT version FROM cur) THEN 'extracted'
+           WHEN COALESCE(ex.extraction_count, 0) = 0
+                AND q.failure_kind IS NULL                            THEN 'never_attempted'
+           WHEN q.failure_kind = 'media_unavailable'
+                AND COALESCE(ex.production_count, 0) = 0              THEN 'media_unavailable'
+           WHEN q.failure_kind = 'spend_ceiling_reached'
+                AND COALESCE(ex.production_count, 0) = 0              THEN 'ceiling_deferred'
+           WHEN COALESCE(ex.production_count, 0) = 0
+                AND COALESCE(ex.calibration_count, 0) > 0             THEN 'calibration_only'
+           WHEN COALESCE(ex.production_count, 0) = 0
+                AND q.failure_kind IS NOT NULL                        THEN 'quarantined'
+           WHEN COALESCE(ex.production_count, 0) > 0                  THEN 'superseded_version_only'
+           ELSE 'UNRESOLVED'
+       END AS reason
+FROM items i
+LEFT JOIN ex ON ex.platform = i.platform AND ex.content_id = i.content_id
+LEFT JOIN q ON q.platform = i.platform AND q.content_id = i.content_id;
+
+INSERT INTO schema_migrations (version) VALUES ('009_structured_extraction')
+ON CONFLICT (version) DO NOTHING;
+
+-- ════════════════════════════════════════════════════════════════════════

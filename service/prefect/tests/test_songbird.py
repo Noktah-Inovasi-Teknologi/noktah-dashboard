@@ -67,7 +67,7 @@ def _make_idea(i, topik=None):
     return {
         "topik": topik or f"Topik {i}",
         "purpose_theme": "Mengedukasi audiens", "strategic_application": "Awareness",
-        "shoot_guide": "Scene 1 (3 detik): …", "reference": "SLIDE 1: Hook …",
+        "shoot_guide": "Scene 1 (3 detik): …", "visualisasi_konten": "SLIDE 1: Hook …",
         "caption": "Hook kuat di kalimat pertama. CTA. #tag",
         "adapted_pattern": "hook cepat", "source_exemplar": "@competitor/123",
         "rationale": "cocok",
@@ -238,7 +238,7 @@ def test_draft_header_matches_the_v5_content_plan_layout():
     assert engine.DRAFT_HEADER == [
         "No.", "Tanggal", "Waktu", "Bentuk", "Topik", "Creator", "Format",
         "Purpose/Theme", "Strategic Application", "Kebutuhan Personil", "Known Facts",
-        "Shoot Guide", "Reference", "Asset", "Caption", "Keterangan", "Approval",
+        "Shoot Guide", "Visualisasi Konten", "Asset", "Caption", "Keterangan", "Approval",
         "Link Referensi", "TicketID", "Key",
     ]
 
