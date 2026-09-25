@@ -12,9 +12,9 @@ from typing import Any, Dict, Optional
 import asyncpg
 
 from ..errors import Conflict, Invalid, NotFound
+from ..people import catalog
 from . import names
 from .changes import record_change
-from .queries import TEAM_ROLES
 
 STATUSES = ("pending", "active", "inactive")
 EDITABLE = ("display_name", "status", "quota_post", "quota_story", "quota_short_video", "drive_folder_id",
@@ -75,7 +75,7 @@ async def create_client(conn: asyncpg.Connection, *, name: str, brand: str, pers
                         status: str = "pending", is_internal: bool = False, fields: Optional[Dict[str, Any]] = None
                         ) -> str:
     name = _clean("display_name", name)
-    brand_id = await conn.fetchval("SELECT id FROM noktah_brands WHERE brand_key = $1", brand)
+    brand_id = await conn.fetchval("SELECT id FROM noktah_brands WHERE brand_key = $1 AND kind = 'brand'", brand)
     if brand_id is None:
         raise Invalid("Noktah Brand tidak dikenal.")
     key = names.normalize_client_key(name)
@@ -127,20 +127,31 @@ async def update_client(conn: asyncpg.Connection, client_id: str, version: Optio
 
 async def set_team(conn: asyncpg.Connection, client_id: str, version: Optional[int], team_role: str,
                    person_id_to_set: Optional[str], person_id: Optional[str]) -> int:
-    if team_role not in TEAM_ROLES:
-        raise NotFound("Peran tim tidak dikenal.")
+    """Fill or clear one team slot. Only a Person holding that role in the Client's
+    brand may fill it (roles live on the Person, migration 012)."""
     await lock_client(conn, client_id, version)
+    brand = await conn.fetchval(
+        """SELECT b.brand_key FROM clients c JOIN noktah_brands b ON b.id = c.noktah_brand_id
+           WHERE c.id = $1::uuid""", client_id)
     current = await conn.fetchrow(
         """SELECT t.id, t.person_id::text AS person_id, p.display_name FROM client_team_assignments t
            JOIN people p ON p.id = t.person_id
            WHERE t.client_id = $1::uuid AND t.team_role = $2 AND t.valid_to IS NULL""", client_id, team_role)
     if (current["person_id"] if current else None) == person_id_to_set:
         return await conn.fetchval("SELECT version FROM clients WHERE id = $1::uuid", client_id)
+    if team_role not in await catalog.team_slots(conn, brand) and not (current and person_id_to_set is None):
+        raise NotFound("Peran tim tidak dikenal.")
     new_name = None
     if person_id_to_set:
         person = await conn.fetchrow("SELECT display_name, status FROM people WHERE id = $1::uuid", person_id_to_set)
         if person is None or person["status"] != "active":
             raise Invalid("Pilih orang yang masih aktif.")  # FR-011: never free text, never a leaver
+        if not await conn.fetchval(
+                """SELECT 1 FROM person_roles r JOIN noktah_brands b ON b.id = r.noktah_brand_id
+                   WHERE r.person_id = $1::uuid AND r.role = $2 AND b.brand_key = $3 AND r.valid_to IS NULL""",
+                person_id_to_set, team_role, brand):
+            raise Invalid(f"{person['display_name']} tidak memegang peran ini di {brand.capitalize()}. "
+                          "Beri perannya dulu di halaman Orang.")
         new_name = person["display_name"]
     if current:
         await conn.execute("UPDATE client_team_assignments SET valid_to = now() WHERE id = $1", current["id"])

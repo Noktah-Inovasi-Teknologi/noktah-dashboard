@@ -165,13 +165,15 @@ export interface Person {
   jira_account_id: string | null
   slack_user_id: string | null
   emails: string[]
+  units: string[]
   roles: PersonRole[]
+  permissions: string[]
   version?: number
 }
 
 export interface RegistryChange {
   id: number
-  entity: 'client' | 'team' | 'account_link' | 'person' | 'person_email' | 'person_role'
+  entity: 'client' | 'team' | 'account_link' | 'person' | 'person_email' | 'person_role' | 'person_unit' | 'person_permission'
   field: string
   old_value: unknown
   new_value: unknown

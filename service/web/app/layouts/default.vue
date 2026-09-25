@@ -19,11 +19,10 @@ const items = computed<NavigationMenuItem[]>(() => {
   return list
 })
 
+const { roleName, unitName } = useCatalog()
 const roleLine = computed(() => {
   const r = me.value?.roles?.[0]
-  if (!r) return ''
-  const brand = r.noktah_brand ? ` · ${r.noktah_brand === 'eskala' ? 'Eskala' : 'Venyu'}` : ''
-  return `${ROLE_LABELS[r.role] ?? r.role}${brand}`
+  return r ? `${roleName(r.role)} · ${unitName(r.noktah_brand)}` : ''
 })
 </script>
 

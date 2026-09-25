@@ -97,7 +97,7 @@ async function saveChange() {
         aria-label="Filter kanal"
       />
       <UButton
-        v-if="me?.can.edit_profil"
+        v-if="me?.can.edit_requests"
         class="ms-auto"
         icon="i-lucide-plus"
         label="Tambah permintaan"
@@ -152,7 +152,7 @@ async function saveChange() {
               label="Tautan"
             />
             <UButton
-              v-if="me?.can.edit_profil"
+              v-if="me?.can.edit_requests"
               size="xs"
               variant="soft"
               label="Ubah status"

@@ -28,11 +28,11 @@ def definition() -> Definition:
 
 
 async def all_brand_keys(conn: asyncpg.Connection) -> List[str]:
-    return [r["brand_key"] for r in await conn.fetch("SELECT brand_key FROM noktah_brands ORDER BY brand_key")]
+    return [r["brand_key"] for r in await conn.fetch("SELECT brand_key FROM noktah_brands WHERE kind = 'brand' ORDER BY brand_key")]
 
 
 async def caller_brands(conn: asyncpg.Connection, caller: Caller) -> List[str]:
-    return sorted(visible_brands(caller.assignments, await all_brand_keys(conn)))
+    return sorted(visible_brands(caller.access, await all_brand_keys(conn)))
 
 
 async def client_brand(conn: asyncpg.Connection, caller: Caller, client_id: str) -> str:
@@ -50,14 +50,14 @@ async def client_brand(conn: asyncpg.Connection, caller: Caller, client_id: str)
         if any(a.role == "owner" for a in caller.assignments):
             return ""
         raise NotFound("Klien tidak ditemukan.")
-    if brand not in visible_brands(caller.assignments, [brand]):
+    if brand not in visible_brands(caller.access, [brand]):
         raise NotFound("Klien tidak ditemukan.")
     return brand
 
 
 def require(caller: Caller, action: Action, brand: Optional[str]) -> Decision:
     """ALLOW or NEEDS_APPROVAL passes (the caller handles the latter); DENY → 403."""
-    decision = can(caller.assignments, action, brand or None)
+    decision = can(caller.access, action, brand or None)
     if decision is Decision.DENY:
         raise Forbidden("Peran Anda tidak mengizinkan tindakan ini.")
     return decision

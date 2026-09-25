@@ -58,8 +58,8 @@ async def _setup(hub_db):
     async with hub_db.acquire() as conn:
         cid = await add_client(conn, "Klinik Mata Sampang", "eskala")
         await add_client(conn, "Klinik Mata Bireuen", "eskala")
-        pm = await add_person(conn, "pm@noktah.co", "PM Eskala", "project_manager", "eskala")
-        await add_person(conn, "sm@noktah.co", "Sales Eskala", "sales_marketing", "eskala")
+        pm = await add_person(conn, "pm@noktah.co", "PM Eskala", "production_manager", "eskala")
+        await add_person(conn, "sm@noktah.co", "Sales Eskala", "sales_marketing", None)
         await conn.execute(
             """INSERT INTO card_values (client_id, part, field_key, definition_version, value, state, set_by)
                VALUES ($1::uuid, 'profil', 'pic', 'v1', $2, 'current', $3::uuid)""", cid, PIC, pm)

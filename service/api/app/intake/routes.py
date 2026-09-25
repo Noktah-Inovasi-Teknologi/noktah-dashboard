@@ -10,14 +10,14 @@ from ..auth import Caller, current_caller
 from ..card.routes import _notify_pending
 from ..deps import client_brand, definition, require
 from ..errors import Forbidden, Invalid
-from ..permissions import Action, Decision, can
+from ..permissions import Action, Decision, is_owner
 from . import pipeline, sources
 
 router = APIRouter(prefix="/v1")
 
 
 def may_run_intake_somewhere(caller: Caller) -> bool:
-    return any(can(caller.assignments, Action.RUN_INTAKE, a.brand) is Decision.ALLOW for a in caller.assignments)
+    return is_owner(caller.access) or "run_intake" in caller.access.permissions
 
 
 class IntakeIn(BaseModel):

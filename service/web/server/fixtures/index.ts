@@ -40,19 +40,42 @@ const CLIENT_NAMES = [
 const idOf = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`
 const CLIENT_ID = idOf(7) // Klinik Mata Sampang
 
+// The role catalog as migration 012 seeds it.
+const role = (key: string, name: string, team_slot = false, default_permissions: string[] = []) => ({ key, name, team_slot, default_permissions })
+const ALL_PERMISSIONS = ['hub_access', 'edit_clients', 'edit_profil', 'approve_guideline', 'edit_requests', 'run_intake', 'manage_people']
+const EDITOR = ['hub_access', 'edit_clients', 'edit_profil', 'edit_requests', 'run_intake']
+const CATALOG = [
+  { key: 'noktah', name: 'Noktah', kind: 'group', roles: [role('owner', 'Owner', false, ALL_PERMISSIONS), role('sales_marketing', 'Sales & Marketing', false, ['hub_access'])] },
+  { key: 'eskala', name: 'Eskala', kind: 'brand', roles: [
+    role('brand_manager', 'Brand Manager', false, ALL_PERMISSIONS), role('production_manager', 'Production Manager', false, EDITOR),
+    role('account_executive', 'Account Executive', true, EDITOR), role('content_planner', 'Content Planner', true),
+    role('field_associate', 'Field Associate', true), role('content_editor', 'Content Editor', true),
+    role('quality_assurance', 'Quality Assurance', true)] },
+  { key: 'venyu', name: 'Venyu', kind: 'brand', roles: [
+    role('brand_manager', 'Brand Manager', false, ALL_PERMISSIONS), role('production_manager', 'Production Manager', false, EDITOR),
+    role('quality_assurance', 'Quality Assurance'), role('frontend_developer', 'Front-end Developer'),
+    role('backend_developer', 'Back-end Developer'), role('devops', 'DevOps'), role('mobile_developer', 'Mobile Developer')] }
+]
+
 const ME = {
   person: { id: idOf(900), display_name: 'Defila Priana Falarima', email: FIXTURE_EMAIL },
   roles: [{ role: 'brand_manager', noktah_brand: 'eskala' }],
+  units: ['eskala'],
+  permissions: ALL_PERMISSIONS,
   brands: ['eskala'],
-  can: { edit_registry: true, edit_profil: true, edit_guideline: true, approve: true, manage_people: true, appoint_bm: false, run_intake: true }
+  manageable_units: ['eskala'],
+  catalog: CATALOG,
+  can: { edit_registry: true, edit_profil: true, edit_guideline: true, approve: true, edit_requests: true, manage_people: true, appoint_bm: false, run_intake: true }
 }
 
+const eskala = (id: number, key: string) => ({ id: idOf(id), role: key, noktah_brand: 'eskala' })
 const PEOPLE = [
-  { id: idOf(900), display_name: 'Defila Priana Falarima', status: 'active', jira_account_id: '712020:aaa', slack_user_id: 'U0C45JQ8CH0', emails: ['defila@noktah.co'], roles: [{ id: idOf(950), role: 'brand_manager', noktah_brand: 'eskala' }] },
-  { id: idOf(901), display_name: 'Ardella Bernica', status: 'active', jira_account_id: '712020:bbb', slack_user_id: null, emails: ['ardellabernica8@gmail.com'], roles: [{ id: idOf(951), role: 'project_manager', noktah_brand: 'eskala' }] },
-  { id: idOf(902), display_name: 'Juliana Devina Santosa', status: 'active', jira_account_id: '712020:ccc', slack_user_id: null, emails: ['juliana.devn@gmail.com'], roles: [{ id: idOf(952), role: 'content_planner', noktah_brand: 'eskala' }] },
-  { id: idOf(903), display_name: 'Nadya Safira Alia Adinda', status: 'active', jira_account_id: '712020:ddd', slack_user_id: null, emails: [], roles: [{ id: idOf(953), role: 'field_associate', noktah_brand: 'eskala' }] },
-  { id: idOf(904), display_name: 'Anaknya Mama Gufron', status: 'left', jira_account_id: null, slack_user_id: null, emails: ['romuty16@gmail.com'], roles: [] }
+  { id: idOf(900), display_name: 'Defila Priana Falarima', status: 'active', jira_account_id: '712020:aaa', slack_user_id: 'U0C45JQ8CH0', emails: ['defila@noktah.co'], units: ['eskala'], roles: [eskala(950, 'brand_manager')], permissions: ALL_PERMISSIONS },
+  { id: idOf(901), display_name: 'Ardella Bernica', status: 'active', jira_account_id: '712020:bbb', slack_user_id: null, emails: ['ardellabernica8@gmail.com'], units: ['eskala'], roles: [eskala(951, 'production_manager'), eskala(955, 'account_executive')], permissions: EDITOR },
+  { id: idOf(902), display_name: 'Juliana Devina Santosa', status: 'active', jira_account_id: '712020:ccc', slack_user_id: null, emails: ['juliana.devn@gmail.com'], units: ['eskala'], roles: [eskala(952, 'content_planner')], permissions: [] },
+  { id: idOf(903), display_name: 'Nadya Safira Alia Adinda', status: 'active', jira_account_id: '712020:ddd', slack_user_id: null, emails: [], units: ['eskala'], roles: [eskala(953, 'field_associate')], permissions: [] },
+  { id: idOf(905), display_name: 'Putri Indah Lestari', status: 'active', jira_account_id: '712020:eee', slack_user_id: null, emails: ['putri.indah@gmail.com'], units: ['eskala'], roles: [eskala(954, 'content_editor'), eskala(956, 'quality_assurance')], permissions: [] },
+  { id: idOf(904), display_name: 'Anaknya Mama Gufron', status: 'left', jira_account_id: null, slack_user_id: null, emails: ['romuty16@gmail.com'], units: ['eskala'], roles: [], permissions: [] }
 ]
 
 /** One Person with the detail fields /v1/people/{id} returns. */
@@ -63,11 +86,13 @@ function personDetail(id: string) {
     team: base.status === 'left'
       ? []
       : [
-          { client_id: CLIENT_ID, client: 'Klinik Mata Sampang', team_role: 'account_executive' },
-          { client_id: idOf(3), client: 'LASIK Asyik by SMEC Tebet', team_role: 'account_executive' }
+          { client_id: CLIENT_ID, client: 'Klinik Mata Sampang', team_role: 'account_executive', brand: 'eskala' },
+          { client_id: idOf(3), client: 'LASIK Asyik by SMEC Tebet', team_role: 'account_executive', brand: 'eskala' }
         ],
     history: [
-      { id: 41, entity: 'person_role', field: 'project_manager', old_value: null, new_value: { role: 'project_manager', noktah_brand: 'eskala' }, person: 'Defila Priana Falarima', at: '2026-09-20T02:00:00Z' },
+      { id: 43, entity: 'person_permission', field: 'run_intake', old_value: null, new_value: true, person: 'Defila Priana Falarima', at: '2026-09-20T02:00:02Z' },
+      { id: 42, entity: 'person_unit', field: 'eskala', old_value: null, new_value: 'eskala', person: 'Defila Priana Falarima', at: '2026-09-20T02:00:01Z' },
+      { id: 41, entity: 'person_role', field: 'production_manager', old_value: null, new_value: { role: 'production_manager', noktah_brand: 'eskala' }, person: 'Defila Priana Falarima', at: '2026-09-20T02:00:00Z' },
       { id: 40, entity: 'person_email', field: 'email', old_value: null, new_value: base.emails[0] ?? 'nama@contoh.com', person: 'Defila Priana Falarima', at: '2026-09-20T01:59:00Z' },
       { id: 39, entity: 'person', field: 'created', old_value: null, new_value: { name: base.display_name }, person: 'Sistem', at: '2026-09-19T08:00:00Z' }
     ]
@@ -95,7 +120,7 @@ function clientRecord(id: string) {
       account_executive: { person_id: idOf(901), name: 'Ardella Bernica', status: 'active' },
       content_planner: { person_id: idOf(902), name: 'Juliana Devina Santosa', status: 'active' },
       field_associate: { person_id: idOf(903), name: 'Nadya Safira Alia Adinda', status: 'active' },
-      content_editor: null, qc: null
+      content_editor: { person_id: idOf(905), name: 'Putri Indah Lestari', status: 'active' }, quality_assurance: null
     },
     accounts: [
       { account_id: idOf(700), platform: 'instagram', handle: 'klinikmatasampang', relation: 'own', is_active: true },

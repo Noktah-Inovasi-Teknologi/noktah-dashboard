@@ -15,8 +15,8 @@ tunnel. Never put database access or OpenRouter calls here.
 | `/clients/[id]` | One Client: tabs Ringkasan, Profil, Guideline, Permintaan, Registry, Riwayat |
 | `/clients/[id]/intake` | Intake: paste text, a screenshot, a Google Doc or a PDF → Proposals to decide |
 | `/approvals` | Persetujuan: Guideline changes waiting for the Brand Manager / Owner |
-| `/people`, `/people/[id]` | Orang: filters (status, role, brand), pages of 20; one profile form per Person (name, IDs, emails, any number of roles), leaving |
-| `/no-access` | Signed in to Cloudflare, but no Manager role in the Hub |
+| `/people`, `/people/[id]` | Orang: filters (status, Unit, role), pages of 20; one form per Person (name, IDs, emails, Units, roles, permissions), leaving |
+| `/no-access` | Signed in to Cloudflare, but no Masuk Hub permission in the Hub |
 
 ## Forms and lists
 
@@ -25,6 +25,11 @@ tunnel. Never put database access or OpenRouter calls here.
   roles as sets), so an untouched form, a saved one, or an edit typed back to the original
   all leave Save disabled. A new-record form (Tambah klien, Tambah orang) enables Save once
   its required fields are filled.
+- **Roles come from the API's catalog** (`/v1/me` → `catalog`; `useCatalog()` for names).
+  Never list roles in the web app: a new role is a row in `unit_roles`, not a code change.
+  The person form picks Units, then roles from those Units, then permissions (a new role
+  ticks its usual ones). A Client's team slots and who may fill them come from the same
+  catalog: each picker lists only people holding that role in the Client's brand.
 - **Tables and long lists filter and page in the browser** (`composables/usePaged.ts`,
   `components/ListPager.vue`): 20 rows a page, 10 for Permintaan. Changing a filter returns
   to page 1.
@@ -32,8 +37,8 @@ tunnel. Never put database access or OpenRouter calls here.
 ## Access
 
 - Cloudflare Access lets any signed-in email through (G-14); **the Hub decides access** from
-  its own roles (email → Person → role). A sign-in with no Manager role only ever sees
-  `/no-access`.
+  its own permissions (email → Person → permissions). A sign-in without Masuk Hub only
+  ever sees `/no-access`.
 - `workers_dev` and `preview_urls` are `false` in `wrangler.jsonc`: those default addresses
   would bypass the login gate. Keep them off.
 - `server/utils/hubApi.ts` forwards to the API with the Worker's service token and the

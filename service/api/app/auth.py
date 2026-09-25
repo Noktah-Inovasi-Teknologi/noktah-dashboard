@@ -14,8 +14,8 @@ Every request must carry two Access JWTs, both RS256-signed by our Access team:
    the service token; this token cannot.
 
 A missing, expired, wrongly-signed or wrong-audience token gets 401, never a default user.
-A verified email with no Manager role gets 403 `no_access` (G-11); roles are the Hub's
-own, from the people list, never Cloudflare's.
+A verified email without the hub_access permission gets 403 `no_access` (G-11);
+roles and permissions are the Hub's own, from the people list, never Cloudflare's.
 """
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
@@ -26,7 +26,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from . import db
 from .errors import NoAccess, Unauthenticated
-from .permissions import Assignment, is_manager
+from .permissions import Access, Assignment, is_manager
 from .settings import Settings, get_settings
 
 SERVICE_HEADER = "cf-access-jwt-assertion"
@@ -82,18 +82,22 @@ async def current_user(request: Request, settings: Settings = Depends(get_settin
 
 @dataclass(frozen=True)
 class Caller:
-    """The Person behind a verified sign-in, with their active roles (G-11, G-16).
+    """The Person behind a verified sign-in, with their roles, Units and permissions.
 
     History always records `person_id`, never the email (G-16).
     """
     person_id: str
     display_name: str
     email: str
-    assignments: Tuple[Assignment, ...]
+    access: Access
+
+    @property
+    def assignments(self) -> Tuple[Assignment, ...]:
+        return self.access.assignments
 
 
 async def load_caller(email: str) -> Caller:
-    """email → Person → active roles. NoAccess unless they hold a Manager role (G-9, G-11)."""
+    """email → Person → access. NoAccess unless they may sign in (hub_access, or Owner)."""
     async with db.pool().acquire() as conn:
         person = await conn.fetchrow(
             """SELECT p.id, p.display_name, p.status
@@ -103,16 +107,27 @@ async def load_caller(email: str) -> Caller:
         )
         if person is None or person["status"] != "active":
             raise NoAccess("Anda belum punya akses ke Noktah Hub.", email=email)
-        rows = await conn.fetch(
-            """SELECT r.role, b.brand_key
-               FROM person_roles r LEFT JOIN noktah_brands b ON b.id = r.noktah_brand_id
-               WHERE r.person_id = $1 AND r.valid_to IS NULL""",
-            person["id"],
-        )
-    assignments = tuple(Assignment(r["role"], r["brand_key"]) for r in rows)
-    if not is_manager(assignments):
+        access = await load_access(conn, person["id"])
+    if not is_manager(access):
         raise NoAccess("Anda belum punya akses ke Noktah Hub.", email=email)
-    return Caller(str(person["id"]), person["display_name"], email, assignments)
+    return Caller(str(person["id"]), person["display_name"], email, access)
+
+
+async def load_access(conn, person_id) -> Access:
+    """A Person's active roles, Units and permissions (migration 012)."""
+    roles = await conn.fetch(
+        """SELECT r.role, b.brand_key
+           FROM person_roles r JOIN noktah_brands b ON b.id = r.noktah_brand_id
+           WHERE r.person_id = $1::uuid AND r.valid_to IS NULL""", str(person_id))
+    units = await conn.fetch(
+        """SELECT b.brand_key FROM person_units u JOIN noktah_brands b ON b.id = u.noktah_brand_id
+           WHERE u.person_id = $1::uuid""", str(person_id))
+    perms = await conn.fetch("SELECT permission FROM person_permissions WHERE person_id = $1::uuid", str(person_id))
+    return Access(
+        assignments=tuple(Assignment(r["role"], r["brand_key"]) for r in roles),
+        units=frozenset(u["brand_key"] for u in units),
+        permissions=frozenset(p["permission"] for p in perms),
+    )
 
 
 async def current_caller(user: User = Depends(current_user)) -> Caller:

@@ -47,15 +47,21 @@ async function saveDetails() {
 }
 
 // ── team ─────────────────────────────────────────────────────────────────────
-const TEAM = [
-  { key: 'account_executive', label: 'Account Executive' },
-  { key: 'content_planner', label: 'Content Planner' },
-  { key: 'field_associate', label: 'Field Associate' },
-  { key: 'content_editor', label: 'Content Editor' },
-  { key: 'qc', label: 'QC' }
-]
+// Slots come from the brand's role catalog (the record lists them in order). Each
+// offers only the people holding that role in this Client's brand.
+const { roleName } = useCatalog()
 const NOBODY = '__none__'
-const peopleItems = computed(() => [{ label: '— Kosong —', value: NOBODY }, ...people.value.map(p => ({ label: p.display_name, value: p.id }))])
+const team = computed(() => Object.keys(props.client.team).map(key => ({ key, label: roleName(key) })))
+function teamItems(role: string) {
+  const holders = people.value
+    .filter(p => p.roles.some(r => r.role === role && r.noktah_brand === props.client.brand))
+    .map(p => ({ label: p.display_name, value: p.id }))
+  const current = props.client.team[role]
+  if (current && !holders.some(h => h.value === current.person_id)) {
+    holders.push({ label: current.name, value: current.person_id })
+  }
+  return [{ label: '— Kosong —', value: NOBODY }, ...holders]
+}
 async function setTeam(role: string, value: unknown) {
   await send(`/team/${role}`, 'PUT', { person_id: value === NOBODY ? null : value }, 'Tim diperbarui')
 }
@@ -116,21 +122,33 @@ const accounts = computed(() => [...props.client.accounts].sort((a, b) =>
             Tim
           </h3>
         </template>
+        <p
+          v-if="!team.length"
+          class="text-sm text-muted"
+        >
+          Belum ada peran tim untuk {{ client.brand_name ?? 'Noktah Brand ini' }}.
+        </p>
         <UFormField
-          v-for="r in TEAM"
+          v-for="r in team"
           :key="r.key"
           :label="r.label"
           class="sm:grid sm:grid-cols-[10rem_minmax(0,1fr)] sm:items-center sm:gap-3"
         >
           <USelectMenu
             :model-value="client.team[r.key]?.person_id ?? NOBODY"
-            :items="peopleItems"
+            :items="teamItems(r.key)"
             value-key="value"
             :disabled="!canEdit"
             class="w-full"
             @update:model-value="v => setTeam(r.key, v)"
           />
         </UFormField>
+        <p
+          v-if="team.length && canEdit"
+          class="text-xs text-muted"
+        >
+          Hanya orang yang memegang peran itu yang bisa dipilih; beri perannya di halaman Orang.
+        </p>
       </UCard>
 
       <UCard :ui="{ body: 'space-y-3' }">

@@ -1,106 +1,128 @@
 """
-People and roles (US5, G-9, G-11, G-16). Every change is logged in
-`registry_changes` (entity person / person_email / person_role, FR-013).
+People: their details, emails, Units, roles and permissions (US5, G-11, G-16,
+migration 012). Every change is logged in `registry_changes` (entity person /
+person_email / person_unit / person_role / person_permission, FR-013).
 
 Who sees and manages whom:
-  - the Owner: everyone;
-  - other Managers: People holding an active role in one of their Noktah Brands,
-    plus People with NO active role (staff imported from WORKERS, new hires not yet
-    given a role) — otherwise a Brand Manager couldn't pick them for a team.
-Granting follows `permissions.may_grant`: a Brand Manager grants roles only in their
-own Noktah Brand and never brand_manager or owner; only the Owner appoints a BM.
+  - the Owner, and anyone in the Noktah group: everyone;
+  - others: People in one of their Units, plus People in no Unit yet (new hires,
+    staff imported from WORKERS), who would otherwise be unreachable.
+Changing a Person needs manage_people and the rules in `permissions`: roles only
+in Units within reach and never Owner or Brand Manager (the Owner's alone), and
+only permissions the manager holds. People holding Owner or Brand Manager are
+changed by the Owner only.
 
-A Person who leaves is never deleted: roles and team assignments end, sign-in stops
-(auth.load_caller requires status active), and history keeps their name.
+A Person who leaves is never deleted: roles, team assignments and permissions end,
+sign-in stops (auth.load_caller requires status active), and history keeps their name.
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import asyncpg
 
 from ..auth import Caller
 from ..errors import Conflict, Forbidden, Invalid, NotFound
-from ..permissions import ALL_ROLES, Action, Decision, can, may_grant
+from ..permissions import (OWNER_ONLY_ROLES, PERMISSIONS, in_scope, is_owner, may_give_permission, may_grant,
+                           may_manage, may_set_unit, normalize_permissions)
 from ..registry.changes import record_change
+from . import catalog
 
 PERSON_FIELDS = ("display_name", "jira_account_id", "slack_user_id", "status")
-
-
-def is_owner(caller: Caller) -> bool:
-    return any(a.role == "owner" for a in caller.assignments)
-
-
-def managed_brands(caller: Caller) -> List[str]:
-    return sorted({a.brand for a in caller.assignments
-                   if a.brand and can(caller.assignments, Action.MANAGE_PEOPLE, a.brand) is Decision.ALLOW})
 
 
 async def _roles(conn: asyncpg.Connection, person_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
     rows = await conn.fetch(
         """SELECT r.id::text AS id, r.person_id::text AS pid, r.role, b.brand_key
-           FROM person_roles r LEFT JOIN noktah_brands b ON b.id = r.noktah_brand_id
-           WHERE r.valid_to IS NULL AND r.person_id = ANY($1::uuid[]) ORDER BY r.valid_from""", person_ids)
+           FROM person_roles r JOIN noktah_brands b ON b.id = r.noktah_brand_id
+           LEFT JOIN unit_roles u ON u.noktah_brand_id = r.noktah_brand_id AND u.role = r.role
+           WHERE r.valid_to IS NULL AND r.person_id = ANY($1::uuid[])
+           ORDER BY b.kind DESC, b.brand_key, u.sort_order""", person_ids)
     out: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows:
         out.setdefault(r["pid"], []).append({"id": r["id"], "role": r["role"], "noktah_brand": r["brand_key"]})
     return out
 
 
-def visible(caller: Caller, roles: List[Dict[str, Any]], brands: List[str]) -> bool:
-    if is_owner(caller):
-        return True
-    return not roles or any(r["noktah_brand"] in brands for r in roles)
+async def _units(conn: asyncpg.Connection, person_ids: List[str]) -> Dict[str, List[str]]:
+    rows = await conn.fetch(
+        """SELECT u.person_id::text AS pid, b.brand_key FROM person_units u JOIN noktah_brands b ON b.id = u.noktah_brand_id
+           WHERE u.person_id = ANY($1::uuid[]) ORDER BY b.kind DESC, b.brand_key""", person_ids)
+    out: Dict[str, List[str]] = {}
+    for r in rows:
+        out.setdefault(r["pid"], []).append(r["brand_key"])
+    return out
 
 
-async def list_people(conn: asyncpg.Connection, caller: Caller, brands: List[str], status: str) -> List[Dict[str, Any]]:
+async def _permissions(conn: asyncpg.Connection, person_ids: List[str]) -> Dict[str, List[str]]:
+    rows = await conn.fetch(
+        "SELECT person_id::text AS pid, permission FROM person_permissions WHERE person_id = ANY($1::uuid[])",
+        person_ids)
+    out: Dict[str, List[str]] = {}
+    for r in rows:
+        out.setdefault(r["pid"], []).append(r["permission"])
+    return {pid: [p for p in PERMISSIONS if p in perms] for pid, perms in out.items()}
+
+
+def visible(caller: Caller, units: List[str]) -> bool:
+    return not units or any(in_scope(caller.access, u) for u in units)
+
+
+async def list_people(conn: asyncpg.Connection, caller: Caller, status: str) -> List[Dict[str, Any]]:
     rows = await conn.fetch(
         """SELECT p.id::text AS id, p.display_name, p.status, p.jira_account_id, p.slack_user_id, p.version,
                   COALESCE(array_agg(e.email ORDER BY e.created_at) FILTER (WHERE e.email IS NOT NULL), '{}') AS emails
            FROM people p LEFT JOIN person_emails e ON e.person_id = p.id
            WHERE ($1 = 'all' OR p.status = $1)
            GROUP BY p.id ORDER BY p.status, p.display_name""", status)
-    roles = await _roles(conn, [r["id"] for r in rows])
-    return [dict(r) | {"emails": list(r["emails"]), "roles": roles.get(r["id"], [])} for r in rows
-            if visible(caller, roles.get(r["id"], []), brands)]
+    ids = [r["id"] for r in rows]
+    roles, units, perms = await _roles(conn, ids), await _units(conn, ids), await _permissions(conn, ids)
+    return [dict(r) | {"emails": list(r["emails"]), "units": units.get(r["id"], []), "roles": roles.get(r["id"], []),
+                       "permissions": perms.get(r["id"], [])}
+            for r in rows if visible(caller, units.get(r["id"], []))]
 
 
-async def get_person(conn: asyncpg.Connection, caller: Caller, brands: List[str], person_id: str) -> Dict[str, Any]:
+async def get_person(conn: asyncpg.Connection, caller: Caller, person_id: str) -> Dict[str, Any]:
     row = await conn.fetchrow(
         """SELECT id::text AS id, display_name, status, jira_account_id, slack_user_id, version, left_at
            FROM people WHERE id = $1::uuid""", person_id)
     if row is None:
         raise NotFound("Orang tidak ditemukan.")
-    roles = (await _roles(conn, [person_id])).get(person_id, [])
-    if not visible(caller, roles, brands):
+    units = (await _units(conn, [person_id])).get(person_id, [])
+    if not visible(caller, units):
         raise NotFound("Orang tidak ditemukan.")
+    roles = (await _roles(conn, [person_id])).get(person_id, [])
+    perms = (await _permissions(conn, [person_id])).get(person_id, [])
     emails = [r["email"] for r in await conn.fetch(
         "SELECT email FROM person_emails WHERE person_id = $1::uuid ORDER BY created_at", person_id)]
     team = await conn.fetch(
-        """SELECT c.id::text AS client_id, c.display_name AS client, t.team_role FROM client_team_assignments t
-           JOIN clients c ON c.id = t.client_id WHERE t.person_id = $1::uuid AND t.valid_to IS NULL
+        """SELECT c.id::text AS client_id, c.display_name AS client, t.team_role, b.brand_key AS brand
+           FROM client_team_assignments t JOIN clients c ON c.id = t.client_id
+           LEFT JOIN noktah_brands b ON b.id = c.noktah_brand_id
+           WHERE t.person_id = $1::uuid AND t.valid_to IS NULL
            ORDER BY c.display_name""", person_id)
     hist = await conn.fetch(
         """SELECT r.id, r.entity, r.field, r.old_value, r.new_value, p.display_name AS person, r.at
            FROM registry_changes r LEFT JOIN people p ON p.id = r.person_id
-           WHERE r.entity IN ('person', 'person_email', 'person_role') AND r.entity_id = $1::uuid
+           WHERE r.entity IN ('person', 'person_email', 'person_unit', 'person_role', 'person_permission')
+             AND r.entity_id = $1::uuid
            ORDER BY r.at DESC, r.id DESC LIMIT 200""", person_id)
     return dict(row) | {
-        "left_at": row["left_at"].isoformat() if row["left_at"] else None, "emails": emails, "roles": roles,
+        "left_at": row["left_at"].isoformat() if row["left_at"] else None, "emails": emails,
+        "units": units, "roles": roles, "permissions": perms,
         "team": [dict(t) for t in team],
         "history": [{"id": h["id"], "entity": h["entity"], "field": h["field"], "old_value": h["old_value"],
                      "new_value": h["new_value"], "person": h["person"] or "Sistem", "at": h["at"].isoformat()}
                     for h in hist]}
 
 
-def require_manage(caller: Caller, roles: List[Dict[str, Any]]) -> None:
-    """May the caller edit this Person at all (name, IDs, emails, leaving)?"""
-    if is_owner(caller):
+def require_manage(caller: Caller, units: List[str], roles: List[Dict[str, Any]]) -> None:
+    """May the caller change this Person at all?"""
+    if is_owner(caller.access):
         return
-    mine = managed_brands(caller)
-    if not mine:
-        raise Forbidden("Peran Anda tidak bisa mengelola orang.")
-    if roles and not any(r["noktah_brand"] in mine for r in roles):
-        raise Forbidden("Orang ini ada di Noktah Brand lain.")
-    if any(r["role"] in ("owner", "brand_manager") for r in roles):
+    if not may_manage(caller.access):
+        raise Forbidden("Anda tidak punya izin mengelola orang.")
+    if units and not any(in_scope(caller.access, u) for u in units):
+        raise Forbidden("Orang ini di luar unit yang Anda kelola.")
+    if any(r["role"] in OWNER_ONLY_ROLES for r in roles):
         raise Forbidden("Hanya Owner yang bisa mengubah data Brand Manager atau Owner.")
 
 
@@ -126,8 +148,17 @@ async def add_email(conn: asyncpg.Connection, person_id: str, email: str, by: Op
                         person_id=by)
 
 
-async def create_person(conn: asyncpg.Connection, *, display_name: str, emails: List[str],
-                        jira_account_id: Optional[str], slack_user_id: Optional[str], by: Optional[str]) -> str:
+async def remove_email(conn: asyncpg.Connection, person_id: str, email: str, by: Optional[str]) -> None:
+    gone = await conn.fetchval("DELETE FROM person_emails WHERE person_id = $1::uuid AND email = $2 RETURNING email",
+                               person_id, email.strip().lower())
+    if gone is None:
+        raise NotFound("Email tidak ditemukan pada orang ini.")
+    await record_change(conn, entity="person_email", entity_id=person_id, field="email", old=gone, new=None,
+                        person_id=by)
+
+
+async def create_person(conn: asyncpg.Connection, *, display_name: str, jira_account_id: Optional[str],
+                        slack_user_id: Optional[str], by: Optional[str]) -> str:
     name = " ".join((display_name or "").split())
     if not name:
         raise Invalid("Nama wajib diisi.")
@@ -136,8 +167,6 @@ async def create_person(conn: asyncpg.Connection, *, display_name: str, emails: 
         name, (jira_account_id or "").strip() or None, (slack_user_id or "").strip() or None)
     await record_change(conn, entity="person", entity_id=pid, field="created", old=None, new={"name": name},
                         person_id=by)
-    for e in emails:
-        await add_email(conn, pid, e, by)
     return pid
 
 
@@ -179,13 +208,17 @@ async def update_person(conn: asyncpg.Connection, person_id: str, version: Optio
 
 
 async def mark_left(conn: asyncpg.Connection, person_id: str, by: Optional[str]) -> None:
-    """Leaving ends every role and team assignment; nothing is deleted."""
+    """Leaving ends every role, team assignment and permission; nothing else is deleted."""
     await conn.execute("UPDATE people SET status = 'left', left_at = now() WHERE id = $1::uuid", person_id)
     for r in await conn.fetch(
             """UPDATE person_roles SET valid_to = now() WHERE person_id = $1::uuid AND valid_to IS NULL
                RETURNING id::text AS id, role""", person_id):
         await record_change(conn, entity="person_role", entity_id=person_id, field=r["role"], old="active",
                             new="ended (keluar)", person_id=by)
+    for p in await conn.fetch(
+            "DELETE FROM person_permissions WHERE person_id = $1::uuid RETURNING permission", person_id):
+        await record_change(conn, entity="person_permission", entity_id=person_id, field=p["permission"],
+                            old=True, new=None, person_id=by)
     for t in await conn.fetch(
             """UPDATE client_team_assignments SET valid_to = now() WHERE person_id = $1::uuid AND valid_to IS NULL
                RETURNING client_id::text AS client_id, team_role""", person_id):
@@ -195,48 +228,96 @@ async def mark_left(conn: asyncpg.Connection, person_id: str, by: Optional[str])
         await conn.execute("UPDATE clients SET version = version + 1 WHERE id = $1::uuid", t["client_id"])
 
 
-async def grant_role(conn: asyncpg.Connection, caller: Caller, person_id: str, role: str, brand: Optional[str]) -> str:
-    if role not in ALL_ROLES:
-        raise Invalid("Peran tidak dikenal.")
-    brand = None if role == "owner" else brand
-    if role != "owner" and not brand:
-        raise Invalid("Pilih Noktah Brand untuk peran ini.")
-    if not may_grant(caller.assignments, role, brand):
-        raise Forbidden("Peran Anda tidak bisa memberi peran ini." if role not in ("brand_manager", "owner")
-                        else "Hanya Owner yang bisa mengangkat Brand Manager atau Owner.")
-    person = await lock_person(conn, person_id, None)
-    if person["status"] != "active":
-        raise Invalid("Orang ini sudah keluar.")
-    brand_id = None
-    if brand:
-        brand_id = await conn.fetchval("SELECT id FROM noktah_brands WHERE brand_key = $1", brand)
-        if brand_id is None:
-            raise Invalid("Noktah Brand tidak dikenal.")
+# ── Units ─────────────────────────────────────────────────────────────────────
+
+async def add_unit(conn: asyncpg.Connection, person_id: str, unit: str, by: Optional[str]) -> None:
+    """Put a Person in a Unit. `by` None is the system (a migration or the import)."""
+    uid = await catalog.unit_id(conn, unit)
+    if uid is None:
+        raise Invalid("Unit tidak dikenal.")
+    added = await conn.fetchval(
+        """INSERT INTO person_units (person_id, noktah_brand_id, added_by) VALUES ($1::uuid, $2::uuid, $3::uuid)
+           ON CONFLICT DO NOTHING RETURNING 1""", person_id, uid, by)
+    if added:
+        await record_change(conn, entity="person_unit", entity_id=person_id, field=unit, old=None, new=unit,
+                            person_id=by)
+
+
+async def remove_unit(conn: asyncpg.Connection, person_id: str, unit: str, by: Optional[str]) -> None:
+    uid = await catalog.unit_id(conn, unit)
+    if await conn.fetchval("SELECT 1 FROM person_roles WHERE person_id = $1::uuid AND noktah_brand_id = $2::uuid "
+                           "AND valid_to IS NULL", person_id, uid):
+        raise Invalid("Akhiri dulu peran orang ini di unit tersebut.")
+    await conn.execute("DELETE FROM person_units WHERE person_id = $1::uuid AND noktah_brand_id = $2::uuid",
+                       person_id, uid)
+    await record_change(conn, entity="person_unit", entity_id=person_id, field=unit, old=unit, new=None,
+                        person_id=by)
+
+
+# ── Roles ─────────────────────────────────────────────────────────────────────
+
+async def insert_role(conn: asyncpg.Connection, person_id: str, role: str, unit: str, by: Optional[str]) -> str:
+    """Record a role, no permission check: callers check (grant_role) or are the system."""
+    if not await catalog.role_exists(conn, role, unit):
+        raise Invalid("Peran ini tidak ada di unit tersebut.")
+    uid = await catalog.unit_id(conn, unit)
+    if not await conn.fetchval("SELECT 1 FROM person_units WHERE person_id = $1::uuid AND noktah_brand_id = $2::uuid",
+                               person_id, uid):
+        await add_unit(conn, person_id, unit, by)
     if role == "brand_manager":
         holder = await conn.fetchval(
             """SELECT p.display_name FROM person_roles r JOIN people p ON p.id = r.person_id
-               WHERE r.role = 'brand_manager' AND r.noktah_brand_id = $1 AND r.valid_to IS NULL""", brand_id)
+               WHERE r.role = 'brand_manager' AND r.noktah_brand_id = $1::uuid AND r.valid_to IS NULL
+                 AND r.person_id <> $2::uuid""", uid, person_id)
         if holder:
-            raise Invalid(f"{brand} sudah punya Brand Manager: {holder}. Akhiri perannya dulu.")
+            raise Invalid(f"{unit.capitalize()} sudah punya Brand Manager: {holder}. Akhiri perannya dulu.")
     try:
         role_id = await conn.fetchval(
             """INSERT INTO person_roles (person_id, role, noktah_brand_id, granted_by)
-               VALUES ($1::uuid, $2, $3, $4::uuid) RETURNING id::text""", person_id, role, brand_id, caller.person_id)
+               VALUES ($1::uuid, $2, $3::uuid, $4::uuid) RETURNING id::text""", person_id, role, uid, by)
     except asyncpg.UniqueViolationError:
         raise Invalid("Orang ini sudah memegang peran itu.")
     await record_change(conn, entity="person_role", entity_id=person_id, field=role, old=None,
-                        new={"role": role, "noktah_brand": brand}, person_id=caller.person_id)
+                        new={"role": role, "noktah_brand": unit}, person_id=by)
     return role_id
+
+
+def _refused_role(caller: Caller, role: str) -> str:
+    if role in OWNER_ONLY_ROLES:
+        return "Hanya Owner yang bisa mengangkat atau mengakhiri Brand Manager atau Owner."
+    if not may_manage(caller.access):
+        return "Anda tidak punya izin mengelola orang."
+    return "Peran ini di luar unit yang Anda kelola."
+
+
+async def ensure_role(conn: asyncpg.Connection, person_id: str, role: str, unit: str, by: Optional[str]) -> None:
+    """The system's grant (the Registry import): a no-op when the role is already held."""
+    if not await conn.fetchval(
+            """SELECT 1 FROM person_roles r JOIN noktah_brands b ON b.id = r.noktah_brand_id
+               WHERE r.person_id = $1::uuid AND r.role = $2 AND b.brand_key = $3 AND r.valid_to IS NULL""",
+            person_id, role, unit):
+        await insert_role(conn, person_id, role, unit, by)
+
+
+async def grant_role(conn: asyncpg.Connection, caller: Caller, person_id: str, role: str, unit: Optional[str]) -> str:
+    if not unit or not await catalog.role_exists(conn, role, unit):
+        raise Invalid("Peran ini tidak ada di unit tersebut.")
+    if not may_grant(caller.access, role, unit):
+        raise Forbidden(_refused_role(caller, role))
+    person = await lock_person(conn, person_id, None)
+    if person["status"] != "active":
+        raise Invalid("Orang ini sudah keluar.")
+    return await insert_role(conn, person_id, role, unit, caller.person_id)
 
 
 async def end_role(conn: asyncpg.Connection, caller: Caller, person_id: str, role_id: str) -> None:
     row = await conn.fetchrow(
-        """SELECT r.role, b.brand_key FROM person_roles r LEFT JOIN noktah_brands b ON b.id = r.noktah_brand_id
+        """SELECT r.role, b.brand_key FROM person_roles r JOIN noktah_brands b ON b.id = r.noktah_brand_id
            WHERE r.id = $1::uuid AND r.person_id = $2::uuid AND r.valid_to IS NULL""", role_id, person_id)
     if row is None:
         raise NotFound("Peran tidak ditemukan atau sudah berakhir.")
-    if not may_grant(caller.assignments, row["role"], row["brand_key"]):
-        raise Forbidden("Peran Anda tidak bisa mengakhiri peran ini.")
+    if not may_grant(caller.access, row["role"], row["brand_key"]):
+        raise Forbidden(_refused_role(caller, row["role"]))
     if row["role"] == "owner":
         owners = await conn.fetchval("SELECT count(*) FROM person_roles WHERE role = 'owner' AND valid_to IS NULL")
         if owners <= 1:
@@ -244,66 +325,122 @@ async def end_role(conn: asyncpg.Connection, caller: Caller, person_id: str, rol
     await conn.execute("UPDATE person_roles SET valid_to = now() WHERE id = $1::uuid", role_id)
     await record_change(conn, entity="person_role", entity_id=person_id, field=row["role"],
                         old={"role": row["role"], "noktah_brand": row["brand_key"]}, new=None, person_id=caller.person_id)
+    await _leave_teams(conn, person_id, row["role"], row["brand_key"], caller.person_id)
 
 
-async def remove_email(conn: asyncpg.Connection, person_id: str, email: str, by: Optional[str]) -> None:
-    gone = await conn.fetchval("DELETE FROM person_emails WHERE person_id = $1::uuid AND email = $2 RETURNING email",
-                               person_id, email.strip().lower())
-    if gone is None:
-        raise NotFound("Email tidak ditemukan pada orang ini.")
-    await record_change(conn, entity="person_email", entity_id=person_id, field="email", old=gone, new=None,
-                        person_id=by)
+async def _leave_teams(conn: asyncpg.Connection, person_id: str, role: str, brand: str, by: Optional[str]) -> None:
+    """A team slot needs its role: without it, the Person leaves that slot on the brand's Clients."""
+    name = await conn.fetchval("SELECT display_name FROM people WHERE id = $1::uuid", person_id)
+    for t in await conn.fetch(
+            """UPDATE client_team_assignments t SET valid_to = now()
+               FROM clients c JOIN noktah_brands b ON b.id = c.noktah_brand_id
+               WHERE c.id = t.client_id AND b.brand_key = $3 AND t.person_id = $1::uuid AND t.team_role = $2
+                 AND t.valid_to IS NULL
+               RETURNING t.client_id::text AS client_id""", person_id, role, brand):
+        await record_change(conn, entity="team", entity_id=t["client_id"], client_id=t["client_id"], field=role,
+                            old=name, new=None, person_id=by)
+        await conn.execute("UPDATE clients SET version = version + 1 WHERE id = $1::uuid", t["client_id"])
 
 
-def role_key(role: str, brand: Optional[str]) -> tuple:
-    return role, None if role == "owner" else brand
+# ── Permissions ───────────────────────────────────────────────────────────────
+
+async def set_permission(conn: asyncpg.Connection, person_id: str, permission: str, on: bool,
+                         by: Optional[str]) -> None:
+    if on:
+        await conn.execute(
+            """INSERT INTO person_permissions (person_id, permission, granted_by) VALUES ($1::uuid, $2, $3::uuid)
+               ON CONFLICT DO NOTHING""", person_id, permission, by)
+    else:
+        await conn.execute("DELETE FROM person_permissions WHERE person_id = $1::uuid AND permission = $2",
+                           person_id, permission)
+    await record_change(conn, entity="person_permission", entity_id=person_id, field=permission,
+                        old=None if on else True, new=True if on else None, person_id=by)
+
+
+# ── The profile form's one Save ───────────────────────────────────────────────
+
+def role_key(role: str, unit: Optional[str]) -> tuple:
+    return role, unit
 
 
 async def save_person(conn: asyncpg.Connection, caller: Caller, person_id: str, *, version: int,
-                      fields: Dict[str, Any], emails: List[str], roles: List[tuple]) -> None:
-    """The profile form's one Save: details, emails and roles in one transaction.
+                      fields: Dict[str, Any], emails: List[str], units: Iterable[str], roles: List[tuple],
+                      permissions: Iterable[str]) -> None:
+    """Details, emails, Units, roles and permissions in one transaction.
 
-    Only the differences are applied, each through the rule its single-change route
-    uses (require_manage for details and emails, may_grant for each role), so one
-    refused role or a taken email rolls the whole save back. Roles are ended before
-    new ones are granted, so replacing a Brand Manager works in one save.
+    Only the differences are applied, each by its own rule, so one refused role, a
+    permission the manager doesn't hold, or a taken email rolls the whole save back.
+    Units are added first and roles ended before Units are removed, so moving
+    someone between Units, or replacing a Brand Manager, works in one save.
     """
     current = await lock_person(conn, person_id, version)
     if current["status"] != "active":
         raise Invalid("Orang ini sudah keluar.")
+    have_units = (await _units(conn, [person_id])).get(person_id, [])
     have_roles = (await _roles(conn, [person_id])).get(person_id, [])
+    have_perms = set((await _permissions(conn, [person_id])).get(person_id, []))
 
     details = {k: v for k, v in fields.items() if k in ("display_name", "jira_account_id", "slack_user_id")}
     have_emails = [r["email"] for r in await conn.fetch(
         "SELECT email FROM person_emails WHERE person_id = $1::uuid", person_id)]
     want_emails = list(dict.fromkeys(clean_email(e) for e in emails))
+    want_units = list(dict.fromkeys(units))
+    want_roles = {role_key(r, u) for r, u in roles}
+    want_perms = normalize_permissions(permissions)
+    unknown = want_perms - set(PERMISSIONS)
+    if unknown:
+        raise Invalid(f"Izin tidak dikenal: {', '.join(sorted(unknown))}.")
+    for role, unit in want_roles:
+        if unit not in want_units:
+            raise Invalid("Setiap peran harus dari unit orang ini. Tambahkan unitnya dulu.")
     details_change = any(
         (" ".join((v or "").split()) if k == "display_name" else (v or "").strip() or None) != current[k]
         for k, v in details.items())
-    if details_change or set(want_emails) != set(have_emails):
-        require_manage(caller, have_roles)
+    have_role_keys = {(r["role"], r["noktah_brand"]) for r in have_roles}
+    if (details_change or set(want_emails) != set(have_emails) or set(want_units) != set(have_units)
+            or want_roles != have_role_keys or want_perms != have_perms):
+        require_manage(caller, have_units, have_roles)
+    by = caller.person_id
 
-    changed = False
     if details_change:
-        await update_person(conn, person_id, version, details, caller.person_id)
+        await update_person(conn, person_id, version, details, by)
+    changed = False
     for e in have_emails:
         if e not in want_emails:
-            await remove_email(conn, person_id, e, caller.person_id)
+            await remove_email(conn, person_id, e, by)
             changed = True
     for e in want_emails:
         if e not in have_emails:
-            await add_email(conn, person_id, e, caller.person_id)
+            await add_email(conn, person_id, e, by)
             changed = True
 
-    want_roles = {role_key(r, b) for r, b in roles}
+    for u in want_units:
+        if u not in have_units:
+            if not may_set_unit(caller.access, u):
+                raise Forbidden(f"Anda tidak bisa menambahkan orang ke unit {u.capitalize()}.")
+            await add_unit(conn, person_id, u, by)
+            changed = True
     for r in have_roles:
         if (r["role"], r["noktah_brand"]) not in want_roles:
             await end_role(conn, caller, person_id, r["id"])
             changed = True
-    have_keys = {(r["role"], r["noktah_brand"]) for r in have_roles}
-    for role, brand in sorted(want_roles - have_keys, key=lambda k: (k[0], k[1] or "")):
-        await grant_role(conn, caller, person_id, role, brand)
+    for u in have_units:
+        if u not in want_units:
+            if not may_set_unit(caller.access, u):
+                raise Forbidden(f"Anda tidak bisa melepas orang dari unit {u.capitalize()}.")
+            await remove_unit(conn, person_id, u, by)
+            changed = True
+    for role, unit in sorted(want_roles - have_role_keys):
+        await grant_role(conn, caller, person_id, role, unit)
         changed = True
+
+    for p in PERMISSIONS:
+        if (p in want_perms) != (p in have_perms):
+            if not may_give_permission(caller.access, p):
+                raise Forbidden("Anda hanya bisa mengatur izin yang Anda punya sendiri.")
+            await set_permission(conn, person_id, p, p in want_perms, by)
+            changed = True
+
     if changed and not details_change:
         await conn.execute("UPDATE people SET version = version + 1, updated_at = now() WHERE id = $1::uuid",
                            person_id)

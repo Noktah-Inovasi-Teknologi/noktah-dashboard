@@ -10,9 +10,9 @@ const FIELD: Record<string, string> = {
   created: 'Klien dibuat', display_name: 'Nama', status: 'Status', quota_post: 'Kuota Post',
   quota_story: 'Kuota Story', quota_short_video: 'Kuota Short Video', drive_folder_id: 'Folder Drive',
   content_plan_folder_id: 'Folder content plan', jira_component_id: 'Komponen Jira', noktah_brand: 'Noktah Brand',
-  account_executive: 'Account Executive', content_planner: 'Content Planner', field_associate: 'Field Associate',
-  content_editor: 'Content Editor', qc: 'QC', relation: 'Akun sosial'
+  relation: 'Akun sosial'
 }
+const { roleName } = useCatalog()
 const STATUS: Record<string, string> = { active: 'Aktif', pending: 'Menunggu', inactive: 'Tidak aktif' }
 const RELATION: Record<string, string> = { owned: 'milik klien', own: 'milik klien', competitor: 'pesaing' }
 const KINDS = [
@@ -24,7 +24,7 @@ const search = ref('')
 const shown = computed(() => {
   const q = search.value.trim().toLowerCase()
   return items.value.filter(h => (kind.value === 'all' || h.entity === kind.value)
-    && (!q || [FIELD[h.field] ?? h.field, show(h.old_value, h.field), show(h.new_value, h.field), h.person]
+    && (!q || [FIELD[h.field] ?? roleName(h.field), show(h.old_value, h.field), show(h.new_value, h.field), h.person]
       .some(x => x.toLowerCase().includes(q))))
 })
 const { page, pageRows, pageSize, total } = usePaged(shown)
@@ -95,7 +95,7 @@ function show(value: unknown, field: string): string {
       >
         <span class="absolute -start-[1.6rem] top-1.5 size-2.5 rounded-full bg-primary ring-4 ring-default" />
         <p class="text-sm">
-          <span class="font-medium">{{ FIELD[h.field] ?? h.field }}</span>
+          <span class="font-medium">{{ FIELD[h.field] ?? roleName(h.field) }}</span>
           <template v-if="h.field !== 'created'">
             : <template v-if="h.old_value !== null && h.old_value !== undefined">
               <span class="text-muted line-through decoration-1 break-words">{{ show(h.old_value, h.field) }}</span> →

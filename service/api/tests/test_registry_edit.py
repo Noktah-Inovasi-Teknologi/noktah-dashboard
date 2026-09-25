@@ -11,8 +11,8 @@ async def _setup(hub_db):
     async with hub_db.acquire() as conn:
         cid = await add_client(conn, "Klinik Mata Sampang", "eskala")
         await add_client(conn, "Ecky Dental Center", "venyu")
-        pm = await add_person(conn, "pm@noktah.co", "PM Eskala", "project_manager", "eskala")
-        await add_person(conn, "sm@noktah.co", "Sales Eskala", "sales_marketing", "eskala")
+        pm = await add_person(conn, "pm@noktah.co", "PM Eskala", "production_manager", "eskala")
+        await add_person(conn, "sm@noktah.co", "Sales Eskala", "sales_marketing", None)
         fa = await add_person(conn, "fa@noktah.co", "Nadya", "field_associate", "eskala")
         gone = await add_person(conn, "gone@noktah.co", "Sudah Keluar", None, None)
         await conn.execute("UPDATE people SET status = 'left' WHERE id = $1::uuid", gone)
