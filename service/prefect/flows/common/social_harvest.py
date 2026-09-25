@@ -8,6 +8,7 @@ returns a Dict[str, Any] with start_time/end_time/data/summary/error
 (constitution I), and sets end_time in a finally block (constitution V).
 """
 import asyncio
+import hashlib
 import logging
 import os
 from datetime import datetime, timezone
@@ -48,6 +49,12 @@ try:
         sheets_tab_row_count,
     )
     from ...tasks.utility_tasks import RateWindow, randomized_item_delay
+    from ...tasks.extraction_tasks import (
+        SpendCeilingExceeded,
+        extraction_cost_ceiling_check,
+        extraction_quarantine_record,
+        extraction_record_store,
+    )
 except ImportError:
     import sys
 
@@ -70,6 +77,12 @@ except ImportError:
         social_signal_record_metrics,
     )
     from tasks.run_tasks import run_record_finish, run_record_start
+    from tasks.extraction_tasks import (
+        SpendCeilingExceeded,
+        extraction_cost_ceiling_check,
+        extraction_quarantine_record,
+        extraction_record_store,
+    )
     from tasks.google_tasks import (
         drive_file_delete,
         drive_file_upload,
@@ -223,6 +236,108 @@ def _capture_kind_for(platform: str, content_type: str) -> Optional[str]:
         # it, which is noise rather than provenance.
         return "instagram_clip_stats" if content_type == "video" else "instagram_feed_stats"
     return None
+
+
+def _media_hash(local_paths: List[str]) -> str:
+    """Hash the media actually sent to the model — the cache key for FR-039.
+
+    Content identity, not file identity: the paths are temporary and the same
+    media re-downloaded lands at a different path every run, so hashing bytes is
+    the only thing that makes "unchanged input" answerable.
+
+    Best-effort. A hash we cannot compute must not abort a delivered item, and an
+    empty hash simply means this row cannot serve as a cache hit later — it
+    degrades the optimisation, never the record.
+    """
+    digest = hashlib.sha256()
+    try:
+        for path in sorted(local_paths):
+            with open(path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        return f"sha256:{digest.hexdigest()}"
+    except OSError:
+        return ""
+
+
+async def _extraction_ceiling_reached(run_logger, username: str, content_id: str) -> bool:
+    """Has the monthly EXTRACTION ceiling been reached? (FR-037a)
+
+    Returns True to skip this item's extraction. Collection is unaffected either
+    way — the caller still uploads the media, records the metrics and writes the
+    sheet row.
+
+    Checked per item rather than once per run because spend accrues DURING the
+    run: a single harvest that crosses the ceiling half way should stop there, not
+    at the next run's start. The query is one indexed SUM over two small tables,
+    which at this system's volume (hundreds of rows a month) costs far less than
+    the model call it guards.
+
+    Fails OPEN on an unexpected error. A ceiling that cannot be read is a
+    monitoring problem; refusing to extract because of it would turn a database
+    hiccup into silent data loss, and the per-run threshold plus the batch flows'
+    own checks remain in front of every large spend.
+    """
+    try:
+        await extraction_cost_ceiling_check(projection_usd=None)
+        return False
+    except SpendCeilingExceeded as e:
+        run_logger.error(
+            f"{username}/{content_id}: EXTRACTION DEFERRED — {e} "
+            f"Media and metrics are still being collected; only the extraction is skipped, "
+            f"and it can be backfilled next month.")
+        return True
+    except Exception as e:
+        run_logger.warning(
+            f"could not read the extraction spend ceiling ({e}); proceeding with extraction. "
+            f"The per-run threshold and the batch flows' own checks still apply.")
+        return False
+
+
+async def _record_structured_extraction(
+    platform: str, content_id: str, content_type: str, analysis: Dict[str, Any],
+    content_hash: str, account_id: Optional[str], run_id: Optional[str],
+) -> None:
+    """Store the structured extraction, or its quarantine record (feature 007).
+
+    Runs ALONGSIDE the existing prose write, never instead of it — this feature
+    is additive, and the reviewer-facing sheets and `harvested_signals` keep their
+    current shape and content.
+
+    The three outcomes are recorded on different tables, deliberately:
+
+      success     -> content_extractions + extraction_beats (+ attributes)
+      quarantined -> extraction_quarantine, with the raw output and both
+                     attempts' errors. NEVER content_extractions.
+      failed      -> extraction_quarantine, classified. A model/provider/media
+                     failure that never produced a validatable response is still
+                     an attempt whose outcome must be recorded — omitting it is
+                     the silent drop Constitution V calls the most dangerous
+                     failure mode in this system.
+    """
+    status = analysis.get("status")
+    provenance = analysis.get("provenance") or {}
+    usage = analysis.get("usage") or {}
+
+    if status == "success":
+        await extraction_record_store(
+            platform=platform, content_id=content_id, content_type=content_type,
+            analysis=analysis, provenance=provenance, usage=usage,
+            content_hash=content_hash, purpose="production",
+            account_id=account_id, run_id=run_id,
+        )
+        return
+
+    # `failure_kind` comes from roach where it classified the failure; the
+    # fallback is only for a pre-feature roach that does not send one, and
+    # 'provider_error' is the honest reading of "the call failed and we were not
+    # told how" — NOT a generic bucket for anything unclassified.
+    failure_kind = analysis.get("failure_kind") or "provider_error"
+    await extraction_quarantine_record(
+        platform=platform, content_id=content_id, failure_kind=failure_kind,
+        analysis=analysis, provenance=provenance, usage=usage,
+        purpose="production", run_id=run_id,
+    )
 
 
 async def _record_capture_outcomes(
@@ -903,14 +1018,51 @@ async def run_harvest(
                 staged_files.extend(local_paths)
                 rate_window.record()
 
-                try:
-                    analysis = await social_item_analyze(content_id, local_paths, content_type, client=harvest_name)
-                except Exception as e:
-                    # A failed analyze (timeout, provider error, …) must never abort the
-                    # run — record the item as failed so it's retained + retried next run.
-                    analysis = {"subtitle": "", "flow": "", "summary": "", "status": "failed", "error": str(e)}
+                # Feature 007 (FR-039): hash the media ACTUALLY SENT to the model,
+                # while the files still exist. They are unlinked immediately after
+                # the Drive upload below, so this cannot be deferred to the write.
+                content_hash = _media_hash(local_paths)
+
+                # Feature 007 (FR-037a): the monthly extraction ceiling is a HARD
+                # STOP, and it is checked before ANY costed run — which includes
+                # this one. The forward harvest is the *continuous* spender; a
+                # ceiling covering only the batch operations would leave the
+                # largest recurring spend ungated, and Constitution XI requires it
+                # be enforced rather than merely reported.
+                #
+                # Reaching it skips EXTRACTION ONLY. Media still uploads, metrics
+                # are still recorded, the sheet row is still written. Halting
+                # collection to save extraction spend would trade an irreplaceable
+                # observation for a replaceable one — the media is gone in 24h for
+                # a story and the counts are only observable now, whereas the
+                # extraction can be backfilled next month for a fraction of a cent.
+                if await _extraction_ceiling_reached(run_logger, username, content_id):
+                    analysis = {
+                        "status": "failed", "error": "monthly extraction spend ceiling reached",
+                        "failure_kind": "spend_ceiling_reached",
+                        "subtitle": "", "flow": "", "summary": "",
+                        "beats": [], "attributes": [], "usage": None, "provenance": {},
+                    }
+                    summary["items_extraction_deferred"] = summary.get("items_extraction_deferred", 0) + 1
+                else:
+                    try:
+                        analysis = await social_item_analyze(content_id, local_paths, content_type, client=harvest_name)
+                    except Exception as e:
+                        # A failed analyze (timeout, provider error, …) must never abort the
+                        # run — record the item as failed so it's retained + retried next run.
+                        analysis = {"subtitle": "", "flow": "", "summary": "", "status": "failed",
+                                    "error": str(e), "failure_kind": "provider_error"}
                 if analysis.get("status") == "failed":
                     run_logger.warning(f"{username}/{content_id}: analysis failed — {analysis.get('error')}")
+                elif analysis.get("status") == "quarantined":
+                    # Feature 007: the model produced output that failed validation
+                    # TWICE. Nothing is stored as an extraction — but the item is
+                    # still delivered below, exactly as a failed analysis always
+                    # has been (FR-022). Extraction failure never reduces
+                    # collection: the media is irreplaceable, the extraction is not.
+                    run_logger.warning(
+                        f"{username}/{content_id}: extraction quarantined "
+                        f"({analysis.get('failure_kind')}) — media and metrics still delivered")
 
                 # Upload media into the content-format subfolder.
                 format_name = _format_folder(content_type)
@@ -976,6 +1128,27 @@ async def run_harvest(
                     )
                 except Exception as e:
                     run_logger.warning(f"{username}/{content_id}: signal-store write failed (non-fatal): {e}")
+
+                # Feature 007: store the STRUCTURED extraction alongside today's
+                # prose write. The forward path writes BOTH; backfill writes only
+                # the new tables (research.md R10) — re-extraction produces a new
+                # subtitle, and harvested_signals holds exactly one row per item,
+                # so writing one back there would overwrite an irreplaceable
+                # transcript.
+                #
+                # Best-effort, for the same reason as the signal write above: this
+                # item's media has already reached Drive and its metrics are
+                # already recorded. Failing the harvest now would trade a
+                # collected observation for an extraction that can be retried.
+                try:
+                    await _record_structured_extraction(
+                        platform=platform, content_id=content_id, content_type=content_type,
+                        analysis=analysis, content_hash=content_hash,
+                        account_id=account_id, run_id=run_record_id,
+                    )
+                except Exception as e:
+                    run_logger.warning(
+                        f"{username}/{content_id}: structured-extraction write failed (non-fatal): {e}")
 
                 # Capture provenance (feature 005, FR-003): record whether each
                 # supplementary pass actually produced a value for THIS item, so

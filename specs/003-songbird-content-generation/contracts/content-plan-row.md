@@ -13,7 +13,7 @@ Two authorities constrain this contract, and both must be checked before changin
 ## The v5 layout (20 columns, in order)
 
 `No.`, `Tanggal`, `Waktu`, `Bentuk`, `Topik`, `Creator`, `Format`, `Purpose/Theme`,
-`Strategic Application`, `Kebutuhan Personil`, `Known Facts`, `Shoot Guide`, `Reference`,
+`Strategic Application`, `Kebutuhan Personil`, `Known Facts`, `Shoot Guide`, `Visualisasi Konten`,
 `Asset`, `Caption`, `Keterangan`, `Approval`, `Link Referensi`, `TicketID`, `Key`
 
 ### Columns songbird fills (`GENERATED_COLUMNS`)
@@ -29,7 +29,7 @@ Two authorities constrain this contract, and both must be checked before changin
 | `Purpose/Theme` | model `purpose_theme` | no | 1–2 sentences on the content's aim |
 | `Strategic Application` | model `strategic_application` | no | `Awareness` / `Consideration` / `Conversion` |
 | `Shoot Guide` | model `shoot_guide` | no | Post → `-`; Story/Short Video → scene-by-scene real-footage plan (shot, angle, blocking, ambience), hook in the first 3 seconds |
-| `Reference` | model `reference` | no | Post → slide-by-slide carousel design (`SLIDE n:` + Visual/Headline/Body/CTA, slide 2 a standalone hook); Video → reference link or flow; Story → frame flow + interactive elements |
+| `Visualisasi Konten` | model `visualisasi_konten` | yes (Jira description) | The content itself, never a link. Post → slide-by-slide carousel design (`SLIDE n:` + Visual/Headline/Body/CTA, slide 2 a standalone hook); Short Video → per scene `VISUAL:` / `TOS:` / `DIALOG:`; Story → per frame Visual/Headline/Body/CTA + interactive elements. Live sheets carry this column beside `Shoot Guide`; none has a `Reference` column. |
 | `Caption` | model `caption` | no | ready-to-post caption: hook first line, concise body, CTA, hashtags last |
 
 ### Columns left blank (production workflow owns them)

@@ -86,11 +86,17 @@ HIT_DISCLAIMER = "Performa audiens adalah bias dari pola historis dan tidak dija
 
 # The content-plan draft layout ("DRAFT v5"), matched column-for-column and in order.
 # The downstream Jira converter reads Topik/Tanggal/Bentuk (+ Format, Purpose/Theme,
-# Strategic Application, Shoot Guide), all of which are present here.
+# Strategic Application, Shoot Guide, Visualisasi Konten), all of which are present here.
+#
+# "Shoot Guide" and "Visualisasi Konten" are TWO columns on every live plan (checked
+# 2026-09-16 across all four clients' current sheets): the team added Shoot Guide
+# beside Visualisasi Konten rather than renaming it, and no live sheet has a
+# "Reference" column. The name-aligned live append silently blanks any column the
+# sheet lacks, so a draft column called "Reference" never reached a live plan.
 CONTENT_PLAN_COLUMNS = [
     "No.", "Tanggal", "Waktu", "Bentuk", "Topik", "Creator", "Format",
     "Purpose/Theme", "Strategic Application", "Kebutuhan Personil", "Known Facts",
-    "Shoot Guide", "Reference", "Asset", "Caption", "Keterangan", "Approval",
+    "Shoot Guide", "Visualisasi Konten", "Asset", "Caption", "Keterangan", "Approval",
     "Link Referensi", "TicketID", "Key",
 ]
 
@@ -98,7 +104,7 @@ CONTENT_PLAN_COLUMNS = [
 # the production workflow (scheduling, personnel, assets, approval, ticketing).
 GENERATED_COLUMNS = {
     "No.", "Tanggal", "Bentuk", "Topik", "Creator", "Format",
-    "Purpose/Theme", "Strategic Application", "Shoot Guide", "Reference", "Caption",
+    "Purpose/Theme", "Strategic Application", "Shoot Guide", "Visualisasi Konten", "Caption",
 }
 
 # `Creator` is a fixed value in the v5 plans — content originates from the brand.
@@ -108,13 +114,15 @@ DEFAULT_CREATOR = "Brand"
 # fallback when a model-chosen `bentuk` can't be recognised.
 DEFAULT_CONTENT_TYPES = ["Post", "Story", "Short Video"]
 
-# Per-content-type briefs for `shoot_guide` / `reference`, written to reproduce how the
-# v5 plans actually fill those two columns: Posts carry a slide-by-slide carousel design
-# and no shoot guide; Story/Short Video carry a scene-by-scene capture plan.
+# Per-content-type briefs for `shoot_guide` / `visualisasi_konten`, written to reproduce
+# how the live plans actually fill those two columns. On real rows Shoot Guide is the
+# capture plan (shot, angle, movement per scene; "-" for Posts) and Visualisasi Konten
+# is the content itself: per-slide Visual/Headline/Body for Posts, per-scene VISUAL /
+# TOS (text on screen) / DIALOG for videos. It is never just a link.
 _FORMAT_BRIEFS = {
     "Post": (
         "- shoot_guide: isi tanda '-' (Post tidak butuh pengambilan footage).\n"
-        "- reference: rancang sebagai CAROUSEL, tulis slide demi slide dengan struktur "
+        "- visualisasi_konten: rancang sebagai CAROUSEL, tulis slide demi slide dengan struktur "
         "'SLIDE n: <judul>' lalu 'Visual:', 'Headline:', 'Body Text:', dan CTA. Slide 1 = hook "
         "utama; SLIDE 2 HARUS berdiri sendiri sebagai hook kedua, karena Instagram menyajikan "
         "ulang carousel dengan slide 2 di depan bagi yang belum swipe. Slide terakhir = CTA.\n"
@@ -123,19 +131,21 @@ _FORMAT_BRIEFS = {
         "- shoot_guide: rencana pengambilan NYATA per scene ('Scene n (x detik): ...') — shot, "
         "angle, blocking, dan tekankan ambience nyata yang perlu direkam (lokasi, cahaya, mood, "
         "b-roll, tekstur) agar tidak terasa 100% AI.\n"
-        "- reference: alur Story antar-frame + elemen interaktif (polling/kuis/sticker) bila cocok.\n"
+        "- visualisasi_konten: isi tiap frame ('FRAME n:' lalu 'VISUAL:', 'HEADLINE:', "
+        "'BODY TEXT:', 'CTA:') + elemen interaktif (polling/kuis/sticker) bila cocok.\n"
     ),
     "Short Video": (
         "- shoot_guide: KONSEP + durasi + talent, lalu breakdown per scene "
         "('SCENE n: <nama> (Lokasi - x detik)') dengan Shot, Blocking, teks overlay, dan pacing. "
         "Scene 1 wajib hook 3 detik pertama.\n"
-        "- reference: link konten referensi bila ada, atau deskripsi alur/gaya editing.\n"
+        "- visualisasi_konten: isi tiap scene ('SCENE n: <nama>' lalu 'VISUAL:', 'TOS:' teks di "
+        "layar, 'DIALOG:' bila ada talent bicara). Ini KONTENNYA, bukan link referensi.\n"
     ),
 }
 # Fallback brief for any content type outside the standard three.
 _DEFAULT_FORMAT_BRIEF = (
     "- shoot_guide: panduan pengambilan footage nyata bila relevan, selain itu '-'.\n"
-    "- reference: alur konten atau referensi visual.\n"
+    "- visualisasi_konten: isi konten per slide/scene (Visual, teks di layar, dialog).\n"
 )
 # The draft matches the v5 layout exactly, so reviewers see the same sheet they always
 # do. The "why" behind each idea (adapted pattern, source exemplar, rationale) and the
@@ -146,12 +156,12 @@ DRAFT_HEADER = CONTENT_PLAN_COLUMNS
 
 # Required keys per generated idea (strict json_schema — contracts/generation-io.md).
 # `shoot_guide` = how to capture real footage (video/story only; "-" for posts);
-# `reference` = the slide-by-slide design flow for posts, or a reference for videos;
+# `visualisasi_konten` = the content per slide (posts) or per scene (video/story);
 # `caption` = the ready-to-post caption. `bentuk` is NOT requested — generation is
 # per content type, so the engine already knows it and asking wastes tokens.
 IDEA_KEYS = [
     "topik", "purpose_theme", "strategic_application",
-    "shoot_guide", "reference", "caption",
+    "shoot_guide", "visualisasi_konten", "caption",
     "adapted_pattern", "source_exemplar", "rationale",
 ]
 
@@ -538,7 +548,7 @@ def _idea_cells(idea: Dict[str, Any], date_str: str, row_number: int) -> Dict[st
         "Purpose/Theme": idea.get("purpose_theme", ""),
         "Strategic Application": idea.get("strategic_application", ""),
         "Shoot Guide": idea.get("shoot_guide", ""),
-        "Reference": idea.get("reference", ""),
+        "Visualisasi Konten": idea.get("visualisasi_konten", ""),
         "Caption": idea.get("caption", ""),
     }
 

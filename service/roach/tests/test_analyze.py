@@ -29,12 +29,21 @@ class FakeResp:
 def test_build_payload_has_provider_reasoning_and_schema(monkeypatch):
     monkeypatch.setattr(analyze, "PROVIDER_ORDER", ["xiaomi", "digitalocean"])
     monkeypatch.setattr(analyze, "ALLOW_FALLBACKS", True)
-    payload = analyze._build_payload("prompt", [], "xiaomi/mimo-v2.5", ["flow", "summary"], 3000)
+    vocab = analyze.load_vocabulary()
+    payload = analyze._build_payload(
+        "prompt", [], "xiaomi/mimo-v2.5", analyze.load_schema(vocabulary=vocab), 3000)
     assert payload["provider"] == {"order": ["xiaomi", "digitalocean"], "allow_fallbacks": True}
     assert payload["reasoning"] == {"enabled": False}
     assert payload["max_tokens"] == 3000
     schema = payload["response_format"]["json_schema"]["schema"]
-    assert set(schema["required"]) == {"flow", "summary"}
+    # The versioned schema, not an ad-hoc dict of string keys. Both paths request
+    # the identical key set now (FR-023) — the old ["subtitle","flow","summary"]
+    # vs ["flow","summary"] split is what made their output non-comparable.
+    assert set(schema["required"]) == {
+        "subtitle", "subtitle_absence", "beats", "attributes", "summary"}
+    # And the beat-function enum comes from the vocabulary, not from the file.
+    assert (set(schema["properties"]["beats"]["items"]["properties"]["function"]["enum"])
+            == set(vocab["beat_functions"]))
     # Usage accounting must be requested, or the response carries no `cost`.
     assert payload["usage"] == {"include": True}
 
@@ -64,9 +73,21 @@ def test_call_model_sends_attribution_headers_and_logs_usage(monkeypatch, capsys
         "prompt", [], "xiaomi/mimo-v2.5", ["flow", "summary"], 3000,
         call_site="analyze.images", client="Ecky Dental Center",
     )
-    assert result == {"flow": "f", "summary": "s"}
+    assert result.parsed == {"flow": "f", "summary": "s"}
     assert captured["headers"]["X-Title"] == analyze.APP_TITLE
     assert captured["headers"]["HTTP-Referer"] == analyze.APP_REFERER
+
+    # The usage object must be RETURNED, not merely logged. Logging it and
+    # discarding it is exactly what left this system with no cost baseline
+    # anywhere (research.md R3) — the numbers were observed and thrown away in
+    # the same breath, so nothing could ever be summed across runs.
+    assert result.usage == {
+        "prompt_tokens": 1200, "completion_tokens": 340,
+        "total_tokens": 1540, "cost_usd": 0.0021,
+    }
+    # Read off the response body, never assumed from the request: provider
+    # routing runs with allow_fallbacks, so these are different questions.
+    assert result.model_served == "xiaomi/mimo-v2.5"
 
     logged = capsys.readouterr().out
     assert "prompt_tokens=1200" in logged
@@ -90,9 +111,25 @@ def test_extract_json_strips_fences():
     assert analyze._extract_json('```json\n{"summary": "x"}\n```') == {"summary": "x"}
 
 
-def test_extract_json_recovers_from_surrounding_prose():
+def test_extract_json_does_NOT_recover_from_surrounding_prose():
+    """The inverse of what this test used to assert, deliberately.
+
+    It previously proved the regex fallback rescued a JSON object out of
+    surrounding prose. That fallback is the mechanism that made a response
+    truncated at max_tokens parse successfully with content silently missing
+    (FR-017), so feature 007 deletes it and this assertion is flipped rather than
+    removed — a deleted test would leave nothing recording that the old behaviour
+    is now forbidden.
+    """
     raw = 'Sure, here you go:\n{"summary": "x", "flow": "z"} \nHope that helps!'
-    assert analyze._extract_json(raw) == {"summary": "x", "flow": "z"}
+    with pytest.raises(json.JSONDecodeError):
+        analyze._extract_json(raw)
+
+
+def test_extract_json_still_strips_code_fences():
+    """Fence-stripping is retained: a ```json wrapper is a formatting artifact of
+    a COMPLETE response, not evidence of damage."""
+    assert analyze._extract_json('```json\n{"summary": "x"}\n```') == {"summary": "x"}
 
 
 def test_extract_json_raises_when_absent():
@@ -104,7 +141,7 @@ def test_call_model_retries_on_empty_then_parses(monkeypatch):
     responses = [FakeResp(""), FakeResp('{"flow": "a", "summary": "b"}')]
     monkeypatch.setattr(analyze.requests, "post", lambda *a, **kw: responses.pop(0))
     out = analyze._call_model("p", [], "m", ["flow", "summary"], 1000)
-    assert out == {"flow": "a", "summary": "b"}
+    assert out.parsed == {"flow": "a", "summary": "b"}
 
 
 def test_compress_video_falls_back_when_ffmpeg_missing(monkeypatch, tmp_path):
@@ -140,16 +177,31 @@ def test_analyze_images_caps_and_cleans_temps(monkeypatch, tmp_path):
     monkeypatch.setattr(analyze.shutil, "which", lambda name: None)
     captured = {}
 
-    def fake_call(prompt, parts, model, keys, max_tokens, call_site="analyze", client=None):
+    body = {
+        "subtitle": None, "subtitle_absence": "not_applicable_no_audio",
+        "beats": [{"position": 1, "function": "hook", "description": "d"}],
+        "attributes": [], "summary": "s",
+    }
+
+    def fake_call(prompt, parts, model, schema, max_tokens, call_site="analyze",
+                  client=None, history=None):
         captured["n_parts"] = len(parts)
         captured["call_site"] = call_site
         captured["client"] = client
-        return {"flow": "f", "summary": "s"}
+        return analyze.ModelCall(
+            parsed=dict(body), raw_text=json.dumps(body),
+            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "cost_usd": 0.0},
+            model_requested=model, model_served=model, provider=None, finish_reason="stop",
+        )
 
     monkeypatch.setattr(analyze, "_call_model", fake_call)
-    result = analyze.analyze_images(imgs, client="Ecky Dental Center")
+    _call, result = analyze.analyze_images(imgs, client="Ecky Dental Center")
     assert captured["n_parts"] == 2  # capped
-    assert result["subtitle"] == ""  # image path has no transcript
+    # The image path no longer back-fills subtitle to "". It states WHY there is
+    # no transcript, which is what makes "no audio" distinguishable from
+    # "transcription failed" and from "extraction never ran" (FR-010).
+    assert result.subtitle is None
+    assert result.subtitle_absence == "not_applicable_no_audio"
     # Attribution reaches the call so token usage can be logged per client/call site.
     assert captured["call_site"] == "analyze.images"
     assert captured["client"] == "Ecky Dental Center"

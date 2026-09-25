@@ -10,6 +10,12 @@ dependencies = [
     "gallery-dl>=1.27.0",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
+    # Already installed transitively (fastapi, gallery-dl, starlette, uvicorn all
+    # require it). Declared explicitly because analyze.py now reads the extraction
+    # vocabulary from config/extraction/vocabulary_v1.yaml at import time — an
+    # undeclared reliance on someone else's transitive dependency is one upstream
+    # change away from an ImportError at startup.
+    "pyyaml>=6.0",
 ]
 
 [dependency-groups]

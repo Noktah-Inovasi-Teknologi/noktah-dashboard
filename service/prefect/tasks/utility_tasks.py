@@ -16,6 +16,14 @@ from prefect import task
 from prefect.logging import get_run_logger
 from hashmap import WORKERS, FIELD_ASSOCIATE, CONTENT_EDITOR, COMPONENTS
 
+# Jira rejects an ADF text node that carries a newline or is empty, which is exactly
+# what a multi-line or unfilled spreadsheet cell produces. Every value that reaches
+# a Jira payload goes through this module first -- see tasks/jira_adf.py.
+try:
+    from . import jira_adf as adf
+except ImportError:  # standalone execution
+    import jira_adf as adf
+
 logger = logging.getLogger(__name__)
 
 
@@ -468,7 +476,7 @@ def convert_content_plan_row_to_jira_issue(
     component_hashmap: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
     """
-    Convert a content plan row to Jira issue type 10009 (Asset) format
+    Convert a content plan row to Jira issue type 10009 (Content) format
 
     Args:
         row: Content plan row data
@@ -486,11 +494,12 @@ def convert_content_plan_row_to_jira_issue(
         component_hashmap = COMPONENTS
     
     try:
-        # Extract summary from "Topik" column
-        summary = row.get("Topik", "")
+        # Extract summary from "Topik" column. A summary is a plain string, so a
+        # multi-line or over-long Topik is rejected by Jira, not truncated by it.
+        summary = adf.clean_summary(row.get("Topik", ""))
         if not summary:
             logger.warning(f"No 'Topik' column found in row: {row}")
-            summary = "Content Asset"
+            summary = "Content"
         
         # Get component ID from hashmap
         component_id = component_hashmap.get(client_name)
@@ -535,13 +544,54 @@ def convert_content_plan_row_to_jira_issue(
         # Get Content Type from "Bentuk" column
         content_type = row.get("Bentuk", "")
         
+        # Description body. Every value is routed through the ADF builders: they
+        # turn newlines into hardBreak nodes and drop empty text nodes, the two
+        # things Jira rejects the whole issue over (see tasks/jira_adf.py).
+        # labelled_block is for the multi-line fields -- a bold label on its own
+        # line, then the value as its own paragraphs, matching the previous layout.
+        description_blocks = [
+            adf.labelled_paragraph(
+                "Tanggal dan Waktu",
+                f"{row.get('Tanggal', '')} {row.get('Waktu', '')}",
+            ),
+            adf.labelled_paragraph("Bentuk", content_type),
+            adf.labelled_paragraph("Creator", row.get("Creator", "")),
+            adf.labelled_paragraph("Format", row.get("Format", "")),
+            adf.labelled_paragraph("Purpose/Theme", row.get("Purpose/Theme", "")),
+            adf.labelled_paragraph("Strategic Application", row.get("Strategic Application", "")),
+            adf.labelled_paragraph("Kebutuhan Personil", row.get("Kebutuhan Personil", "")),
+            # "Shoot Guide" and "Visualisasi Konten" are two separate columns on
+            # the live sheet (Shoot Guide sits at column L, Visualisasi Konten at
+            # M), not one column under two names. They used to be merged with
+            # `or`, which silently dropped Visualisasi Konten whenever Shoot
+            # Guide was filled -- 60 rows across the saved runs -- and mislabelled
+            # it as "Shoot Guide" on the 2,679 rows where only it was filled.
+            # Emit each under its own label; labelled_block yields just the
+            # label when a column is empty or absent (pre-rename sheets).
+            *adf.labelled_block("Shoot Guide", row.get("Shoot Guide", "")),
+            *adf.labelled_block("Visualisasi Konten", row.get("Visualisasi Konten", "")),
+            *adf.labelled_block("Reference", row.get("Reference", "")),
+            # "Asset" here is the content-plan COLUMN (the produced asset's
+            # link), not the Jira issue type -- that was renamed to "Content"
+            # and is selected by id 10009 below. Renaming this string would
+            # silently read an absent column and blank the field.
+            *adf.labelled_block("Asset", row.get("Asset", "")),
+            *adf.labelled_block("Caption", row.get("Caption", "")),
+            adf.labelled_paragraph("Approval", row.get("Approval", "")),
+            adf.labelled_paragraph("Link Referensi", row.get("Link Referensi", "")),
+            # Placeholders the assignee fills in on the ticket itself.
+            adf.labelled_paragraph("Revisi", ""),
+            adf.labelled_paragraph("Link Contoh Footage", ""),
+            adf.labelled_paragraph("PIC", ""),
+        ]
+
         # Build Jira issue structure for type 10009
         jira_issue = {
             "fields": {
                 "project": {
                     "key": "ESKL"
                 },
-                "summary": str(summary).strip(),
+                "summary": summary,  # already cleaned + length-capped by adf.clean_summary
                 "issuetype": {
                     "id": "10009"
                 },
@@ -550,146 +600,7 @@ def convert_content_plan_row_to_jira_issue(
                         "id": component_id
                     }
                 ] if component_id else [],
-                "description": {
-                    "type": "doc",
-                    "version": 1,
-                    "content": [
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": "Tanggal dan Waktu: ", "marks": [{"type": "strong"}]},
-                                {"type": "text", "text": f"{row.get('Tanggal', '')} {row.get('Waktu', '')}"}
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": "Bentuk: ", "marks": [{"type": "strong"}]},
-                                {"type": "text", "text": str(content_type)}
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": "Creator: ", "marks": [{"type": "strong"}]},
-                                {"type": "text", "text": str(row.get('Creator', ''))}
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": "Format: ", "marks": [{"type": "strong"}]},
-                                {"type": "text", "text": str(row.get('Format', ''))}
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": "Purpose/Theme: ", "marks": [{"type": "strong"}]},
-                                {"type": "text", "text": str(row.get('Purpose/Theme', ''))}
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": "Strategic Application: ", "marks": [{"type": "strong"}]},
-                                {"type": "text", "text": str(row.get('Strategic Application', ''))}
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": "Kebutuhan Personil: ", "marks": [{"type": "strong"}]},
-                                {"type": "text", "text": str(row.get('Kebutuhan Personil', ''))}
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": "Shoot Guide: ", "marks": [{"type": "strong"}]},
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                # Renamed from "Visualisasi Konten"; fall back to the old
-                                # column name so pre-rename (Jan–Jul) sheets still process.
-                                {"type": "text", "text": format_text_field_uniform(row.get('Shoot Guide') or row.get('Visualisasi Konten', ''))}
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": "Reference: ", "marks": [{"type": "strong"}]},
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": format_text_field_uniform(row.get('Reference', ''))}
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": "Asset: ", "marks": [{"type": "strong"}]},
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": format_text_field_uniform(row.get('Asset', ''))}
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": "Caption: ", "marks": [{"type": "strong"}]},
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": format_text_field_uniform(row.get('Caption', ''))}
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": "Approval: ", "marks": [{"type": "strong"}]},
-                                {"type": "text", "text": str(row.get('Approval', ''))}
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": "Link Referensi: ", "marks": [{"type": "strong"}]},
-                                {"type": "text", "text": str(row.get('Link Referensi', ''))}
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": "Revisi: ", "marks": [{"type": "strong"}]},
-                                {"type": "text", "text": ""}
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": "Link Contoh Footage: ", "marks": [{"type": "strong"}]},
-                                {"type": "text", "text": ""}
-                            ]
-                        },
-                        {
-                            "type": "paragraph",
-                            "content": [
-                                {"type": "text", "text": "PIC: ", "marks": [{"type": "strong"}]},
-                                {"type": "text", "text": ""}
-                            ]
-                        }
-                    ]
-                },
+                "description": adf.document(description_blocks),
                 "customfield_10040": publication_date,  # Publication date
                 "customfield_10041": None,  # Category - empty value
                 "customfield_10042": {  # Field Associate
@@ -715,6 +626,11 @@ def convert_content_plan_row_to_jira_issue(
             }
         }
         
+        # Final pass over the assembled payload: catches any raw sheet value that
+        # reaches a Jira field without going through the builders above (a newline
+        # in "Bentuk" would be rejected the same way one in the description is).
+        jira_issue = adf.sanitize_issue(jira_issue)
+
         # Add metadata for tracking
         jira_issue["metadata"] = {
             "client_name": client_name,

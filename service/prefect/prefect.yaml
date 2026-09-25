@@ -529,3 +529,45 @@ deployments:
       profiles: ["https://www.instagram.com/sebayadental/"]
       days: 31
     pull: *app_dir
+
+  # ---------------------------------------------------------------------------
+  # Structured extraction (feature 007-structured-extraction)
+  # ---------------------------------------------------------------------------
+
+  # Vocabulary sync — reconciles config/extraction/vocabulary_v1.yaml into
+  # extraction_vocabulary_terms. UNSCHEDULED on purpose: a vocabulary change has a
+  # migration-shaped blast radius (every stored beat is interpreted against the
+  # version it recorded), so it is a deliberate act, not something that should
+  # drift in on a cron. Run it after editing the YAML.
+  - name: extraction-vocabulary-sync
+    entrypoint: flows/extraction_vocabulary_sync.py:extraction_vocabulary_sync
+    work_pool: *noktah_pool
+    tags: [extraction, vocabulary]
+    parameters: {}
+    pull: *app_dir
+
+  # Backfill — re-extract already-collected items under the current schema.
+  # UNSCHEDULED: it SPENDS MODEL TOKENS and is triggered by hand. Defaults to
+  # --dry-run, which makes zero model calls and reports scope + projection.
+  # Gates before any spend: uncalibrated-honest projection, per-run threshold
+  # (EXTRACTION_SPEND_THRESHOLD_USD), hard monthly ceiling
+  # (EXTRACTION_MONTHLY_CEILING_USD, extraction spend only).
+  - name: roach-extract-backfill
+    entrypoint: flows/roach_extract_backfill.py:roach_extract_backfill
+    work_pool: *noktah_pool
+    tags: [extraction, backfill, costed]
+    parameters:
+      dry_run: true
+    pull: *app_dir
+
+  # Calibration — controlled two-model agreement over a FIXED sample.
+  # UNSCHEDULED and COSTED: every sampled item is extracted twice, so it spends
+  # roughly double per item. Refuses to report a figure below the minimum sample,
+  # and short-circuits with zero calls when both paths resolve to one model.
+  - name: roach-extract-calibrate
+    entrypoint: flows/roach_extract_calibrate.py:roach_extract_calibrate
+    work_pool: *noktah_pool
+    tags: [extraction, calibration, costed]
+    parameters:
+      dry_run: true
+    pull: *app_dir

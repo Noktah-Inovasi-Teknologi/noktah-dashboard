@@ -221,6 +221,56 @@ page produces the same observation, so it is **never** recorded as `deleted`.
 `deleted` requires an explicit platform not-found, which only the download path
 can observe.
 
+## Structured extraction (feature 007)
+
+Migration 009 adds seven tables and one view: `content_extractions`,
+`extraction_beats`, `extraction_attributes`, `extraction_quarantine`,
+`extraction_vocabulary_terms`, `calibration_sample_members`,
+`extraction_batch_runs`, plus `extraction_status`. Nothing is added to
+`harvested_signals` — this feature is additive alongside it, never through it.
+
+Its **one `ALTER` widens `runs.kind`** to accept `'extraction'`, by DROP + ADD
+with a strict superset. Same shape as 008's `chk_capture_outcomes_kind` change,
+and the only constraint replacement this file permits. A costed extraction batch
+IS a run — it has a flow name, timing, a status and a summary, all of which `runs`
+already holds — so `extraction_batch_runs` is a detail table on it rather than a
+parallel run table.
+
+Five details that are easy to get wrong:
+
+- **The beats FK targets the vocabulary's FULL primary key** `(version, dimension,
+  term)`, not `(version, term)`. Targeting the shorter key needs
+  `UNIQUE (version, term)`, which forbids two dimensions sharing a term string in
+  one version — and a future attribute dimension publishing `hook` is entirely
+  plausible. That would make FR-043a false the moment S-05 lands. The constant
+  `dimension` column on the beat row costs one byte and keeps the door open.
+- **A beat is held to its parent's vocabulary version by an FK, not a CHECK** —
+  a row-level CHECK cannot reference another table. That needs the otherwise
+  redundant `uq_extraction_id_vocab UNIQUE (id, vocabulary_version)` on the
+  parent, because Postgres requires a unique constraint covering exactly the
+  referenced columns.
+- **`extraction_quarantine` records outcomes where NO model call happened** —
+  `media_unavailable`, `spend_ceiling_reached`. `raw_output` and `model_served`
+  are nullable for exactly that. The table is the record of every attempt's
+  outcome, not only of bad model output. There is **no `other`** in
+  `failure_kind`: an escape hatch would absorb precisely the novel failures worth
+  noticing, and it is the axis FR-020's counts group by.
+- **Three things in `extraction_batch_runs` deliberately have no constraint.**
+  `items_unclassified = 0` is not a CHECK — SC-010 wants unclassified outcomes
+  *counted*, and a constraint would make the run fail to write its own summary
+  rather than report the defect. The outcome counts summing to `items_in_scope`
+  is only true once `runs.ended_at` is set, so it is a zero-row test query, like
+  beat contiguity. `actual_usd` within ±25% of the projection is a *finding*, not
+  a rejection.
+- **`extraction_status` branch order is load-bearing**: `never_attempted` must be
+  tested before the version-comparison branches, or an item with no rows falls
+  through into `superseded_version_only`. Its item universe is the UNION of
+  `harvested_signals` and `content_extractions` — driven by extractions alone, an
+  item never extracted would vanish, having neither a result nor a reason.
+
+Contiguity, "≥1 beat", and batch accounting are cross-row invariants with no row
+constraint available; each has a zero-row query asserted by test.
+
 ## Naming
 
 Flows: `roster-sync`, `spine-backfill`, `field-availability-sync`,

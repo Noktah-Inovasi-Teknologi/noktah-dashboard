@@ -14,7 +14,6 @@ from pydantic import BaseModel
 
 import analyze as analyze_mod
 import collect
-
 # A bug inside roach (a signature drift, a typo, a bad attribute) is not a
 # platform failure, and must not be dressed up as one. The catch-alls below
 # return a well-formed `{ok: false, code: "*_failed"}` envelope, which the
@@ -24,7 +23,11 @@ import collect
 # same handler sits in front of the 404/429 paths whose classification the
 # flow's skip / back-off logic depends on. These propagate instead, so they
 # surface loudly (traceback in the roach log, hard failure in the tests).
-INTERNAL_BUG_ERRORS = (TypeError, AttributeError, NameError, ImportError)
+#
+# Defined in analyze.py so there is exactly one definition: the analysis path
+# needs the same carve-out (its catch-all reports `{status: "failed"}`, which is
+# just as absorbent), and two copies of a classification rule is one too many.
+from analyze import INTERNAL_BUG_ERRORS
 
 
 @asynccontextmanager
@@ -77,11 +80,47 @@ class AnalyzeRequest(BaseModel):
     # is, so the caller labels the call and roach echoes it into the token-usage
     # log. Optional: an unlabeled call still analyzes, it just logs client=-.
     client: str | None = None
+    # Force a specific model, bypassing media-based routing. For the controlled
+    # agreement comparison ONLY, which must send identical input to two NAMED
+    # models (FR-027). Left unset by harvest and backfill, which keep routing.
+    model: str | None = None
 
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/extraction-config")
+def extraction_config(x_api_key: str | None = Header(default=None)):
+    """The model routing and versions THIS SERVICE is actually configured with.
+
+    roach is the authority on its own model selection, and nothing else can be.
+    `OPENROUTER_IMAGE_MODEL` is set in `service/roach/.env`, which the Prefect
+    containers do not load — so a caller that reads its OWN environment to decide
+    "are these two paths different models?" gets the wrong answer. It sees one
+    model where there are two, concludes no cross-model comparison applies, and
+    silently skips a measurement that was entirely possible.
+
+    That is a false negative in exactly the shape this feature exists to prevent,
+    which is why the calibration flow asks here instead of guessing.
+
+    Behind the API key: not because model names are secret, but because every
+    other endpoint that describes this service's behaviour is.
+    """
+    _require_api_key(x_api_key)
+    vocab = analyze_mod.load_vocabulary()
+    return {
+        "ok": True,
+        "video_model": analyze_mod.MODEL,
+        "image_model": analyze_mod.IMAGE_MODEL,
+        "cross_model": analyze_mod.MODEL != analyze_mod.IMAGE_MODEL,
+        "prompt_version": analyze_mod.PROMPT_VERSION,
+        "schema_version": analyze_mod.SCHEMA_VERSION,
+        "vocabulary_version": vocab["version"],
+        "video_max_tokens": analyze_mod.VIDEO_MAX_TOKENS,
+        "image_max_tokens": analyze_mod.IMAGE_MAX_TOKENS,
+    }
 
 
 @app.post("/list")
@@ -139,5 +178,33 @@ def download_item(req: DownloadRequest, x_api_key: str | None = Header(default=N
 @app.post("/analyze")
 def analyze_item(req: AnalyzeRequest, x_api_key: str | None = Header(default=None)):
     _require_api_key(x_api_key)
-    result = analyze_mod.analyze_item(req.local_paths, req.content_type, client=req.client)
-    return {"ok": True, "content_id": req.content_id, "analysis": result}
+    result = analyze_mod.analyze_item(
+        req.local_paths, req.content_type, client=req.client, model_override=req.model)
+    # ALL outcomes — success, quarantined, and failed — return 200 OK.
+    #
+    # A quarantine is NOT an HTTP error. The `{ok: false, code, reason}` envelope
+    # means *platform* failure, and the harvest flow BRANCHES on it: 404 skips
+    # the profile, 429 backs off and rotates egress. A model that wrote malformed
+    # JSON is neither a platform failure nor a roach bug — dressing it as a 429
+    # would make the flow back off from a perfectly healthy profile, and as a 404
+    # would make it skip the profile entirely. This mirrors how analysis failure
+    # has always been reported here: `status` inside a successful response.
+    #
+    # `.claude/rules/backend/roach.md` records this exact mistake being made
+    # before, when adding `stories_only` to `list_profile` produced tests
+    # asserting `500 == 404` and `500 == 429`.
+    #
+    # `usage` and `provenance` are lifted onto the envelope: they describe the
+    # CALL, not the content, and the caller stores them on different columns.
+    # `usage` carries the provider's measured cost (FR-038) — roach used to log
+    # it and throw it away, which is why no cost baseline existed anywhere
+    # (research.md R3). `provenance` names the model that actually served the
+    # request and the media path actually taken, neither of which is safely
+    # inferable from the request (FR-024).
+    return {
+        "ok": True,
+        "content_id": req.content_id,
+        "analysis": {k: v for k, v in result.items() if k not in ("usage", "provenance")},
+        "usage": result.get("usage"),
+        "provenance": result.get("provenance") or {},
+    }

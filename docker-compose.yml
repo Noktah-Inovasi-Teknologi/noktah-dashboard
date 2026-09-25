@@ -47,6 +47,12 @@ services:
       # it is edited in the repo and reviewed as a diff, never from inside the
       # container.
       - ./config/field_availability.yaml:/app/config/field_availability.yaml:ro
+      # Extraction schema + vocabulary (feature 007), read-only for the same
+      # reason. ONE declaration serving three consumers — roach's response_format,
+      # roach's client-side validation, and this service's storage-boundary
+      # re-validation. Mounted into roach as well; declared three times it would
+      # drift silently.
+      - ./config/extraction:/app/config/extraction:ro
       # Shared DB pool/transaction helpers — same reason again.
       - ./service/prefect/db.py:/app/db.py
       - social_data:/data
@@ -110,6 +116,8 @@ services:
       - ./service/prefect/hashmap.py:/app/hashmap.py
       # Field availability determinations (feature 005), read-only. See above.
       - ./config/field_availability.yaml:/app/config/field_availability.yaml:ro
+      # Extraction schema + vocabulary (feature 007), read-only. See above.
+      - ./config/extraction:/app/config/extraction:ro
       # Shared DB pool/transaction helpers — same reason.
       - ./service/prefect/db.py:/app/db.py
       - social_data:/data
@@ -199,6 +207,11 @@ services:
     volumes:
       - ./service/roach/data:/app/data
       - ./service/roach/secrets:/app/secrets
+      # Extraction schema + vocabulary (feature 007), read-only. The SAME files
+      # the Prefect service mounts — roach builds its response_format and runs
+      # client-side validation from them, Prefect re-validates at the storage
+      # boundary. One declaration, three consumers.
+      - ./config/extraction:/app/config/extraction:ro
       - social_data:/data
     networks:
       - dashboard-networks
