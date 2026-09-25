@@ -355,12 +355,9 @@ cd service/api && uv run pytest               # API tests (real-Postgres ones ne
 #   hub-sheet-check      Mon 06:00    same, full diff; rewrites cells edited in the sheet
 #   hub-intake-purge     01:30 daily  Intake raw material > 12 months (excerpts kept forever)
 #   hub-registry-import  manual       ONE-TIME sheet → Registry import; validate-only default
-#   hub-notes-process    manual       old AnythingLLM notes → Intakes; dry run default
 docker exec prefect python flows/hub_registry_import.py            # difference report, writes nothing
 docker exec prefect python flows/hub_registry_import.py --apply    # real import; pauses roster-sync
 docker exec prefect python flows/hub_sheet_sync.py --validate-only # cells it would write
-docker exec prefect python flows/hub_notes_process.py              # zero model calls, projected spend
-docker exec prefect python flows/hub_notes_process.py --apply      # real run; stops at the AI cap
 ```
 **After the import the Hub is the only place Clients, teams and accounts are edited.** The
 Clients and Hashmaps tabs become read-only copies (a note on A1 says so) that the

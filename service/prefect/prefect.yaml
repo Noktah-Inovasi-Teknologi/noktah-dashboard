@@ -102,18 +102,6 @@ deployments:
       - prefect.deployments.steps.set_working_directory:
           directory: /app
 
-  # Old AnythingLLM notes → Intakes (FR-040). No schedule. dry_run defaults to true
-  # (zero model calls, projected spend); the real run is `--param dry_run=false`.
-  - name: hub-notes-process
-    entrypoint: flows/hub_notes_process.py:hub_notes_process_flow
-    work_pool:
-      name: noktah-pool
-    parameters:
-      dry_run: true
-    pull:
-      - prefect.deployments.steps.set_working_directory:
-          directory: /app
-
   # Removes Intake raw material older than 12 months (FR-036); excerpts stay forever.
   # 01:30, before the 02:00 backup, so the backup never holds material past its term.
   - name: hub-intake-purge

@@ -18,8 +18,17 @@ const STATUS: Record<Status, { label: string, color: 'info' | 'warning' | 'succe
 const CHANNEL: Record<ClientRequest['channel'], string> = { whatsapp_group: 'WhatsApp grup', meeting: 'Rapat', email: 'Email', lainnya: 'Lainnya' }
 const STATUS_ITEMS = (Object.keys(STATUS) as Status[]).map(value => ({ label: STATUS[value].label, value }))
 const CHANNEL_ITEMS = (Object.keys(CHANNEL) as ClientRequest['channel'][]).map(value => ({ label: CHANNEL[value], value }))
-const FILTERS = [{ label: 'Semua', value: 'all' }, ...STATUS_ITEMS]
-const shown = computed(() => filter.value === 'all' ? items.value : items.value.filter(r => r.status === filter.value))
+const FILTERS = [{ label: 'Semua status', value: 'all' }, ...STATUS_ITEMS]
+const CHANNEL_FILTERS = [{ label: 'Semua kanal', value: 'all' }, ...CHANNEL_ITEMS]
+const search = ref('')
+const channel = ref<string>('all')
+const shown = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  return items.value.filter(r => (filter.value === 'all' || r.status === filter.value)
+    && (channel.value === 'all' || r.channel === channel.value)
+    && (!q || r.text.toLowerCase().includes(q) || (r.requested_by ?? '').toLowerCase().includes(q)))
+})
+const { page, pageRows, pageSize, total } = usePaged(shown, 10)
 
 const adding = ref(false)
 const form = reactive({ requested_on: new Date().toISOString().slice(0, 10), text: '', requested_by: '', is_pic: true, channel: 'whatsapp_group' as ClientRequest['channel'], link: '' })
@@ -45,6 +54,9 @@ function openChange(r: ClientRequest) {
   reason.value = ''
   link.value = r.link ?? ''
 }
+const changeDirty = computed(() => !!changing.value && (nextStatus.value !== changing.value.status
+  || !sameForm(link.value, changing.value.link)
+  || (nextStatus.value === 'ditolak' && !sameForm(reason.value, changing.value.reject_reason))))
 async function saveChange() {
   if (!changing.value) return
   try {
@@ -65,11 +77,24 @@ async function saveChange() {
 <template>
   <div class="space-y-4">
     <div class="flex flex-wrap items-center gap-2">
+      <UInput
+        v-model="search"
+        icon="i-lucide-search"
+        placeholder="Cari isi atau nama…"
+        class="w-full sm:w-64"
+        aria-label="Cari permintaan"
+      />
       <USelect
         v-model="filter"
         :items="FILTERS"
         class="w-40"
         aria-label="Filter status"
+      />
+      <USelect
+        v-model="channel"
+        :items="CHANNEL_FILTERS"
+        class="w-40"
+        aria-label="Filter kanal"
       />
       <UButton
         v-if="me?.can.edit_profil"
@@ -87,14 +112,14 @@ async function saveChange() {
     <UEmpty
       v-else-if="!shown.length"
       icon="i-lucide-inbox"
-      title="Belum ada permintaan"
+      :title="items.length ? 'Tidak ada permintaan yang cocok dengan filter' : 'Belum ada permintaan'"
     />
     <ul
       v-else
       class="space-y-3"
     >
       <li
-        v-for="r in shown"
+        v-for="r in pageRows"
         :key="r.id"
       >
         <UCard :ui="{ body: 'space-y-2' }">
@@ -137,6 +162,12 @@ async function saveChange() {
         </UCard>
       </li>
     </ul>
+    <ListPager
+      v-if="shown.length"
+      v-model:page="page"
+      :total="total"
+      :page-size="pageSize"
+    />
 
     <UModal
       v-model:open="adding"
@@ -247,7 +278,7 @@ async function saveChange() {
           />
           <UButton
             label="Simpan"
-            :disabled="nextStatus === 'ditolak' && !reason.trim()"
+            :disabled="!changeDirty || (nextStatus === 'ditolak' && !reason.trim())"
             @click="saveChange"
           />
         </div>

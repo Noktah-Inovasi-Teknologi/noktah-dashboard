@@ -291,8 +291,9 @@ writer. Details that are easy to get wrong:
   change that version's YAML. A changed field list is `card_v2.yaml`, never an edit.
 - **The Intake cache is a unique index**: `(client_id, content_hash) WHERE status <>
   'failed'`. A failed Intake doesn't block a retry of the same content; a
-  successful one makes the retry a cache hit (no second model call). Old notes are
-  idempotent by `uq_intakes_old_note_source` on `source_ref`.
+  successful one makes the retry a cache hit (no second model call). The one-time
+  old-notes run (done 2026-09-25, code removed since) was idempotent by
+  `uq_intakes_old_note_source` on `source_ref`; its `old_note` Intakes stay.
 - **`chk_intakes_failure_reason` has the load-bearing `IS NOT NULL`**, for the same
   reason as `capture_outcomes` (a NULL reason would pass the CHECK).
 - **`registry_changes` is the sheet copy's clock.** `hub_sync_state.last_change_id`
@@ -324,8 +325,7 @@ Feature 006 adds the flows `velocity-derive` (monthly) and `observation-backfill
 (one-time, unscheduled).
 
 Feature 008 adds the flows `hub-summary-refresh`, `hub-sheet-sync` (also deployed as
-`hub-sheet-check`), `hub-intake-purge`, `hub-registry-import` and `hub-notes-process`,
-all calling `hub-api` through the one task `hub.internal.call`.
+`hub-sheet-check`), `hub-intake-purge` and `hub-registry-import`, all calling `hub-api` through the one task `hub.internal.call`.
 
 ---
 

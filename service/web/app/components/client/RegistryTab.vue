@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { ClientForm } from '~/composables/useClientForm'
 import type { ClientRecord, Person } from '~/types/hub'
 
 /**
@@ -29,30 +30,21 @@ async function send(path: string, method: 'PATCH' | 'PUT' | 'POST', body: Record
 }
 
 // ── details ──────────────────────────────────────────────────────────────────
-const STATUS_ITEMS = [{ label: 'Aktif', value: 'active' }, { label: 'Menunggu', value: 'pending' }, { label: 'Tidak aktif', value: 'inactive' }]
-function fromClient() {
-  const c = props.client
-  return {
-    name: c.name, status: c.status, quota_post: c.quotas.post, quota_story: c.quotas.story,
-    quota_short_video: c.quotas.short_video, drive_folder_id: c.drive_folder_id ?? '',
-    content_plan_folder_id: c.content_plan_folder_id ?? '', jira_component_id: c.jira_component_id ?? ''
-  }
-}
-const form = reactive(fromClient())
-watch(() => props.client.version, () => Object.assign(form, fromClient()))
-const dirty = computed(() => JSON.stringify(form) !== JSON.stringify(fromClient()))
+const form = ref<ClientForm>(clientForm(props.client))
+const resetDetails = () => (form.value = clientForm(props.client))
+watch(() => props.client.version, resetDetails)
+const dirty = computed(() => !sameForm(form.value, clientForm(props.client)))
 const saving = ref(false)
 async function saveDetails() {
   saving.value = true
-  const before = fromClient() as Record<string, unknown>
+  const before = clientForm(props.client) as unknown as Record<string, unknown>
   const changes: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(form)) {
-    if (v !== before[k]) changes[k] = typeof v === 'string' ? (v.trim() || null) : (v ?? null)
+  for (const [k, v] of Object.entries(form.value)) {
+    if (!sameForm(v, before[k])) changes[k] = typeof v === 'string' ? (v.trim() || null) : (v ?? null)
   }
   await send('', 'PATCH', changes)
   saving.value = false
 }
-const QUOTAS = [{ key: 'quota_post', label: 'Post' }, { key: 'quota_story', label: 'Story' }, { key: 'quota_short_video', label: 'Short Video' }] as const
 
 // ── team ─────────────────────────────────────────────────────────────────────
 const TEAM = [
@@ -93,77 +85,10 @@ const accounts = computed(() => [...props.client.accounts].sort((a, b) =>
           Data klien
         </h3>
       </template>
-      <div class="grid gap-3 sm:grid-cols-2">
-        <UFormField
-          label="Nama"
-          class="sm:col-span-2"
-        >
-          <UInput
-            v-model="form.name"
-            :disabled="!canEdit"
-            class="w-full"
-          />
-        </UFormField>
-        <UFormField label="Status">
-          <USelect
-            v-model="form.status"
-            :items="STATUS_ITEMS"
-            :disabled="!canEdit"
-            class="w-full"
-          />
-        </UFormField>
-        <UFormField label="Komponen Jira">
-          <UInput
-            v-model="form.jira_component_id"
-            :disabled="!canEdit"
-            class="w-full"
-          />
-        </UFormField>
-      </div>
-      <fieldset>
-        <legend class="text-sm font-medium mb-2">
-          Kuota per bulan
-        </legend>
-        <div class="grid grid-cols-3 gap-3">
-          <UFormField
-            v-for="q in QUOTAS"
-            :key="q.key"
-            :label="q.label"
-          >
-            <UInputNumber
-              v-model="form[q.key]"
-              :min="0"
-              :disabled="!canEdit"
-              class="w-full"
-            />
-          </UFormField>
-        </div>
-      </fieldset>
-      <div class="grid gap-3">
-        <UFormField
-          label="Folder Drive"
-          help="ID folder, bukan tautan."
-        >
-          <UTextarea
-            v-model="form.drive_folder_id"
-            :rows="1"
-            autoresize
-            :disabled="!canEdit"
-            class="w-full"
-            :ui="{ base: 'font-mono text-xs break-all resize-none' }"
-          />
-        </UFormField>
-        <UFormField label="Folder content plan">
-          <UTextarea
-            v-model="form.content_plan_folder_id"
-            :rows="1"
-            autoresize
-            :disabled="!canEdit"
-            class="w-full"
-            :ui="{ base: 'font-mono text-xs break-all resize-none' }"
-          />
-        </UFormField>
-      </div>
+      <ClientFields
+        v-model="form"
+        :disabled="!canEdit"
+      />
       <div
         v-if="canEdit"
         class="flex justify-end gap-2"
@@ -172,8 +97,8 @@ const accounts = computed(() => [...props.client.accounts].sort((a, b) =>
           color="neutral"
           variant="ghost"
           label="Batal"
-          :disabled="!dirty"
-          @click="Object.assign(form, fromClient())"
+          :disabled="!dirty || saving"
+          @click="resetDetails"
         />
         <UButton
           label="Simpan"

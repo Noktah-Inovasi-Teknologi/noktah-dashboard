@@ -122,33 +122,24 @@ async def find_cached(conn: asyncpg.Connection, client_id: str, content_hash: st
 # ── run ───────────────────────────────────────────────────────────────────────
 
 async def run_intake(conn: asyncpg.Connection, d: Definition, *, client_id: str, source: Source,
-                     submitted_by: Optional[str], call_site: str = "hub.intake",
-                     intake_id: Optional[str] = None) -> IntakeOutcome:
-    """Run one Intake for one Client. `intake_id` re-runs an existing row (an old note
-    assigned to a Client). Raises AiCapReached at the cap; every other failure is
-    recorded on the Intake row and returned."""
-    if intake_id is None:
-        cached = await find_cached(conn, client_id, source.content_hash)
-        if cached:
-            return IntakeOutcome(cached, cached=True)
+                     submitted_by: Optional[str], call_site: str = "hub.intake") -> IntakeOutcome:
+    """Run one Intake for one Client. Raises AiCapReached at the cap; every other
+    failure is recorded on the Intake row and returned."""
+    cached = await find_cached(conn, client_id, source.content_hash)
+    if cached:
+        return IntakeOutcome(cached, cached=True)
     await budget.check_budget(conn)
 
-    if intake_id is None:
-        try:
-            intake_id = await conn.fetchval(
-                """INSERT INTO intakes (client_id, kind, raw_text, raw_blob, raw_mime, source_ref, content_hash,
-                                        submitted_by, prompt_version)
-                   VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8::uuid, $9) RETURNING id::text""",
-                client_id, source.kind, source.text, source.raw_blob, source.raw_mime, source.source_ref,
-                source.content_hash, submitted_by, prompt.PROMPT_VERSION)
-        except asyncpg.UniqueViolationError:
-            # An identical submission won the race; it is the cache hit.
-            return IntakeOutcome(await find_cached(conn, client_id, source.content_hash) or "", cached=True)
-    else:
-        await conn.execute(
-            """UPDATE intakes SET client_id = $2::uuid, status = 'processing', failure_reason = NULL,
-                                  prompt_version = $3 WHERE id = $1::uuid""",
-            intake_id, client_id, prompt.PROMPT_VERSION)
+    try:
+        intake_id = await conn.fetchval(
+            """INSERT INTO intakes (client_id, kind, raw_text, raw_blob, raw_mime, source_ref, content_hash,
+                                    submitted_by, prompt_version)
+               VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8::uuid, $9) RETURNING id::text""",
+            client_id, source.kind, source.text, source.raw_blob, source.raw_mime, source.source_ref,
+            source.content_hash, submitted_by, prompt.PROMPT_VERSION)
+    except asyncpg.UniqueViolationError:
+        # An identical submission won the race; it is the cache hit.
+        return IntakeOutcome(await find_cached(conn, client_id, source.content_hash) or "", cached=True)
 
     outcome = IntakeOutcome(intake_id)
     ctx = await _context(conn, client_id, source)

@@ -82,7 +82,6 @@ const ROUTES: Route[] = [
   { slug: 'client-riwayat', path: `${CLIENT}?tab=riwayat`, states: ['full', 'empty'] },
   { slug: 'approvals', path: '/approvals', states: ['full', 'empty', 'down'] },
   { slug: 'people', path: '/people', states: ['full', 'empty', 'down'] },
-  { slug: 'notes', path: '/notes', states: ['full', 'empty', 'down'], shellStates: true },
   // Person detail: an active PM (idOf(901)) and a leaver (idOf(904)).
   { slug: 'person', path: '/people/00000000-0000-4000-8000-000000000901', states: ['full', 'down'], shellStates: true },
   { slug: 'person-left', path: '/people/00000000-0000-4000-8000-000000000904', states: ['full'] },

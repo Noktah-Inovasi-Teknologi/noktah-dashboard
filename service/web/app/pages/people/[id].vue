@@ -1,9 +1,10 @@
 <script setup lang="ts">
+import type { PersonForm } from '~/composables/usePersonForm'
 import type { Person, RegistryChange } from '~/types/hub'
 
 /**
- * One Person: details, emails (all sign in as this Person, G-16), roles (granted by
- * the rules in G-9), current teams, and history. "Tandai keluar" ends roles and
+ * One Person: profile (name, IDs, emails that all sign in as this Person (G-16), and
+ * any number of roles, granted by the rules in G-9), current teams, and history. "Tandai keluar" ends roles and
  * team assignments and stops sign-in; the Person and their history stay (G-32).
  */
 interface PersonDetail extends Person {
@@ -21,13 +22,12 @@ const { data: person, error } = await useFetch<PersonDetail>(() => `/api/hub/v1/
 useSeoMeta({ title: () => (person.value ? `${person.value.display_name} · Noktah Hub` : 'Orang · Noktah Hub') })
 
 const canManage = computed(() => (me.value?.can.manage_people ?? false) && person.value?.status === 'active')
-const brandName = (key: string | null) => (key ? key.charAt(0).toUpperCase() + key.slice(1) : '')
 const TEAM_LABEL: Record<string, string> = {
   account_executive: 'Account Executive', content_planner: 'Content Planner', field_associate: 'Field Associate',
   content_editor: 'Content Editor', qc: 'QC'
 }
 
-async function call(path: string, method: 'POST' | 'PATCH' | 'DELETE', body?: Record<string, unknown>, done = 'Tersimpan') {
+async function call(path: string, method: 'POST' | 'PATCH' | 'PUT', body?: Record<string, unknown>, done = 'Tersimpan') {
   try {
     person.value = await $fetch<PersonDetail>(`/api/hub/v1/people/${id.value}${path}`, { method, body })
     toast.add({ color: 'success', title: done })
@@ -39,34 +39,17 @@ async function call(path: string, method: 'POST' | 'PATCH' | 'DELETE', body?: Re
   }
 }
 
-// ── details ──────────────────────────────────────────────────────────────────
-const form = reactive({ display_name: '', jira_account_id: '', slack_user_id: '' })
-const reset = () => Object.assign(form, {
-  display_name: person.value?.display_name ?? '', jira_account_id: person.value?.jira_account_id ?? '',
-  slack_user_id: person.value?.slack_user_id ?? ''
-})
-watch(person, reset, { immediate: true })
-const dirty = computed(() => !!person.value && (form.display_name !== person.value.display_name
-  || form.jira_account_id !== (person.value.jira_account_id ?? '') || form.slack_user_id !== (person.value.slack_user_id ?? '')))
-const saveDetails = () => call('', 'PATCH', { version: person.value!.version, ...form })
-
-// ── emails ───────────────────────────────────────────────────────────────────
-const newEmail = ref('')
-async function addEmail() {
-  if (await call('/emails', 'POST', { email: newEmail.value }, 'Email ditambahkan')) newEmail.value = ''
-}
-
-// ── roles ────────────────────────────────────────────────────────────────────
-const grantable = computed(() => Object.keys(ROLE_LABELS)
-  .filter(r => me.value?.can.appoint_bm || !['owner', 'brand_manager'].includes(r))
-  .map(r => ({ label: ROLE_LABELS[r]!, value: r })))
-const brandItems = computed(() => (me.value?.brands ?? []).map(b => ({ label: brandName(b), value: b })))
-const grant = reactive({ role: 'account_executive', brand: '' })
-watch(brandItems, (items) => {
-  if (!grant.brand && items[0]) grant.brand = items[0].value
-}, { immediate: true })
-async function grantRole() {
-  await call('/roles', 'POST', { role: grant.role, brand: grant.role === 'owner' ? null : grant.brand }, 'Peran diberikan')
+// ── profile: details, emails and roles, one Save ─────────────────────────────
+const form = ref<PersonForm>(personForm(person.value))
+const reset = () => (form.value = personForm(person.value))
+watch(person, reset)
+const roleItems = useRoleItems(me, () => person.value?.roles ?? [])
+const dirty = computed(() => !!person.value && !sameForm(personFormKey(form.value), personFormKey(personForm(person.value))))
+const saving = ref(false)
+async function save() {
+  saving.value = true
+  await call('', 'PUT', { version: person.value!.version, ...personBody(form.value) })
+  saving.value = false
 }
 
 // ── leaving ──────────────────────────────────────────────────────────────────
@@ -139,37 +122,17 @@ function historyLine(h: RegistryChange): string {
         />
 
         <div class="grid gap-4 xl:grid-cols-2 items-start">
-          <UCard :ui="{ body: 'space-y-3' }">
+          <UCard :ui="{ body: 'space-y-4' }">
             <template #header>
               <h3 class="font-medium text-highlighted">
-                Data
+                Profil
               </h3>
             </template>
-            <UFormField label="Nama">
-              <UInput
-                v-model="form.display_name"
-                :disabled="!canManage"
-                class="w-full"
-              />
-            </UFormField>
-            <div class="grid gap-3 sm:grid-cols-2">
-              <UFormField label="Jira account ID">
-                <UInput
-                  v-model="form.jira_account_id"
-                  :disabled="!canManage"
-                  class="w-full"
-                  :ui="{ base: 'font-mono text-xs' }"
-                />
-              </UFormField>
-              <UFormField label="Slack user ID">
-                <UInput
-                  v-model="form.slack_user_id"
-                  :disabled="!canManage"
-                  class="w-full"
-                  :ui="{ base: 'font-mono text-xs' }"
-                />
-              </UFormField>
-            </div>
+            <PersonFields
+              v-model="form"
+              :role-items="roleItems"
+              :disabled="!canManage"
+            />
             <div
               v-if="canManage"
               class="flex flex-wrap justify-end gap-2"
@@ -187,133 +150,14 @@ function historyLine(h: RegistryChange): string {
                 color="neutral"
                 variant="ghost"
                 label="Batal"
-                :disabled="!dirty"
+                :disabled="!dirty || saving"
                 @click="reset"
               />
               <UButton
                 label="Simpan"
+                :loading="saving"
                 :disabled="!dirty || !form.display_name.trim()"
-                @click="saveDetails"
-              />
-            </div>
-          </UCard>
-
-          <UCard :ui="{ body: 'space-y-3' }">
-            <template #header>
-              <h3 class="font-medium text-highlighted">
-                Email
-              </h3>
-            </template>
-            <p class="text-xs text-muted">
-              Semua email ini masuk sebagai orang yang sama.
-            </p>
-            <ul
-              v-if="person.emails.length"
-              class="divide-y divide-default"
-            >
-              <li
-                v-for="e in person.emails"
-                :key="e"
-                class="flex items-center gap-2 py-2"
-              >
-                <span class="min-w-0 break-all text-sm">{{ e }}</span>
-                <UButton
-                  v-if="canManage"
-                  class="ms-auto"
-                  size="xs"
-                  color="neutral"
-                  variant="ghost"
-                  icon="i-lucide-x"
-                  :aria-label="`Lepas ${e}`"
-                  @click="call(`/emails/${encodeURIComponent(e)}`, 'DELETE', undefined, 'Email dilepas')"
-                />
-              </li>
-            </ul>
-            <p
-              v-else
-              class="text-sm text-muted"
-            >
-              Belum ada email: orang ini belum bisa masuk ke Hub.
-            </p>
-            <div
-              v-if="canManage"
-              class="flex gap-2"
-            >
-              <UInput
-                v-model="newEmail"
-                type="email"
-                placeholder="nama@contoh.com"
-                class="min-w-0 flex-1"
-                aria-label="Email baru"
-                @keydown.enter="addEmail"
-              />
-              <UButton
-                label="Tambah"
-                :disabled="!newEmail.includes('@')"
-                @click="addEmail"
-              />
-            </div>
-          </UCard>
-
-          <UCard :ui="{ body: 'space-y-3' }">
-            <template #header>
-              <h3 class="font-medium text-highlighted">
-                Peran
-              </h3>
-            </template>
-            <ul
-              v-if="person.roles.length"
-              class="divide-y divide-default"
-            >
-              <li
-                v-for="r in person.roles"
-                :key="r.id"
-                class="flex flex-wrap items-center gap-2 py-2"
-              >
-                <span class="text-sm font-medium">{{ ROLE_LABELS[r.role] ?? r.role }}</span>
-                <UBadge
-                  v-if="r.noktah_brand"
-                  :label="brandName(r.noktah_brand)"
-                  color="neutral"
-                  variant="outline"
-                />
-                <UButton
-                  v-if="me?.can.manage_people && (me?.can.appoint_bm || !['owner', 'brand_manager'].includes(r.role))"
-                  class="ms-auto"
-                  size="xs"
-                  color="neutral"
-                  variant="ghost"
-                  label="Akhiri"
-                  @click="call(`/roles/${r.id}/end`, 'POST', undefined, 'Peran berakhir')"
-                />
-              </li>
-            </ul>
-            <p
-              v-else
-              class="text-sm text-muted"
-            >
-              Belum ada peran. Tanpa peran Manager, orang ini tidak bisa masuk ke Hub.
-            </p>
-            <div
-              v-if="canManage"
-              class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,10rem)_auto]"
-            >
-              <USelect
-                v-model="grant.role"
-                :items="grantable"
-                aria-label="Peran"
-                class="w-full"
-              />
-              <USelect
-                v-model="grant.brand"
-                :items="brandItems"
-                :disabled="grant.role === 'owner'"
-                aria-label="Noktah Brand"
-                class="w-full"
-              />
-              <UButton
-                label="Beri peran"
-                @click="grantRole"
+                @click="save"
               />
             </div>
           </UCard>
