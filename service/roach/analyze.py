@@ -1,4 +1,4 @@
-"""Per-item content analysis via OpenRouter, on the accepted models in config/ai/models.yaml.
+"""Per-item content analysis via OpenRouter, on the accepted models in shared/noktah_ai/models.yaml.
 
 Video items send the full video (visuals + audio) in one call and get a subtitle
 transcript, content-flow breakdown, and summary. Image/carousel items (no audio)
@@ -18,15 +18,15 @@ from pathlib import Path
 
 import requests
 import yaml
+from noktah_ai import rotation
 
-import model_rotation
 from extraction_models import ExtractionInvalid, validate_extraction
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Video analysis needs an audio+video-capable model. Image/carousel analysis uses
-# a separate, cheaper vision model. Both come from config/ai/models.yaml (cases
+# a separate, cheaper vision model. Both come from shared/noktah_ai/models.yaml (cases
 # `video` and `image`), each an ordered list that rotates to the next model after
-# repeated failures (model_rotation.py). OPENROUTER_MODEL / OPENROUTER_IMAGE_MODEL
+# repeated failures (noktah_ai.rotation). OPENROUTER_MODEL / OPENROUTER_IMAGE_MODEL
 # no longer choose anything; a warning at startup says so if they are still set.
 #
 # NOTE ON WHY: this split originally existed because the video model's providers
@@ -39,12 +39,11 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # capability rationale in this comment would have made a stale constraint look
 # like a live one, and it is exactly the kind of inherited "we can't" that stops
 # anyone re-testing it.
-ROTATIONS = model_rotation.load()
-VIDEO_MODELS = ROTATIONS["video"]
-IMAGE_MODELS = ROTATIONS["image"]
+VIDEO_MODELS = rotation.for_case("video")
+IMAGE_MODELS = rotation.for_case("image")
 for _var in ("OPENROUTER_MODEL", "OPENROUTER_IMAGE_MODEL"):
     if os.environ.get(_var):
-        print(f"[models] {_var} is set but ignored: models come from {model_rotation.models_file()}", flush=True)
+        print(f"[models] {_var} is set but ignored: models come from {rotation.MODELS_FILE}", flush=True)
 
 # OpenRouter provider routing: same model, deterministic providers. Xiaomi is the
 # primary (it hosts MiMo directly); the rest are ordered fallbacks used only when
@@ -683,7 +682,7 @@ def _validated_call(
     raise AssertionError("unreachable")  # pragma: no cover
 
 
-def _rotated_call(models: model_rotation.Rotation, model_override: str | None, prompt: str, parts: list[dict],
+def _rotated_call(models: rotation.Rotation, model_override: str | None, prompt: str, parts: list[dict],
                   max_tokens: int, call_site: str, client: str | None, vocab: dict, schema: dict):
     """`_validated_call` on the case's current model, reporting the outcome to its rotation.
 

@@ -2,9 +2,9 @@
 import pytest
 
 import analyze
-import model_rotation
+from noktah_ai import rotation as model_rotation
 from extraction_models import ExtractionInvalid
-from model_rotation import Rotation
+from noktah_ai.rotation import Rotation
 
 
 class Clock:

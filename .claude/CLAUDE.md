@@ -268,8 +268,10 @@ model a case uses depends on roach's in-memory rotation. Ask `GET /extraction-co
 locally reports "no cross-model comparison applies" while roach is demonstrably serving two
 different models.
 
-### AI models: one accepted list per case (`config/ai/models.yaml`)
+### AI models: one accepted list per case (`shared/noktah_ai/`)
 ```bash
+# The list and the rotation rules live in shared/noktah_ai (models.yaml + rotation.py),
+# mounted at /app/noktah_ai in api, roach, prefect and prefect-worker. One copy.
 # Which models each case may use, best value first; edit, then restart (no rebuild):
 docker-compose restart api roach prefect prefect-worker
 # What roach is using right now, per case, with its rotation state:
@@ -287,7 +289,9 @@ slower and costlier for no better score. Two rules:
 "transcribes" by reading burned-in captions), and **every model must be served by a provider
 the OpenRouter account allows** (openrouter.ai/settings/privacy), or its calls fail with 404.
 `OPENROUTER_MODEL`, `OPENROUTER_IMAGE_MODEL`, `HUB_INTAKE_MODEL` and `HUB_SUMMARY_MODEL` no
-longer choose anything.
+longer choose anything. What each case costs per month is on the Hub's **Biaya AI** page
+(`/ai-costs`, Owner and Brand Managers only): hub-api reads `ai_ledger`, `content_extractions`,
+`extraction_quarantine` and `ai_usage` (songbird's spend, migration 013) per case.
 
 Spend: `EXTRACTION_SPEND_THRESHOLD_USD` (per run, default $5) and
 `EXTRACTION_MONTHLY_CEILING_USD` (hard stop, default $25). **Both cover extraction spend only** —
@@ -539,7 +543,7 @@ SLACK_AUTOMATION_VENYU=https://hooks.slack.com/services/...   # #venyu-otomasi
 
 # Songbird content generation (songbird-* flows)
 OPENROUTER_API_KEY=your_openrouter_api_key  # now needed by the Prefect services (was roach-only)
-# (Generation models are listed in config/ai/models.yaml, case `generation`.)
+# (Generation models are listed in shared/noktah_ai/models.yaml, case `generation`.)
 SONGBIRD_DRIVE_PARENT_ID=your_drive_folder_id_for_draft_content_plans
 # Optional Clients-sheet overrides (defaults target the content-plan workbook):
 # SONGBIRD_CLIENTS_SPREADSHEET_ID, SONGBIRD_CLIENTS_TAB, SONGBIRD_CLIENTS_NAME_COLUMN,

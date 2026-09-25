@@ -96,7 +96,7 @@ def extraction_config(x_api_key: str | None = Header(default=None)):
     """The model routing and versions THIS SERVICE is actually configured with.
 
     `video_model` / `image_model` are the models each case is using NOW; `models`
-    has each case's accepted list (config/ai/models.yaml) and rotation state.
+    has each case's accepted list (shared/noktah_ai/models.yaml) and rotation state.
 
     roach is the authority on its own model selection, and nothing else can be.
     Which model a case uses depends on this process's rotation state, which no

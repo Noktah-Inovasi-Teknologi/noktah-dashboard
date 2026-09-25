@@ -21,6 +21,7 @@ export interface Me {
     manage_people: boolean
     appoint_bm: boolean
     run_intake: boolean
+    view_ai_costs: boolean
   }
 }
 

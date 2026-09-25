@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .. import db
 from ..auth import Caller, current_caller
+from ..ai import costs
 from ..deps import caller_brands
 from ..errors import Invalid
 from ..permissions import PERMISSIONS, Action, Decision, can, is_owner, may_manage, may_set_unit
@@ -43,6 +44,7 @@ async def me(caller: Caller = Depends(current_caller)) -> dict:
             "manage_people": may_manage(access),
             "appoint_bm": anywhere(Action.APPOINT_BRAND_MANAGER),
             "run_intake": anywhere(Action.RUN_INTAKE),
+            "view_ai_costs": costs.may_view(caller),
         },
     }
 

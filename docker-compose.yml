@@ -29,7 +29,7 @@ services:
       - HARVEST_DB_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       - HARVEST_DRIVE_PARENT_ID=${HARVEST_DRIVE_PARENT_ID}
       # Songbird content generation (feature 003)
-      # Generation models: config/ai/models.yaml (case `generation`), mounted below
+      # Generation models: shared/noktah_ai/models.yaml (case `generation`), mounted below
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - SONGBIRD_DRIVE_PARENT_ID=${SONGBIRD_DRIVE_PARENT_ID}
       # Noktah Hub internal calls (hub_* flows, spec 008)
@@ -50,8 +50,8 @@ services:
       # it is edited in the repo and reviewed as a diff, never from inside the
       # container.
       - ./config/field_availability.yaml:/app/config/field_availability.yaml:ro
-      # Accepted AI models per case and their rotation, read-only
-      - ./config/ai:/app/config/ai:ro
+      # AI model list and rotation, shared by every service that calls a model (read-only)
+      - ./shared/noktah_ai:/app/noktah_ai:ro
       # Extraction schema + vocabulary (feature 007), read-only for the same
       # reason. ONE declaration serving three consumers — roach's response_format,
       # roach's client-side validation, and this service's storage-boundary
@@ -109,7 +109,7 @@ services:
       - HARVEST_DB_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       - HARVEST_DRIVE_PARENT_ID=${HARVEST_DRIVE_PARENT_ID}
       # Songbird content generation (feature 003)
-      # Generation models: config/ai/models.yaml (case `generation`), mounted below
+      # Generation models: shared/noktah_ai/models.yaml (case `generation`), mounted below
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - SONGBIRD_DRIVE_PARENT_ID=${SONGBIRD_DRIVE_PARENT_ID}
       # Noktah Hub internal calls (hub_* flows, spec 008)
@@ -124,8 +124,8 @@ services:
       - ./service/prefect/hashmap.py:/app/hashmap.py
       # Field availability determinations (feature 005), read-only. See above.
       - ./config/field_availability.yaml:/app/config/field_availability.yaml:ro
-      # Accepted AI models per case and their rotation, read-only
-      - ./config/ai:/app/config/ai:ro
+      # AI model list and rotation, shared by every service that calls a model (read-only)
+      - ./shared/noktah_ai:/app/noktah_ai:ro
       # Extraction schema + vocabulary (feature 007), read-only. See above.
       - ./config/extraction:/app/config/extraction:ro
       # Shared DB pool/transaction helpers — same reason.
@@ -164,7 +164,7 @@ services:
       - HUB_API_ACCESS_API_AUD=c9804e34dfdec51dd20dac8e8e0c35b323a09985005ac929abcc69d02e5b6c92
       # Prefect -> /internal/* (Docker network only; refused through Cloudflare)
       - HUB_API_INTERNAL_TOKEN=${HUB_API_INTERNAL_TOKEN}
-      # AI intake + summaries (spec 008). Models come from config/ai/models.yaml (mounted below).
+      # AI intake + summaries (spec 008). Models come from shared/noktah_ai (mounted below).
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - HUB_AI_MONTHLY_CAP_USD=${HUB_AI_MONTHLY_CAP_USD:-5}
       # Google Docs intake + the read-only Clients/Hashmaps sheet copy
@@ -180,8 +180,8 @@ services:
     volumes:
       # Card definition (versioned YAML), read-only, like config/extraction
       - ./config/hub:/app/config/hub:ro
-      # Accepted AI models per case and their rotation, read-only
-      - ./config/ai:/app/config/ai:ro
+      # AI model list and rotation, shared by every service that calls a model (read-only)
+      - ./shared/noktah_ai:/app/noktah_ai:ro
     depends_on:
       - postgres
     networks:
@@ -211,8 +211,8 @@ services:
       # client-side validation from them, Prefect re-validates at the storage
       # boundary. One declaration, three consumers.
       - ./config/extraction:/app/config/extraction:ro
-      # Accepted AI models per case (image, video) and their rotation, read-only
-      - ./config/ai:/app/config/ai:ro
+      # AI model list and rotation, shared by every service that calls a model (read-only)
+      - ./shared/noktah_ai:/app/noktah_ai:ro
       - social_data:/data
     networks:
       - dashboard-networks

@@ -31,6 +31,7 @@ CHAIN = [
     "008_observation_history", "009_structured_extraction", "010_hub_registry_card",
     "011_client_brand_required",
     "012_hub_units_roles_permissions",
+    "013_ai_usage",
 ]
 
 

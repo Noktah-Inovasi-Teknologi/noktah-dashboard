@@ -1580,3 +1580,23 @@ ON CONFLICT DO NOTHING;
 
 INSERT INTO schema_migrations (version) VALUES ('012_hub_units_roles_permissions')
 ON CONFLICT (version) DO NOTHING;
+
+-- 013_ai_usage: mirrored verbatim from config/postgres/migrations/013_ai_usage.sql.
+CREATE TABLE IF NOT EXISTS ai_usage (
+    id                BIGSERIAL PRIMARY KEY,
+    ai_case           TEXT NOT NULL,
+    call_site         TEXT NOT NULL,
+    client_name       TEXT,
+    model             TEXT,
+    provider          TEXT,
+    prompt_tokens     INTEGER,
+    completion_tokens INTEGER,
+    cost_usd          NUMERIC(12, 6) NOT NULL DEFAULT 0,
+    at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT chk_ai_usage_case CHECK (ai_case IN (
+        'summary', 'intake', 'intake_image', 'generation', 'image', 'video'))
+);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_case_at ON ai_usage (ai_case, at);
+
+INSERT INTO schema_migrations (version) VALUES ('013_ai_usage')
+ON CONFLICT (version) DO NOTHING;

@@ -27,7 +27,9 @@ from typing import Any, Dict, List, Optional
 
 import asyncpg
 
-from ..ai import budget, rotation
+from noktah_ai import rotation
+
+from ..ai import budget
 from ..ai.openrouter import AiFailure, chat_json
 from ..card import values
 from ..card.definition import Definition, is_empty, validate_value
@@ -145,7 +147,7 @@ async def run_intake(conn: asyncpg.Connection, d: Definition, *, client_id: str,
     ctx = await _context(conn, client_id, source)
     settings = get_settings()
     # Screenshots and scanned PDFs need a model that reads images; text doesn't
-    # (config/ai/models.yaml, cases `intake` and `intake_image`).
+    # (shared/noktah_ai/models.yaml, cases `intake` and `intake_image`).
     models = rotation.for_case("intake_image" if source.is_image else "intake")
     model = models.current()
     try:

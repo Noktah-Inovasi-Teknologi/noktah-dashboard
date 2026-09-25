@@ -101,7 +101,7 @@ def test_log_usage_is_best_effort():
     # No exception escaped.
 
 
-# ── model rotation (config/ai/models.yaml, case `generation`) ──────────────────
+# ── model rotation (shared/noktah_ai/models.yaml, case `generation`) ──────────
 
 def _fake_complete(fail_on):
     seen = []
@@ -117,11 +117,11 @@ def _fake_complete(fail_on):
 def test_generation_rotates_after_repeated_failures_and_a_named_model_never_does(monkeypatch):
     import asyncio
 
-    from tasks import model_rotation
+    from noktah_ai import rotation
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "k")
-    rot = model_rotation.Rotation("generation", ["first", "second"], rotate_after=2)
-    monkeypatch.setattr(model_rotation, "_rotations", {"generation": rot})
+    rot = rotation.Rotation("generation", ["first", "second"], rotate_after=2)
+    rotation.reset({"generation": rot})
     complete, seen = _fake_complete({"first", "named"})
     monkeypatch.setattr(ot, "_complete", complete)
 
@@ -140,6 +140,35 @@ def test_generation_rotates_after_repeated_failures_and_a_named_model_never_does
 
 
 def test_the_generation_list_has_models():
-    from tasks import model_rotation
+    from noktah_ai import rotation
 
-    assert model_rotation.load()["generation"].models
+    assert rotation.reset()["generation"].models
+
+
+def test_each_call_records_its_cost_for_the_hub(monkeypatch):
+    import asyncio
+    import sys
+    import types
+
+    rows = []
+
+    class Conn:
+        async def execute(self, sql, *args):
+            rows.append(args)
+
+        async def close(self):
+            pass
+
+    async def connect(dsn, timeout):
+        return Conn()
+
+    monkeypatch.setitem(sys.modules, "asyncpg", types.SimpleNamespace(connect=connect))
+    monkeypatch.setenv("HARVEST_DB_URL", "postgresql://x")
+    body = {"model": "xiaomi/mimo-v2.6-flash", "provider": "Xiaomi",
+            "usage": {"prompt_tokens": 100, "completion_tokens": 20, "cost": 0.0004}}
+    asyncio.run(ot._record_usage(body, "songbird.generate[Post]", "m", "Klinik", ot.logger))
+    assert rows == [("songbird.generate[Post]", "Klinik", "xiaomi/mimo-v2.6-flash", "Xiaomi", 100, 20, 0.0004)]
+
+    monkeypatch.delenv("HARVEST_DB_URL")
+    asyncio.run(ot._record_usage(body, "songbird.generate[Post]", "m", "Klinik", ot.logger))
+    assert len(rows) == 1, "no database configured: nothing recorded, nothing raised"

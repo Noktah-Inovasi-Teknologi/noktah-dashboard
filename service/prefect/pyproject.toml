@@ -35,6 +35,8 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+# shared/noktah_ai (the AI model list and rotation) is mounted at /app/noktah_ai in the container.
+pythonpath = [".", "../../shared"]
 markers = [
     "schema: requires a real disposable PostgreSQL database (SPINE_TEST_DATABASE_URL); auto-skipped when unreachable (see tests/conftest.py)",
 ]

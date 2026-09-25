@@ -65,7 +65,7 @@ const ME = {
   brands: ['eskala'],
   manageable_units: ['eskala'],
   catalog: CATALOG,
-  can: { edit_registry: true, edit_profil: true, edit_guideline: true, approve: true, edit_requests: true, manage_people: true, appoint_bm: false, run_intake: true }
+  can: { edit_registry: true, edit_profil: true, edit_guideline: true, approve: true, edit_requests: true, manage_people: true, appoint_bm: false, run_intake: true, view_ai_costs: true }
 }
 
 const eskala = (id: number, key: string) => ({ id: idOf(id), role: key, noktah_brand: 'eskala' })
@@ -77,6 +77,44 @@ const PEOPLE = [
   { id: idOf(905), display_name: 'Putri Indah Lestari', status: 'active', jira_account_id: '712020:eee', slack_user_id: null, emails: ['putri.indah@gmail.com'], units: ['eskala'], roles: [eskala(954, 'content_editor'), eskala(956, 'quality_assurance')], permissions: [] },
   { id: idOf(904), display_name: 'Anaknya Mama Gufron', status: 'left', jira_account_id: null, slack_user_id: null, emails: ['romuty16@gmail.com'], units: ['eskala'], roles: [], permissions: [] }
 ]
+
+/** GET /v1/ai/costs: the six AI cases (shared/noktah_ai/models.yaml) with 12 months of spend. */
+function aiCosts(empty: boolean) {
+  const now = new Date()
+  const months = Array.from({ length: 12 }, (_, i) => {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11 + i, 1))
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
+  })
+  // Recent months only, shaped like the live store: a costly calibration month, then cents.
+  const recent: Record<string, number[][]> = {
+    summary: [[0, 0], [3, 0.0009], [22, 0.0071]],
+    intake: [[0, 0], [95, 0.0238], [14, 0.0056]],
+    intake_image: [[0, 0], [0, 0], [6, 0.0018]],
+    generation: [[0, 0], [0, 0], [96, 0.0412]],
+    image: [[1346, 1.1328], [202, 0.083], [310, 0.0391]],
+    video: [[371, 0.3553], [111, 0.0847], [140, 0.1604]]
+  }
+  const info: Record<string, [string, string, string, string[], string | null]> = {
+    summary: ['Ringkasan klien', 'Hub', 'Ringkasan singkat tiap klien dari Profil, Guideline, dan permintaan yang masih terbuka. Diperbarui paling sering sekali sehari, dan hanya bila isi kartunya berubah.', ['deepseek/deepseek-v4-flash', 'qwen/qwen3.7-flash', 'xiaomi/mimo-v2.5'], 'deepseek/deepseek-v4-flash'],
+    intake: ['Intake teks', 'Hub', 'Membaca teks yang ditempel, Google Doc, atau PDF berteks, lalu mengusulkan fakta untuk kartu klien. Setiap usulan tetap diputuskan Manager.', ['deepseek/deepseek-v4-flash', 'xiaomi/mimo-v2.5', 'qwen/qwen3.7-flash'], 'xiaomi/mimo-v2.5'],
+    intake_image: ['Intake gambar', 'Hub', 'Sama seperti Intake teks, tetapi dari tangkapan layar atau PDF hasil pindaian, dibaca sebagai gambar.', ['xiaomi/mimo-v2.6-flash', 'xiaomi/mimo-v2.5', 'qwen/qwen3.5-flash-02-23'], 'xiaomi/mimo-v2.6-flash'],
+    generation: ['Ide konten (songbird)', 'songbird', 'Menyusun ide content plan bulanan dan konten tambahan untuk klien, lengkap dengan Shoot Guide, Visualisasi Konten, dan caption.', ['xiaomi/mimo-v2.6-flash', 'xiaomi/mimo-v2.6-pro', 'deepseek/deepseek-v4.1-flash'], null],
+    image: ['Analisis gambar', 'roach', 'Membaca post gambar dan carousel hasil harvest (isi, teks di layar, alur konten) supaya songbird tahu konten apa yang berhasil.', ['qwen/qwen3.7-flash', 'qwen/qwen3.5-flash-02-23', 'inclusionai/ling-3.0-flash-vl', 'xiaomi/mimo-v2.6-flash', 'google/gemini-2.5-flash-lite'], null],
+    video: ['Analisis video', 'roach', 'Menonton video hasil harvest, menuliskan transkrip ucapannya kata per kata, dan memetakan alur kontennya.', ['xiaomi/mimo-v2.6-flash', 'xiaomi/mimo-v2.5', 'qwen/qwen3.8-omni-flash', 'google/gemini-2.5-flash-lite'], null]
+  }
+  const cases = Object.entries(info).map(([key, [label, used_by, description, models, current]]) => {
+    const byMonth = Object.fromEntries(months.map((m, i) => {
+      const r = empty ? undefined : recent[key]![i - (months.length - 3)]
+      return [m, { calls: r ? r[0]! : 0, cost_usd: r ? r[1]! : 0 }]
+    }))
+    const at = (m: string) => byMonth[m]!.cost_usd
+    return { key, label, used_by, description, models, current, months: byMonth,
+      this_month: at(months[11]!), last_month: at(months[10]!),
+      total: Math.round(months.reduce((s, m) => s + at(m), 0) * 1e6) / 1e6 }
+  })
+  const totals = Object.fromEntries(months.map(m => [m, Math.round(cases.reduce((s, c) => s + c.months[m]!.cost_usd, 0) * 1e6) / 1e6]))
+  return { months, cases, totals, hub_cap: { cap_usd: 5, spent_usd: empty ? 0 : 0.0145 } }
+}
 
 /** One Person with the detail fields /v1/people/{id} returns. */
 function personDetail(id: string) {
@@ -265,6 +303,7 @@ export function fixtureResponse(path: string, method: string, state: FixtureStat
 
   if (p === '/v1/me') return ME
   if (p === '/v1/card-definition') return definition
+  if (p === '/v1/ai/costs') return aiCosts(empty)
   if (p === '/v1/ai/usage') return { month: '2026-09', spent_usd: state === 'cap' ? 5.0 : 0.37, cap_usd: 5, paused: state === 'cap' }
   if (p === '/v1/clients') return empty ? [] : clientsList(String(query?.status ?? 'active'))
   if (p === '/v1/approvals') {

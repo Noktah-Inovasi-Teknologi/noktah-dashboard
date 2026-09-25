@@ -16,6 +16,7 @@ const items = computed<NavigationMenuItem[]>(() => {
     list.push({ label: 'Persetujuan', icon: 'i-lucide-badge-check', to: '/approvals', badge: approvals.value?.length || undefined })
   }
   list.push({ label: 'Orang', icon: 'i-lucide-users', to: '/people' })
+  if (can?.view_ai_costs) list.push({ label: 'Biaya AI', icon: 'i-lucide-receipt', to: '/ai-costs' })
   return list
 })
 

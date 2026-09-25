@@ -20,16 +20,26 @@ import httpx
 from prefect import task
 
 try:
-    from . import model_rotation
-except ImportError:
-    import model_rotation  # standalone execution with tasks/ on sys.path
+    from noktah_ai import rotation as model_rotation
+except ImportError:  # the container predates the ./shared/noktah_ai mount (see _generation_models)
+    model_rotation = None
 
 logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# The model comes from config/ai/models.yaml (case `generation`), rotating to the
-# next after repeated failures (model_rotation.py). A caller may still name one.
+# The model comes from shared/noktah_ai/models.yaml (case `generation`), rotating to
+# the next after repeated failures (noktah_ai.rotation). A caller may still name one.
+# Until a container is recreated with that mount, songbird keeps the model it used
+# before the list existed, and says so, rather than failing a scheduled run.
+BEFORE_THE_LIST = "xiaomi/mimo-v2.5"
+
+
+def _generation_models():
+    if model_rotation is None:
+        logger.warning("noktah_ai is not mounted in this container; using %s", BEFORE_THE_LIST)
+        return None
+    return model_rotation.for_case("generation")
 
 # Deterministic provider routing (mirrors roach). Names map to OpenRouter slugs.
 _PROVIDER_SLUGS = {
@@ -136,6 +146,31 @@ def _log_usage(body: Dict[str, Any], call_site: str, model: str, client: Optiona
         pass
 
 
+async def _record_usage(body: Dict[str, Any], call_site: str, model: str, client: Optional[str], log) -> None:
+    """One `ai_usage` row per call (migration 013, case `generation`), so the Hub's Biaya AI
+    page can show songbird's spend per month. Best-effort: never breaks generation."""
+    dsn = os.environ.get("HARVEST_DB_URL")
+    usage = body.get("usage") or {}
+    if not dsn or not usage:
+        return
+    try:
+        import asyncpg
+
+        conn = await asyncpg.connect(dsn, timeout=5)
+        try:
+            await conn.execute(
+                """INSERT INTO ai_usage (ai_case, call_site, client_name, model, provider, prompt_tokens,
+                                         completion_tokens, cost_usd)
+                   VALUES ('generation', $1, $2, $3, $4, $5, $6, $7)""",
+                call_site, client, body.get("model") or model, body.get("provider"),
+                int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0),
+                float(usage.get("cost") or 0))
+        finally:
+            await conn.close()
+    except Exception as e:  # noqa: BLE001 - accounting never breaks a run
+        log.warning(f"AI usage not recorded ({call_site}): {e}")
+
+
 def object_schema(name: str, keys: List[str]) -> Dict[str, Any]:
     """Build a strict json_schema response_format for an object of string keys."""
     return {
@@ -206,7 +241,7 @@ async def openrouter_chat(
             array_schema helpers). When set, the return value is the parsed JSON;
             otherwise the raw string content is returned.
         model: Model id. None (the normal case) takes the `generation` case's current
-            model from config/ai/models.yaml and reports the outcome to its rotation.
+            model from shared/noktah_ai/models.yaml and reports the outcome to its rotation.
         max_tokens: Output token budget.
         temperature: Sampling temperature (generation wants some variety).
         call_site: Label for which code path spent the tokens (usage logging).
@@ -229,8 +264,8 @@ async def openrouter_chat(
             ".env (docker-compose passes it to prefect + prefect-worker), then recreate "
             "the containers: docker-compose up -d prefect prefect-worker"
         )
-    models = None if model else model_rotation.for_case("generation")
-    model = model or models.current()
+    models = None if model else _generation_models()
+    model = model or (models.current() if models else BEFORE_THE_LIST)
     try:
         result = await _complete(api_key, system, user, model, max_tokens, response_format, temperature,
                                  reasoning, call_site, client)
@@ -277,6 +312,7 @@ async def _complete(api_key: str, system: Optional[str], user: str, model: str, 
             # Log usage before anything below can raise/continue — the tokens were
             # spent whether or not the content turns out to be usable.
             _log_usage(body, call_site, model, client, log)
+            await _record_usage(body, call_site, model, client, log)
             choice = body["choices"][0]
             # A response cut off at max_tokens still parses — `_extract_json`'s regex
             # fallback salvages the truncated array — so items silently go missing.

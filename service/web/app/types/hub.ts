@@ -180,3 +180,24 @@ export interface RegistryChange {
   person: string
   at: string
 }
+
+export interface AiCostMonth { calls: number, cost_usd: number }
+export interface AiCostCase {
+  key: string
+  label: string
+  used_by: string
+  description: string
+  models: string[]
+  /** The model in use now; only known for the Hub's own cases. */
+  current: string | null
+  months: Record<string, AiCostMonth>
+  this_month: number
+  last_month: number
+  total: number
+}
+export interface AiCosts {
+  months: string[]
+  cases: AiCostCase[]
+  totals: Record<string, number>
+  hub_cap: { cap_usd: number, spent_usd: number }
+}

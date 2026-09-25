@@ -10,8 +10,8 @@ Requests). Never pending values, never raw Intake material.
   - the AI cap applies: at the cap, nothing is generated and the last summary
     stays visible, marked out of date (`cap_paused`).
   - it is marked "dibuat otomatis", never edited by hand, never a source.
-  - the model comes from the accepted list in config/ai/models.yaml (case
-    `summary`), rotating to the next after repeated failures (ai/rotation.py). A
+  - the model comes from the accepted list in shared/noktah_ai/models.yaml (case
+    `summary`), rotating to the next after repeated failures (noktah_ai.rotation). A
     throttled model is retried a little first (SUMMARY_BACKOFF: nobody is waiting).
     When every accepted model has failed its turn in one run, the rest of the
     Clients wait for the next hour. Every failure is reported with its Client,
@@ -24,7 +24,9 @@ from typing import Any, Dict, Optional
 
 import asyncpg
 
-from ..ai import budget, rotation
+from noktah_ai import rotation
+
+from ..ai import budget
 from ..ai.openrouter import AiFailure, chat_json
 from ..card.values import current_values
 from ..errors import AiCapReached

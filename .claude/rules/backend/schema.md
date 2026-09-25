@@ -330,6 +330,15 @@ Details that are easy to get wrong:
   team member their team role, then fill Units and permissions from active roles.
   `tests/test_migration_012.py` runs it on the pre-012 shape, twice, then down and up.
 
+## AI spend per call (migration 013)
+
+`ai_usage` is an append-only row per AI call for callers with no table of their own to
+carry the cost; today only songbird (`ai_case = 'generation'`, written best-effort by
+Prefect's `tasks/openrouter_tasks.py`). The other cases already record cost where their
+results live (`ai_ledger`, `content_extractions`, `extraction_quarantine`), and the
+Hub's `GET /v1/ai/costs` (`service/api/app/ai/costs.py`) reads all of them per case and
+month. `ai_usage` is not in the Hub's monthly cap, which counts `ai_ledger` only.
+
 ## Naming
 
 Flows: `roster-sync`, `spine-backfill`, `field-availability-sync`,

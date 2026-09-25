@@ -3,7 +3,7 @@ import base64
 
 import pytest
 
-from app.ai import rotation
+from noktah_ai import rotation
 from app.ai.openrouter import AiFailure, AiResult
 from app.intake import pipeline
 from tests.conftest import add_client, add_person
@@ -43,8 +43,7 @@ ANSWER = {
 @pytest.fixture(autouse=True)
 def fresh_rotation(monkeypatch):
     """Rotation state is per process; every test starts on the first model of the repo list."""
-    cases = rotation.load(rotation.models_file("/nonexistent"))
-    monkeypatch.setattr(rotation, "_rotations", cases)
+    cases = rotation.reset()
     return cases
 
 

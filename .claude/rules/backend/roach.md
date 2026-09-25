@@ -130,7 +130,7 @@ verbatim subtitle with an explicit absence reason, attributes, and a summary —
   does NOT need an image rebuild; editing `analyze.py` still does.
 - **`GET /extraction-config`** reports the model routing and versions this service is actually
   using. Callers must ask rather than read their own environment: the model per case comes from
-  `config/ai/models.yaml` plus roach's in-memory rotation (`model_rotation.py`: the next model
+  `shared/noktah_ai/models.yaml` plus roach's in-memory rotation (`shared/noktah_ai/rotation.py`: the next model
   after 3 consecutive failures, back to the first after 60 minutes), so guessing locally sees one
   model where there are two and silently skips a real measurement. `models` in the response has
   each case's accepted list and rotation state. `OPENROUTER_MODEL` / `OPENROUTER_IMAGE_MODEL` no
@@ -142,7 +142,7 @@ verbatim subtitle with an explicit absence reason, attributes, and a summary —
 - **Measured 2026-08-07**: video ~$0.0019/item (`xiaomi/mimo-v2.5`), image ~$0.0004 and carousel
   ~$0.0008 (`google/gemini-2.5-flash-lite`). Re-measured 2026-09-25 for the accepted lists: video
   $0.0007–0.0016 (`xiaomi/mimo-v2.6-flash`), image $0.00008 / carousel $0.00013
-  (`qwen/qwen3.7-flash`); per-model figures are in `config/ai/models.yaml`. `ANALYZE_VIDEO_MAX_TOKENS` raised 8000 → 12000 to fit
+  (`qwen/qwen3.7-flash`); per-model figures are in `shared/noktah_ai/models.yaml`. `ANALYZE_VIDEO_MAX_TOKENS` raised 8000 → 12000 to fit
   a full transcript alongside the structured fields.
 
 ## Conventions
