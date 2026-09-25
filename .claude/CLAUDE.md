@@ -657,3 +657,20 @@ docker exec prefect python flows/content_plan_spreadsheet_to_jira_issue.py --mon
 - Environment variables for all sensitive data
 - Postgres authentication with SCRAM-SHA-256
 - No secrets in version control
+
+### Branches and PRs
+`master` is the only long-lived branch. Every change reaches it through a short-lived
+branch and a PR that the user merges. Branch names follow the venyu repo's format,
+`<type>/<scope>/<Title-Case-Words>`:
+
+- **type**: `feat` (new behaviour or a tweak), `fix` (a bug), `chore` (tooling, deps, scripts), `docs`.
+- **scope**: the area the change lives in. `web` (service/web), `api` (service/api),
+  `prefect`, `roach`, `knowledge-base`, `config`. Use `project` when it spans more than one
+  (e.g. a Hub change touching both web and api).
+- **title**: a few capitalised words joined by hyphens, saying what the branch is for.
+
+Examples: `feat/project/Noktah-Hub-tweaks`, `fix/web/Client-list-overflow-on-phones`,
+`chore/prefect/Content-plan-helper-scripts`.
+
+Don't open a PR until the user says so. Stage explicit paths: never sweep unrelated
+uncommitted files into a branch.
