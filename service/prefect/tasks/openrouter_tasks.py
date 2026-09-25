@@ -19,12 +19,17 @@ from typing import Any, Dict, List, Optional
 import httpx
 from prefect import task
 
+try:
+    from . import model_rotation
+except ImportError:
+    import model_rotation  # standalone execution with tasks/ on sys.path
+
 logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# Same house default as roach; override per-call or via env.
-DEFAULT_MODEL = os.environ.get("SONGBIRD_OPENROUTER_MODEL", os.environ.get("OPENROUTER_MODEL", "xiaomi/mimo-v2.5"))
+# The model comes from config/ai/models.yaml (case `generation`), rotating to the
+# next after repeated failures (model_rotation.py). A caller may still name one.
 
 # Deterministic provider routing (mirrors roach). Names map to OpenRouter slugs.
 _PROVIDER_SLUGS = {
@@ -68,7 +73,7 @@ def _extract_json(content: str) -> Any:
 
 def _build_payload(
     system: Optional[str], user: str, model: str, max_tokens: int,
-    response_format: Optional[Dict[str, Any]], temperature: float,
+    response_format: Optional[Dict[str, Any]], temperature: float, reasoning: bool = False,
 ) -> Dict[str, Any]:
     messages: List[Dict[str, Any]] = []
     if system:
@@ -78,9 +83,9 @@ def _build_payload(
         "model": model,
         "max_tokens": max_tokens,
         "temperature": temperature,
-        # Suppress internal reasoning so a reasoning model doesn't exhaust the
-        # token budget before writing the answer (roach's empty-content guard).
-        "reasoning": {"enabled": False},
+        # Reasoning off unless asked: thinking tokens count against max_tokens, and a
+        # model that exhausts them writes nothing (roach's empty-content guard).
+        "reasoning": {"enabled": reasoning},
         # Usage accounting: opting in adds the resolved USD `cost` to the usage
         # object alongside the token counts, so spend is read off the response
         # rather than estimated from a price list.
@@ -189,6 +194,7 @@ async def openrouter_chat(
     temperature: float = 0.8,
     call_site: str = "unknown",
     client: Optional[str] = None,
+    reasoning: bool = False,
 ) -> Any:
     """
     Call OpenRouter chat-completions and return the model's answer.
@@ -199,7 +205,8 @@ async def openrouter_chat(
         response_format: Optional OpenRouter response_format (use object_schema /
             array_schema helpers). When set, the return value is the parsed JSON;
             otherwise the raw string content is returned.
-        model: Model id (defaults to the house model).
+        model: Model id. None (the normal case) takes the `generation` case's current
+            model from config/ai/models.yaml and reports the outcome to its rotation.
         max_tokens: Output token budget.
         temperature: Sampling temperature (generation wants some variety).
         call_site: Label for which code path spent the tokens (usage logging).
@@ -222,8 +229,24 @@ async def openrouter_chat(
             ".env (docker-compose passes it to prefect + prefect-worker), then recreate "
             "the containers: docker-compose up -d prefect prefect-worker"
         )
-    model = model or DEFAULT_MODEL
-    payload = _build_payload(system, user, model, max_tokens, response_format, temperature)
+    models = None if model else model_rotation.for_case("generation")
+    model = model or models.current()
+    try:
+        result = await _complete(api_key, system, user, model, max_tokens, response_format, temperature,
+                                 reasoning, call_site, client)
+    except Exception:
+        if models:
+            models.failure(model)
+        raise
+    if models:
+        models.success(model)
+    return result
+
+
+async def _complete(api_key: str, system: Optional[str], user: str, model: str, max_tokens: int,
+                    response_format: Optional[Dict[str, Any]], temperature: float, reasoning: bool,
+                    call_site: str, client: Optional[str]) -> Any:
+    payload = _build_payload(system, user, model, max_tokens, response_format, temperature, reasoning)
     log = _run_logger()
 
     last_error: Exception = RuntimeError("unreachable")

@@ -1,8 +1,9 @@
 # Accepted AI models per case, best value first. The one place a model is chosen.
 #
-# Read at startup by hub-api (summary) and roach (image, video); mounted read-only,
+# Read by hub-api (summary, intake, intake_image), roach (image, video) and Prefect
+# (generation: songbird); mounted read-only,
 # so a change here needs only a container restart, not a rebuild:
-#   docker-compose restart api roach
+#   docker-compose restart api roach prefect prefect-worker
 #
 # Rotation: each service starts on the FIRST model of a case. After `rotate_after`
 # consecutive failures on the model in use (provider errors, rate limits that
@@ -29,6 +30,36 @@ cases:
     - deepseek/deepseek-v4-flash   # $0.0003; the most faithful (kept every banned claim word for word)
     - qwen/qwen3.7-flash           # $0.00005; cheapest, but once listed the regular menu as "promo berjalan"
     - xiaomi/mimo-v2.5             # $0.0005; the previous default, dropped two banned claims
+
+  # Hub Intake of pasted text, Google Docs and PDFs with a text layer: facts out of a
+  # note, copied as written. Scored on the 10 old notes with managers' decisions
+  # (12 accepted fields, 4 rejected) plus 5 that held nothing. Thinking made every
+  # model worse here (fewer accepted fields found, 3-5x the cost, cut-off answers),
+  # so no model thinks.
+  intake:
+    - deepseek/deepseek-v4-flash   # $0.0004/Intake, 2.8 s; found 10/12, proposed 2 of the 4 rejected, copies verbatim
+    - xiaomi/mimo-v2.5             # $0.0003, 8 s; found 11/12 but all 4 rejected (it wrote the originals)
+    - qwen/qwen3.7-flash           # $0.0001, 7 s; found 10/12, 4 rejected, 4 extras
+
+  # Hub Intake of screenshots and scanned PDFs: the same task read off an image.
+  # Scored on 6 of those notes rendered as phone screenshots.
+  intake_image:
+    - xiaomi/mimo-v2.6-flash       # $0.0003, 4 s; found 5/6, fewest rejected
+    - xiaomi/mimo-v2.5             # $0.0002, 12 s; found 5/6
+    - qwen/qwen3.5-flash-02-23     # $0.0004, 8 s; found 4/6 (qwen3.7-flash found only 3/6 here)
+
+  # Songbird content ideas (Prefect): topic, strategy, shoot guide, visualisation and
+  # caption, in the client's voice. Scored 2026-09-26 blind by two judges per group
+  # (2 clients x Post/Short Video, 12 ideas per model) on coherency, clarity and hit
+  # probability (hit weighted double). Costs are for all 12 ideas.
+  # Out: xiaomi/mimo-v2.5 (the previous default) was rate-limited 25 times and never
+  # finished; qwen/qwen3.7-flash with thinking delivered 0 of 6 clinic ideas; thinking
+  # otherwise cost more for no better score; deepseek-v4-flash and qwen3.7-flash
+  # invented prices and offers (5.6 and 5.9 overall).
+  generation:
+    - xiaomi/mimo-v2.6-flash       # 7.19 overall, best hit score (7.1); $0.005; the best value
+    - xiaomi/mimo-v2.6-pro         # 7.34 overall, most executable; $0.018
+    - deepseek/deepseek-v4.1-flash # 6.47 overall; $0.034
 
   # roach /analyze for images and carousels: what is shown, on-screen text, beats.
   image:

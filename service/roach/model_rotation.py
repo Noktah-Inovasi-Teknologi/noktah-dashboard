@@ -8,8 +8,8 @@ success resets the count. After `back_to_first_after_minutes` on a fallback the
 case tries its first model again. State is in memory, per process: a restart
 starts every case on its first model.
 
-hub-api has the same rules in service/api/app/ai/rotation.py (separate service,
-no shared package); keep the two in step.
+hub-api (service/api/app/ai/rotation.py) and Prefect (service/prefect/tasks/model_rotation.py)
+have the same rules (separate services, no shared package); keep the three in step.
 """
 import threading
 import time

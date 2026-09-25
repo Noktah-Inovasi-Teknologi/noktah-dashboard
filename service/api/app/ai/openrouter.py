@@ -108,6 +108,7 @@ async def chat_json(
     timeout: float = 90.0,
     transport: Optional[httpx.AsyncBaseTransport] = None,
     rate_limit_backoff: Sequence[float] = RATE_LIMIT_BACKOFF,
+    reasoning: bool = False,
 ) -> AiResult:
     """One structured call with one validation retry. Raises AiFailure.
 
@@ -128,7 +129,9 @@ async def chat_json(
                 "messages": convo,
                 "max_tokens": max_tokens,
                 "temperature": 0.1,
-                "reasoning": {"enabled": False},
+                # Off by default: thinking tokens count against max_tokens and cost. A model
+                # that must think (or thinks better) is listed with `reasoning: true`.
+                "reasoning": {"enabled": reasoning},
                 "usage": {"include": True},
                 "response_format": {"type": "json_object"},
                 "provider": {"order": PROVIDER_ORDER, "allow_fallbacks": True},

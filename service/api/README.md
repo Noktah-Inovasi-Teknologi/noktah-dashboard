@@ -72,7 +72,7 @@ Prefect (Docker network only) ─X-Hub-Internal-Token─▶ hub-api:8000/interna
 | `HUB_API_ACCESS_API_AUD` | AUD tag of the "Noktah Hub API" Access application (required, not secret) |
 | `HUB_API_INTERNAL_TOKEN` | Shared with the Prefect containers; empty disables `/internal/*` |
 | `OPENROUTER_API_KEY` | Intake and Summary calls |
-| `HUB_INTAKE_MODEL` / `HUB_SUMMARY_MODEL` | Default `xiaomi/mimo-v2.5` (images verified 2026-09-25, research R4) |
+| AI models | Not env: `config/ai/models.yaml` (cases `intake`, `intake_image`, `summary`), mounted at `/app/config/ai`; `app/ai/rotation.py` moves to the next model after repeated failures |
 | `HUB_AI_MONTHLY_CAP_USD` | Default 5 |
 | `GOOGLE_CLIENT_ID` / `_SECRET` / `_REFRESH_TOKEN` | Google Docs intake, the import, the sheet copy |
 | `SLACK_AUTOMATION_NOKTAH` | 80%-of-cap alert |

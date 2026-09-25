@@ -99,3 +99,47 @@ def test_log_usage_is_best_effort():
     assert log.lines == []
     ot._log_usage({"usage": {"prompt_tokens": 1}}, "x", "m", None, object())  # logger without .info
     # No exception escaped.
+
+
+# ── model rotation (config/ai/models.yaml, case `generation`) ──────────────────
+
+def _fake_complete(fail_on):
+    seen = []
+
+    async def complete(api_key, system, user, model, *args):
+        seen.append(model)
+        if model in fail_on:
+            raise RuntimeError(f"OpenRouter {model} HTTP 502")
+        return {"items": []}
+    return complete, seen
+
+
+def test_generation_rotates_after_repeated_failures_and_a_named_model_never_does(monkeypatch):
+    import asyncio
+
+    from tasks import model_rotation
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    rot = model_rotation.Rotation("generation", ["first", "second"], rotate_after=2)
+    monkeypatch.setattr(model_rotation, "_rotations", {"generation": rot})
+    complete, seen = _fake_complete({"first", "named"})
+    monkeypatch.setattr(ot, "_complete", complete)
+
+    async def run(model=None):
+        try:
+            return await ot.openrouter_chat.fn(user="x", model=model)
+        except RuntimeError:
+            return None
+
+    for _ in range(2):
+        asyncio.run(run())
+    assert asyncio.run(run()) == {"items": []}
+    assert seen == ["first", "first", "second"]
+    asyncio.run(run("named"))
+    assert rot.state() == {"accepted": ["first", "second"], "current": "second", "consecutive_failures": 0}
+
+
+def test_the_generation_list_has_models():
+    from tasks import model_rotation
+
+    assert model_rotation.load()["generation"].models

@@ -271,18 +271,23 @@ different models.
 ### AI models: one accepted list per case (`config/ai/models.yaml`)
 ```bash
 # Which models each case may use, best value first; edit, then restart (no rebuild):
-docker-compose restart api roach
+docker-compose restart api roach prefect prefect-worker
 # What roach is using right now, per case, with its rotation state:
 curl -s -H "X-API-KEY: $key" http://localhost:8081/extraction-config
 ```
-Three cases: `summary` (Hub Ringkasan, hub-api), `image` and `video` (roach /analyze). Each
-starts on its first model; 3 consecutive failures move it to the next, and after 60 minutes on a
-fallback it tries the first again (`rotate_after`, `back_to_first_after_minutes`). The lists
-were chosen from a benchmark on real data (costs in the file's comments). Two rules:
+Six cases: `summary`, `intake` (pasted text, Docs, PDFs) and `intake_image` (screenshots,
+scanned PDFs) in hub-api; `image` and `video` in roach /analyze; `generation` in songbird
+(Prefect). Each starts on its first model; 3 consecutive failures move it to the next, and after
+60 minutes on a fallback it tries the first again (`rotate_after`,
+`back_to_first_after_minutes`). In Prefect every flow run is its own process, so rotation lasts
+one run. The lists were chosen from benchmarks on real data, songbird's by blind judging (scores
+and costs in the file's comments). No model thinks: reasoning made Intake worse and songbird
+slower and costlier for no better score. Two rules:
 **video models must take audio** (the subtitle is a verbatim transcript; a video-only model
 "transcribes" by reading burned-in captions), and **every model must be served by a provider
 the OpenRouter account allows** (openrouter.ai/settings/privacy), or its calls fail with 404.
-Songbird and Hub Intake still use their own env vars (`OPENROUTER_MODEL`, `HUB_INTAKE_MODEL`).
+`OPENROUTER_MODEL`, `OPENROUTER_IMAGE_MODEL`, `HUB_INTAKE_MODEL` and `HUB_SUMMARY_MODEL` no
+longer choose anything.
 
 Spend: `EXTRACTION_SPEND_THRESHOLD_USD` (per run, default $5) and
 `EXTRACTION_MONTHLY_CEILING_USD` (hard stop, default $25). **Both cover extraction spend only** —
@@ -534,7 +539,7 @@ SLACK_AUTOMATION_VENYU=https://hooks.slack.com/services/...   # #venyu-otomasi
 
 # Songbird content generation (songbird-* flows)
 OPENROUTER_API_KEY=your_openrouter_api_key  # now needed by the Prefect services (was roach-only)
-OPENROUTER_MODEL=xiaomi/mimo-v2.5           # optional; house generation model
+# (Generation models are listed in config/ai/models.yaml, case `generation`.)
 SONGBIRD_DRIVE_PARENT_ID=your_drive_folder_id_for_draft_content_plans
 # Optional Clients-sheet overrides (defaults target the content-plan workbook):
 # SONGBIRD_CLIENTS_SPREADSHEET_ID, SONGBIRD_CLIENTS_TAB, SONGBIRD_CLIENTS_NAME_COLUMN,

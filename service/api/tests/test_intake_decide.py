@@ -3,6 +3,7 @@ import base64
 
 import pytest
 
+from app.ai import rotation
 from app.ai.openrouter import AiFailure, AiResult
 from app.intake import pipeline
 from tests.conftest import add_client, add_person
@@ -39,12 +40,21 @@ ANSWER = {
 }
 
 
+@pytest.fixture(autouse=True)
+def fresh_rotation(monkeypatch):
+    """Rotation state is per process; every test starts on the first model of the repo list."""
+    cases = rotation.load(rotation.models_file("/nonexistent"))
+    monkeypatch.setattr(rotation, "_rotations", cases)
+    return cases
+
+
 @pytest.fixture
 def fake_ai(monkeypatch):
     state = {"calls": 0, "answer": ANSWER, "fail": None}
 
     async def chat_json(**kwargs):
         state["calls"] += 1
+        state.setdefault("models", []).append(kwargs["model"])
         if state["fail"]:
             raise AiFailure(state["fail"], "fake").spent("m", "p", {"prompt": 10, "completion": 5, "cost": 0.0005})
         kwargs["validate"](state["answer"])
@@ -244,3 +254,25 @@ async def test_accepting_a_partial_proposal_keeps_edits_made_since(hub_db, api, 
     card = (await pm.get(f"/v1/clients/{cid}/card")).json()
     assert card["profil"]["tentang_usaha"]["value"] == {
         "ringkasan": "Klinik mata di Sampang", "visi_misi": "Promo pelajar tetap", "industri": "Kesehatan mata"}
+
+
+async def test_text_and_screenshots_use_their_own_model_lists(hub_db, api, fake_ai, fresh_rotation):
+    cid = await _setup(hub_db)
+    pm = api("pm@noktah.co")
+    assert (await _submit(pm, cid)).status_code == 200
+    png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32).decode()
+    assert (await pm.post(f"/v1/clients/{cid}/intakes",
+                          json={"kind": "image", "image_base64": png, "mime": "image/png"})).status_code == 200
+    assert fake_ai["models"] == [fresh_rotation["intake"].models[0], fresh_rotation["intake_image"].models[0]]
+
+
+async def test_repeated_intake_failures_move_to_the_next_model(hub_db, api, fake_ai, fresh_rotation):
+    cid = await _setup(hub_db)
+    pm = api("pm@noktah.co")
+    fake_ai["fail"] = "provider_error"
+    first, second = fresh_rotation["intake"].models[:2]
+    for i in range(fresh_rotation["intake"].rotate_after):
+        await _submit(pm, cid, text=f"{CHAT} {i}")
+    fake_ai["fail"] = None
+    await _submit(pm, cid, text=f"{CHAT} ok")
+    assert fake_ai["models"][-1] == second and fake_ai["models"][0] == first
