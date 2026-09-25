@@ -90,7 +90,7 @@ function openEdit() {
 <template>
   <UCard :ui="{ body: 'space-y-3' }">
     <div class="flex flex-wrap items-center gap-2">
-      <h3 class="font-medium text-highlighted min-w-0 break-words">
+      <h3 class="font-medium text-highlighted min-w-0 wrap-break-word">
         {{ title }}
       </h3>
       <UBadge
@@ -121,7 +121,7 @@ function openEdit() {
 
     <p
       v-if="p.target === 'request'"
-      class="text-sm whitespace-pre-line break-words"
+      class="text-sm whitespace-pre-line wrap-break-word"
     >
       “{{ p.proposed_value }}”
     </p>
@@ -156,7 +156,7 @@ function openEdit() {
     </div>
 
     <figure class="rounded-md bg-elevated/60 p-3 text-sm space-y-1">
-      <blockquote class="italic break-words whitespace-pre-line">
+      <blockquote class="italic wrap-break-word whitespace-pre-line">
         “{{ p.excerpt }}”
       </blockquote>
       <figcaption class="text-xs text-muted">

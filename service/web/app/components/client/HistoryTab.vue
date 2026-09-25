@@ -93,14 +93,14 @@ function show(value: unknown, field: string): string {
         :key="h.id"
         class="relative"
       >
-        <span class="absolute -start-[1.6rem] top-1.5 size-2.5 rounded-full bg-primary ring-4 ring-default" />
+        <span class="absolute inset-s-[-1.6rem] top-1.5 size-2.5 rounded-full bg-primary ring-4 ring-default" />
         <p class="text-sm">
           <span class="font-medium">{{ FIELD[h.field] ?? roleName(h.field) }}</span>
           <template v-if="h.field !== 'created'">
             : <template v-if="h.old_value !== null && h.old_value !== undefined">
-              <span class="text-muted line-through decoration-1 break-words">{{ show(h.old_value, h.field) }}</span> →
+              <span class="text-muted line-through decoration-1 wrap-break-word">{{ show(h.old_value, h.field) }}</span> →
             </template>
-            <span class="break-words">{{ show(h.new_value, h.field) }}</span>
+            <span class="wrap-break-word">{{ show(h.new_value, h.field) }}</span>
           </template>
         </p>
         <p class="text-xs text-muted">

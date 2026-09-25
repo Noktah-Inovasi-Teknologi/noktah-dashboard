@@ -214,7 +214,7 @@ function historyLine(h: RegistryChange): string {
               v-for="h in person.history"
               :key="h.id"
             >
-              <p class="text-sm break-words">
+              <p class="text-sm wrap-break-word">
                 {{ historyLine(h) }}
               </p>
               <p class="text-xs text-muted">

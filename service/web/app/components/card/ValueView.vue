@@ -26,7 +26,7 @@ const filledSubs = computed(() => (props.subfields ?? []).filter(s => !isEmptyVa
 
   <p
     v-else-if="shape === 'text'"
-    class="text-sm whitespace-pre-line break-words"
+    class="text-sm whitespace-pre-line wrap-break-word"
   >
     {{ value }}
   </p>
@@ -40,7 +40,7 @@ const filledSubs = computed(() => (props.subfields ?? []).filter(s => !isEmptyVa
     <li
       v-for="(item, i) in asList(value)"
       :key="i"
-      class="break-words"
+      class="wrap-break-word"
     >
       {{ item }}
     </li>
@@ -55,7 +55,7 @@ const filledSubs = computed(() => (props.subfields ?? []).filter(s => !isEmptyVa
       :label="item"
       color="neutral"
       variant="subtle"
-      class="max-w-full whitespace-normal break-words"
+      class="max-w-full whitespace-normal wrap-break-word"
     />
   </div>
 
@@ -108,7 +108,7 @@ const filledSubs = computed(() => (props.subfields ?? []).filter(s => !isEmptyVa
           <dt class="text-muted">
             {{ sub.label }}
           </dt>
-          <dd class="min-w-0 break-words">
+          <dd class="min-w-0 wrap-break-word">
             {{ line[sub.key] }}
           </dd>
         </template>

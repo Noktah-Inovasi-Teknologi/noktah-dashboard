@@ -131,7 +131,7 @@ async function saveChange() {
             />
             <span>{{ formatDate(r.requested_on) }} · {{ r.requested_by ?? '—' }}{{ r.is_pic ? ' (PIC)' : '' }} · {{ CHANNEL[r.channel] }}</span>
           </div>
-          <p class="text-sm whitespace-pre-line break-words">
+          <p class="text-sm whitespace-pre-line wrap-break-word">
             “{{ r.text }}”
           </p>
           <p
