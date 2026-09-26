@@ -538,8 +538,9 @@ def convert_content_plan_row_to_jira_issue(
         content_editor_name = CONTENT_EDITOR.get(client_name, "")
         content_editor_id = WORKERS.get(content_editor_name, "") if content_editor_name else ""
         
-        # Get Reporter (Noktah Inovasi Teknologi)
-        reporter_id = WORKERS.get("Noktah Inovasi Teknologi", "")
+        # Reporter: the company account that reports every issue. Named "Noktah" in the Hub since the
+        # 2026-09-26 merge; the old name is kept until the WORKERS copy has the new one.
+        reporter_id = WORKERS.get("Noktah") or WORKERS.get("Noktah Inovasi Teknologi", "")
         
         # Get Content Type from "Bentuk" column
         content_type = row.get("Bentuk", "")

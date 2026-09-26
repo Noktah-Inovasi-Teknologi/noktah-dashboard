@@ -10,6 +10,7 @@ Generation itself (prompt assembly + OpenRouter) lives in the engine
 (flows/common/songbird.py) using tasks/openrouter_tasks.py; delivery reuses the
 existing Google Sheet/Drive tasks in tasks/google_tasks.py.
 """
+import json
 import logging
 import os
 import re
@@ -82,24 +83,92 @@ async def _db_pool() -> asyncpg.Pool:
     return await db_pool("SONGBIRD_DB_URL")
 
 
+CARD_FIELDS_NOT_FOR_CONTENT = {"pic"}
+
+
+def _json(value: Any) -> Any:
+    """JSONB as asyncpg returns it without a codec (text), parsed."""
+    return json.loads(value) if isinstance(value, str) else value
+
+
+def _card_text(value: Any, labels: Dict[str, str]) -> str:
+    """One Client Card value as a readable line: sub-field labels kept, empty parts dropped."""
+    if isinstance(value, dict):
+        parts = [f"{labels.get(k, k)}: {t}" for k, v in value.items() if (t := _card_text(v, {}))]
+        return "; ".join(parts)
+    if isinstance(value, list):
+        return " | ".join(t for v in value if (t := _card_text(v, labels)))
+    return "" if value is None else str(value).strip()
+
+
+async def _client_card(conn, client_name: str) -> Dict[str, Any]:
+    """The client's confirmed Client Card (current Profil and Guideline values) and its
+    open requests, from the Hub's tables. Found by the client's key or any of its aliases;
+    an exact name match, never a similar one, so another client's card can't be used."""
+    key = _normalize_key(client_name)
+    client = await conn.fetchrow(
+        """SELECT c.id, c.display_name FROM clients c WHERE c.client_key = $1
+           UNION
+           SELECT c.id, c.display_name FROM client_aliases a JOIN clients c ON c.id = a.client_id
+           WHERE a.alias_key = $1
+           LIMIT 1""", key)
+    if client is None:
+        return {"client_name": client_name, "records": []}
+    values = await conn.fetch(
+        """SELECT v.part, v.field_key, v.value, v.definition_version FROM card_values v
+           WHERE v.client_id = $1 AND v.state = 'current'""", client["id"])
+    definitions = {r["version"]: _json(r["body"]) for r in await conn.fetch(
+        "SELECT version, body FROM card_definitions")}
+    records = []
+    for part in ("profil", "guideline"):
+        # The PIC (the client's contact person and number) is for the team, not for content.
+        for v in [x for x in values if x["part"] == part and x["field_key"] not in CARD_FIELDS_NOT_FOR_CONTENT]:
+            body = definitions.get(v["definition_version"]) or {}
+            part_def = (body.get("parts") or {}).get(part) or {}
+            field = next((f for f in part_def.get("fields") or [] if f.get("key") == v["field_key"]), {})
+            labels = {sf["key"]: sf.get("label", sf["key"]) for sf in field.get("subfields") or []}
+            text = _card_text(_json(v["value"]), labels)
+            if text:
+                records.append({"subject": f"{part_def.get('label', part)} · {field.get('label', v['field_key'])}",
+                                "information": text})
+    for r in await conn.fetch(
+            """SELECT requested_on, text FROM client_requests
+               WHERE client_id = $1 AND status IN ('baru', 'diproses') ORDER BY requested_on DESC""",
+            client["id"]):
+        records.append({"subject": f"Permintaan klien terbuka ({r['requested_on'].isoformat()})",
+                        "information": r["text"]})
+    return {"client_name": client["display_name"], "records": records}
+
+
 @task(name="songbird.client.context", retries=2, retry_delay_seconds=30)
 async def songbird_client_context(client_name: str, limit: int = 40) -> Dict[str, Any]:
     """
-    Fetch the client's *current* knowledge records to ground generation.
+    The client facts that ground generation: the Client Card first, the old knowledge
+    records only when the card is still empty.
 
-    Trigram similarity is used only to gather *candidates*; identity is then confirmed
-    by `_is_same_client`, because on this roster the shared "Klinik Mata …" prefix makes
-    similarity alone match the wrong client. A client with no knowledge base returns no
-    records rather than borrowing another client's — grounding a plan in the wrong
-    brand's facts is far worse than generating from marketing params alone (FR-011).
+    The Client Card (the Hub's current Profil and Guideline values, plus open client
+    requests) is the confirmed source: every value there was accepted by a manager. Most
+    cards were still empty when songbird switched to them (2026-09-26), so a client with
+    no card falls back to the pre-Hub `knowledge_records` rather than losing its grounding.
+
+    For the old records, trigram similarity only gathers *candidates*; identity is then
+    confirmed by `_is_same_client`, because on this roster the shared "Klinik Mata …"
+    prefix makes similarity alone match the wrong client. A client with neither returns
+    no records rather than borrowing another client's (FR-011).
 
     Returns:
-        {"client_name": <resolved or input>, "records": [{"subject", "information"}, ...]}
+        {"client_name": <resolved or input>, "records": [{"subject", "information"}, ...],
+         "source": "client_card" | "knowledge_records" | None}
     """
     key = _normalize_key(client_name)
     pool = await _db_pool()
     try:
         async with pool.acquire() as conn:
+            card = await _client_card(conn, client_name)
+            if card["records"]:
+                logger.info(f"Loaded {len(card['records'])} Client Card facts for '{client_name}' "
+                            f"(resolved '{card['client_name']}')")
+                return {**card, "source": "client_card"}
             rows = await conn.fetch(
                 """
                 SELECT client_name, subject, information
@@ -123,14 +192,15 @@ async def songbird_client_context(client_name: str, limit: int = 40) -> Dict[str
         )
 
     records = [{"subject": r["subject"], "information": r["information"]} for r in accepted]
-    resolved = accepted[0]["client_name"] if accepted else client_name
+    resolved = accepted[0]["client_name"] if accepted else card["client_name"]
     if not records:
         logger.warning(
-            f"No knowledge base found for '{client_name}' — generation will rely on "
-            f"harvested signal + marketing params only"
+            f"No Client Card facts or knowledge records for '{client_name}' — generation will "
+            f"rely on harvested signal + marketing params only"
         )
-    logger.info(f"Loaded {len(records)} current knowledge records for '{client_name}' (resolved '{resolved}')")
-    return {"client_name": resolved, "records": records}
+        return {"client_name": resolved, "records": [], "source": None}
+    logger.warning(f"'{client_name}' has an empty Client Card; using {len(records)} old knowledge records instead")
+    return {"client_name": resolved, "records": records, "source": "knowledge_records"}
 
 
 @task(name="songbird.signal.top-performers", retries=2, retry_delay_seconds=30)
