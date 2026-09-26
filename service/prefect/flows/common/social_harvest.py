@@ -41,12 +41,6 @@ try:
         drive_file_delete,
         drive_file_upload,
         drive_folder_ensure,
-        sheets_create,
-        sheets_rows_append,
-        sheets_rows_delete_by_content_id,
-        sheets_spreadsheet_ensure,
-        sheets_tab_ensure,
-        sheets_tab_row_count,
     )
     from ...tasks.utility_tasks import RateWindow, randomized_item_delay
     from ...tasks.extraction_tasks import (
@@ -87,12 +81,6 @@ except ImportError:
         drive_file_delete,
         drive_file_upload,
         drive_folder_ensure,
-        sheets_create,
-        sheets_rows_append,
-        sheets_rows_delete_by_content_id,
-        sheets_spreadsheet_ensure,
-        sheets_tab_ensure,
-        sheets_tab_row_count,
     )
     from tasks.utility_tasks import RateWindow, randomized_item_delay
 
@@ -114,7 +102,9 @@ FORMAT_FOLDER = {
     "image": "Post", "carousel": "Post", "text": "Text",
 }
 
-# Per-account quarterly sheet columns (FR-016 delivery redesign).
+# Per-account quarterly sheet columns (FR-016 delivery redesign). The harvest no longer
+# writes these sheets (spec 009, R13); the layout stays because the existing sheets are
+# still read by `sheet-header-backfill` and the (undeployed) `social-harvest-sync`.
 # `advertisement` is a manual TRUE/FALSE flag (default FALSE) a reviewer sets to
 # mark content that was run as a paid ad/boost — Instagram does not expose whether
 # a post was advertised, so it cannot be auto-detected (see harvest notes).
@@ -688,18 +678,20 @@ async def run_harvest(
 
     Delivery layout under HARVEST_DRIVE_PARENT_ID:
       {Platform}/{username}/{Format}/...media...            (folders auto-created)
-      {Platform}/{username}/"{username} - Social Harvest"    (per-account workbook,
-                                                              one tab per quarter)
-      "Social Harvest Detail"/"{harvest_name} - {date}"      (per-run detail sheet)
+
+    The per-account "Social Harvest" workbook and the per-run detail sheet are
+    retired (spec 009, research R13): posts are reviewed in the Noktah Hub, whose
+    review marks live in `post_review_marks`. Everything a sheet row carried is in
+    the database (`harvested_items`, `harvested_signals`, the extraction tables).
 
     De-duplication is per account (platform+username+content_id): a prior
-    `success` is skipped; a prior `failed` is purged (its media, sheet rows, and
-    ledger record) and re-harvested (FR-021 + failed-retry).
+    `success` is skipped; a prior `failed` is purged (its media and ledger
+    record) and re-harvested (FR-021 + failed-retry).
 
     Args:
         profiles: Public Instagram/TikTok profile URLs (truncated to 5, FR-002)
         depth_selector: Function bounding items per profile (recent-N / window / date-range)
-        harvest_name: Human name for this run (used in the detail sheet filename + rows)
+        harvest_name: Human name for this run (the `client` label on roach's analysis spend)
         list_depth: How deep to list non-video (gallery-dl) items per profile;
             raise it so date-range backfills can reach older content
         credentials_block_name: Name of the Google credentials block
@@ -711,8 +703,6 @@ async def run_harvest(
     run_logger = get_run_logger()
     harvest_name = _resolve_harvest_name(harvest_name)
     start_time = datetime.now(timezone.utc)
-    harvest_date = start_time.strftime("%Y-%m-%d")
-    quarter_tab = _quarter_tab_name(start_time)
     data: List[Dict[str, Any]] = []
     summary = {
         "profiles_processed": 0,
@@ -721,6 +711,11 @@ async def run_harvest(
         "items_retried_failed": 0,
         "items_failed": 0,
         "profiles_blocked": 0,
+        # Spec 009 (harvest-registry): a listing roach answered with not-found, and a
+        # profile whose account is not (or no longer) in the roster. Counted so a
+        # caller can tell these apart from an ordinary "nothing new".
+        "profiles_not_found": 0,
+        "profiles_unresolved": 0,
         # Relational Spine (feature 004): classified per contracts/account-resolution.md.
         # Kept distinct from each other and from an ordinary "nothing new" zero —
         # nothing gates a harvest on roster-sync (FR-022a), so this pair is the
@@ -741,13 +736,11 @@ async def run_harvest(
         "items_aged_out": 0,
         "items_absent_within_reach": 0,
         "account_folder_ids": {},
-        "detail_sheet_id": None,
     }
     error: Optional[str] = None
     parent_id = os.environ["HARVEST_DRIVE_PARENT_ID"]
     rate_window = RateWindow(limit=100, window_seconds=3600.0)
     staged_files: List[str] = []
-    detail_row_id = 1
 
     if len(profiles) > MAX_PROFILES:
         run_logger.warning(f"Run specified {len(profiles)} profiles, truncating to {MAX_PROFILES} (FR-002)")
@@ -764,13 +757,6 @@ async def run_harvest(
         run_logger.warning(f"run-record start failed (non-fatal): {e}")
 
     try:
-        # Per-run detail sheet (new file per run) under the "Social Harvest Detail" folder.
-        detail_folder_id = await drive_folder_ensure(DETAIL_FOLDER_NAME, parent_id, credentials_block_name=credentials_block_name)
-        detail_title = f"{harvest_name} - {harvest_date}"
-        detail_sheet_id = await sheets_create(detail_title, detail_folder_id, header_row=DETAIL_HEADER, credentials_block_name=credentials_block_name)
-        summary["detail_sheet_id"] = detail_sheet_id
-        run_logger.info(f"Created detail sheet '{detail_title}' -> {detail_sheet_id}")
-
         for profile_url in profiles:
             try:
                 platform = _resolve_platform(profile_url)
@@ -784,6 +770,7 @@ async def run_harvest(
                 listing = await social_profile_list(profile_url, platform, list_depth, stories_only=stories_only)
             except RoachNotFoundError as e:
                 run_logger.warning(f"Profile skipped (private/non-existent): {profile_url} — {e}")
+                summary["profiles_not_found"] += 1
                 await _record_listing_failure(profile_url, platform, "not_found", run_record_id, run_logger)
                 continue
             except RoachRateLimitedError as e:
@@ -817,12 +804,13 @@ async def run_harvest(
             if resolution["outcome"] != "resolved":
                 skip_key = "items_skipped_unregistered" if resolution["outcome"] == "unregistered" else "items_skipped_inactive"
                 summary[skip_key] += len(items)
+                summary["profiles_unresolved"] += 1
                 run_logger.warning(
                     f"{username}: account {resolution['outcome']} on {platform} — skipping "
                     f"{len(items)} item(s) ("
-                    + ("add the handle to the Clients/Hashmaps sheet and run roster-sync"
+                    + ("add the account to the Client in the Noktah Hub Registry"
                        if resolution["outcome"] == "unregistered"
-                       else "remove the corresponding harvest-monthly-* deployment")
+                       else "the account is inactive in the Registry")
                     + ")"
                 )
                 summary["profiles_processed"] += 1
@@ -904,10 +892,6 @@ async def run_harvest(
             summary["account_folder_ids"][username] = account_folder_id
             drive_target = account_folder_id
 
-            # Per-account workbook + current-quarter tab.
-            account_sheet_id = await sheets_spreadsheet_ensure(f"{username} - Social Harvest", account_folder_id, credentials_block_name=credentials_block_name)
-            await sheets_tab_ensure(account_sheet_id, quarter_tab, ACCOUNT_HEADER, credentials_block_name=credentials_block_name)
-            account_row_id = await sheets_tab_row_count(account_sheet_id, quarter_tab, credentials_block_name=credentials_block_name) + 1
             format_folder_cache: Dict[str, str] = {}
 
             if not items:
@@ -934,10 +918,6 @@ async def run_harvest(
                                 await drive_file_delete(old_file_id.strip(), credentials_block_name=credentials_block_name)
                             except Exception as e:
                                 run_logger.warning(f"Could not delete old file {old_file_id}: {e}")
-                    try:
-                        await sheets_rows_delete_by_content_id(account_sheet_id, content_id, CONTENT_ID_COL, credentials_block_name=credentials_block_name)
-                    except Exception as e:
-                        run_logger.warning(f"Could not delete old sheet row for {content_id}: {e}")
                     await social_dedup_delete(platform, content_id, drive_target)
                     summary["items_retried_failed"] += 1
 
@@ -999,7 +979,7 @@ async def run_harvest(
                 # be enforced rather than merely reported.
                 #
                 # Reaching it skips EXTRACTION ONLY. Media still uploads, metrics
-                # are still recorded, the sheet row is still written. Halting
+                # are still recorded, the signal row is still written. Halting
                 # collection to save extraction spend would trade an irreplaceable
                 # observation for a replaceable one — the media is gone in 24h for
                 # a story and the counts are only observable now, whereas the
@@ -1050,12 +1030,6 @@ async def run_harvest(
                                 staged_files.remove(local_path)
                         except OSError:
                             pass
-
-                core = _row_core(username, platform, item, analysis, drive_file_ids, harvest_name, harvest_date)
-                await sheets_rows_append(account_sheet_id, [[account_row_id] + core], sheet_name=quarter_tab, credentials_block_name=credentials_block_name)
-                account_row_id += 1
-                await sheets_rows_append(detail_sheet_id, [[detail_row_id] + core + [account_folder_id]], credentials_block_name=credentials_block_name)
-                detail_row_id += 1
 
                 await social_dedup_record(
                     platform=platform,

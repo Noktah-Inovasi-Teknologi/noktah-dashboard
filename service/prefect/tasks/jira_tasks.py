@@ -912,3 +912,108 @@ async def transition_issue(
     except Exception as e:
         logger.error(f"Failed to transition issue {issue_key}: {str(e)}")
         raise
+
+# =============================================================================
+# NOKTAH HUB (spec 009): comments, entity properties, fields, search, changelog
+# =============================================================================
+#
+# Plain REST calls with the same Basic auth as `jira.issue-bulk.create`. Unlike the older
+# tasks above, these RAISE on failure (Prefect retries them, and the flow decides what a
+# failure means for its row, comment or page).
+
+async def _jira_http(credentials_block_name: str) -> tuple:
+    """(base url, headers) for a raw Jira REST call."""
+    import base64
+
+    jira_creds = await JiraCredentials.load_or_env(credentials_block_name)
+    client = jira_creds.get_client()
+    auth_header = getattr(client, "_auth_header", None)
+    if not auth_header:
+        raw = f"{client.jira_username}:{client.jira_token}".encode("utf-8")
+        auth_header = f"Basic {base64.b64encode(raw).decode('ascii')}"
+    headers = {"Authorization": auth_header, "Content-Type": "application/json", "Accept": "application/json"}
+    return client.jira_url.rstrip("/"), headers
+
+
+async def _jira_request(method: str, path: str, credentials_block_name: str, *,
+                        params: Optional[Dict[str, Any]] = None, body: Optional[Dict[str, Any]] = None,
+                        timeout: float = 60.0) -> Any:
+    """One Jira REST call; raises RuntimeError with Jira's own error text on non-2xx."""
+    import requests
+
+    base, headers = await _jira_http(credentials_block_name)
+    response = requests.request(method, f"{base}{path}", headers=headers, params=params,
+                                json=body, timeout=timeout)
+    if response.status_code >= 400:
+        raise RuntimeError(f"Jira {method} {path} answered HTTP {response.status_code}: {response.text[:300]}")
+    if response.status_code == 204 or not response.content:
+        return {}
+    return response.json()
+
+
+def comment_document(text: str) -> Dict[str, Any]:
+    """An ADF comment body from plain text: one paragraph per blank-line block, hardBreaks inside."""
+    blocks = adf.paragraphs_from_text(text)
+    return adf.document(blocks or [adf.paragraph([adf.text_node("-")])])
+
+
+@task(name="jira.issue.comment", retries=2, retry_delay_seconds=30)
+async def jira_issue_comment(issue_key: str, text: str, credentials_block_name: str = "jira-creds") -> Dict[str, Any]:
+    """POST /rest/api/3/issue/{key}/comment with an ADF body built from plain text. Returns {id}."""
+    result = await _jira_request("POST", f"/rest/api/3/issue/{issue_key}/comment", credentials_block_name,
+                                 body={"body": comment_document(text)})
+    return {"id": result.get("id")}
+
+
+@task(name="jira.issue.get-property", retries=2, retry_delay_seconds=30)
+async def jira_issue_get_property(issue_key: str, property_key: str,
+                                  credentials_block_name: str = "jira-creds") -> Any:
+    """GET /rest/api/3/issue/{key}/properties/{property}; returns the property's value."""
+    result = await _jira_request("GET", f"/rest/api/3/issue/{issue_key}/properties/{property_key}",
+                                 credentials_block_name)
+    return result.get("value")
+
+
+@task(name="jira.fields.map", retries=2, retry_delay_seconds=30)
+async def jira_fields_map(credentials_block_name: str = "jira-creds") -> Dict[str, str]:
+    """GET /rest/api/3/field → {field id: field name}, e.g. {"customfield_10042": "Field Associate"}."""
+    result = await _jira_request("GET", "/rest/api/3/field", credentials_block_name)
+    return {f["id"]: f.get("name") or f["id"] for f in (result or []) if isinstance(f, dict) and f.get("id")}
+
+
+@task(name="jira.search.page", retries=2, retry_delay_seconds=30)
+async def jira_search_page(jql: str, next_page_token: Optional[str] = None, max_results: int = 50,
+                           credentials_block_name: str = "jira-creds") -> Dict[str, Any]:
+    """POST /rest/api/3/search/jql, every field, with the changelog.
+
+    Returns Jira's page as is: {issues, nextPageToken?, isLast?}.
+    """
+    body: Dict[str, Any] = {"jql": jql, "fields": ["*all"], "expand": "changelog", "maxResults": max_results}
+    if next_page_token:
+        body["nextPageToken"] = next_page_token
+    return await _jira_request("POST", "/rest/api/3/search/jql", credentials_block_name, body=body, timeout=120.0)
+
+
+@task(name="jira.issue.changelog", retries=2, retry_delay_seconds=30)
+async def jira_issue_changelog(issue_key: str, credentials_block_name: str = "jira-creds",
+                               page_size: int = 100) -> List[Dict[str, Any]]:
+    """GET /rest/api/3/issue/{key}/changelog, every page: the full history when the search's
+    embedded changelog was truncated. Returns the histories, oldest first."""
+    histories: List[Dict[str, Any]] = []
+    start_at = 0
+    while True:
+        page = await _jira_request("GET", f"/rest/api/3/issue/{issue_key}/changelog", credentials_block_name,
+                                   params={"startAt": start_at, "maxResults": page_size})
+        values = page.get("values") or []
+        histories.extend(values)
+        start_at += len(values)
+        total = page.get("total")
+        if not values or page.get("isLast") or (isinstance(total, int) and start_at >= total):
+            return histories
+
+
+@task(name="jira.user.timezone", retries=2, retry_delay_seconds=30)
+async def jira_user_timezone(credentials_block_name: str = "jira-creds") -> Optional[str]:
+    """GET /rest/api/3/myself → the API user's time zone. JQL reads a bare date-time in this zone."""
+    result = await _jira_request("GET", "/rest/api/3/myself", credentials_block_name)
+    return result.get("timeZone")

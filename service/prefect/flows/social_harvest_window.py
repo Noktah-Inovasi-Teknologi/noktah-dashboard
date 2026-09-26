@@ -3,8 +3,8 @@ Social Content Harvest — Time-Window Flow
 
 Harvests and analyzes publicly visible content items from up to five public
 Instagram/TikTok profiles within a time window, delivering downloaded content
-and an analysis Google Sheet to Google Drive (spec 002-social-content-harvest,
-FR-016a).
+to Google Drive and the analysis to the database (spec 002-social-content-harvest,
+FR-016a; the analysis sheets were retired by spec 009).
 
 The window can be expressed two ways:
   - Relative (default, right for the recurring schedule): items published within
@@ -75,7 +75,7 @@ async def social_harvest_window_flow(
         days: Relative window size in days (used when start/end are not given; default 7)
         start_date: Absolute window start, 'YYYY-MM-DD' inclusive (UTC)
         end_date: Absolute window end, 'YYYY-MM-DD' inclusive (UTC)
-        harvest_name: Human name for this run (detail sheet filename + rows);
+        harvest_name: Human name for this run (the analysis spend label);
             defaults to the Prefect flow-run name (e.g. "graceful-rook") when omitted
         list_depth: How deep to list non-video (Instagram) items; raise it for
             older/longer windows so the date filter has older posts to match

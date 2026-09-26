@@ -15,6 +15,8 @@ export interface PersonForm {
   units: string[]
   roles: string[]
   permissions: string[]
+  /** "Mulai bekerja" (YYYY-MM-DD, blank = unknown); saved on the Person page only. */
+  started_on: string
 }
 
 export interface Choice { label: string, value: string, disabled?: boolean }
@@ -33,7 +35,8 @@ export function personForm(p?: Person | null): PersonForm {
     emails: [...(p?.emails ?? [])],
     units: [...(p?.units ?? [])],
     roles: (p?.roles ?? []).map(r => roleValue(r.role, r.noktah_brand)),
-    permissions: [...(p?.permissions ?? [])]
+    permissions: [...(p?.permissions ?? [])],
+    started_on: p?.started_on ?? ''
   }
 }
 

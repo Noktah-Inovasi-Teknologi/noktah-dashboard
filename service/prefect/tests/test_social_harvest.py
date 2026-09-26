@@ -2,8 +2,8 @@
 Tests for the shared social-harvest engine (flows/common/social_harvest.py)
 and its pacing/rate-limiting utilities.
 
-Covers US1 (happy path: one profile -> folder + Sheet rows with metadata +
-analysis) and US2 (100/rolling-hour cap, randomized-delay omission on the
+Covers US1 (happy path: one profile -> Drive folder + database rows with
+metadata + analysis; since spec 009 no sheet is written, R13) and US2 (100/rolling-hour cap, randomized-delay omission on the
 last item, rate-limit/challenge back-off + profile deferral, cross-run
 dedupe skip, and continue-on-item/profile-failure). roach and Google Drive
 calls are mocked; Prefect task machinery is bypassed by monkeypatching the
@@ -26,6 +26,7 @@ os.environ.setdefault("ROACH_API_KEY", "test-key")
 os.environ.setdefault("HARVEST_DB_URL", "postgresql://test:test@localhost/test")
 
 from flows.common import social_harvest as engine
+from tasks import google_tasks
 from tasks.social_tasks import RoachNotFoundError, RoachRateLimitedError
 from tasks.utility_tasks import RateWindow, randomized_item_delay
 
@@ -183,14 +184,17 @@ def patched_engine(monkeypatch):
         calls["analyze_client"] = client
         return {"subtitle": "s", "flow": "f", "summary": "sum", "status": "success", "error": None}
 
-    monkeypatch.setattr(engine, "sheets_create", fake_sheets_create)
+    # Spec 009 (R13): the harvest sheets are retired. The engine no longer imports the
+    # sheet tasks; they are replaced at their source with recorders, so a sheet write
+    # reintroduced by any route shows up in account_rows/detail_rows/deleted_rows.
+    monkeypatch.setattr(google_tasks, "sheets_create", fake_sheets_create)
+    monkeypatch.setattr(google_tasks, "sheets_spreadsheet_ensure", fake_spreadsheet_ensure)
+    monkeypatch.setattr(google_tasks, "sheets_tab_ensure", fake_tab_ensure)
+    monkeypatch.setattr(google_tasks, "sheets_tab_row_count", fake_tab_row_count)
+    monkeypatch.setattr(google_tasks, "sheets_rows_append", fake_sheets_rows_append)
+    monkeypatch.setattr(google_tasks, "sheets_rows_delete_by_content_id", fake_rows_delete)
     monkeypatch.setattr(engine, "drive_folder_ensure", fake_drive_folder_ensure)
-    monkeypatch.setattr(engine, "sheets_spreadsheet_ensure", fake_spreadsheet_ensure)
-    monkeypatch.setattr(engine, "sheets_tab_ensure", fake_tab_ensure)
-    monkeypatch.setattr(engine, "sheets_tab_row_count", fake_tab_row_count)
     monkeypatch.setattr(engine, "drive_file_upload", fake_drive_file_upload)
-    monkeypatch.setattr(engine, "sheets_rows_append", fake_sheets_rows_append)
-    monkeypatch.setattr(engine, "sheets_rows_delete_by_content_id", fake_rows_delete)
     monkeypatch.setattr(engine, "drive_file_delete", fake_file_delete)
     monkeypatch.setattr(engine, "social_dedup_check", fake_dedup_check)
     monkeypatch.setattr(engine, "social_dedup_record", fake_dedup_record)
@@ -219,7 +223,7 @@ def patched_engine(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_happy_path_single_profile_delivers_and_appends_row(patched_engine, monkeypatch):
+async def test_happy_path_single_profile_delivers_to_drive_and_database(patched_engine, monkeypatch):
     async def fake_list(profile_url, platform, max_items=30, stories_only=False):
         return {"profile": {"handle": "acct"}, "items": [_item("1")]}
 
@@ -235,21 +239,15 @@ async def test_happy_path_single_profile_delivers_and_appends_row(patched_engine
     assert result["summary"]["items_collected"] == 1
     assert result["summary"]["profiles_processed"] == 1
     assert result["summary"]["account_folder_ids"]["acct"] == "folder-acct"
-    assert result["summary"]["detail_sheet_id"] == "detail-sheet"
-    # one row in the per-account quarterly sheet and one in the per-run detail sheet
-    assert len(patched_engine["account_rows"]) == 1
-    assert len(patched_engine["detail_rows"]) == 1
-    row = patched_engine["account_rows"][0]
-    assert row[0] == 1        # id (sequential)
-    assert row[1] == "acct"   # username
-    assert row[2] == "tiktok" # platform
-    assert row[3] == "1"      # content_id
-    assert row[13] == "s"     # subtitle
-    assert row[14] == "f"     # content_flow
-    assert row[15] == "sum"   # summary
-    assert row[16] == "test"  # harvest_name
-    # detail row carries the account folder id as the extra trailing column
-    assert patched_engine["detail_rows"][0][-1] == "folder-acct"
+    assert "detail_sheet_id" not in result["summary"]
+    # media reaches Drive; the analysis reaches the database
+    assert len(patched_engine["upload"]) == 1
+    signal = patched_engine["signal_record"][0]
+    assert (signal["profile_key"], signal["platform"], signal["content_id"]) == ("acct", "tiktok", "1")
+    assert (signal["subtitle"], signal["content_flow"], signal["summary"]) == ("s", "f", "sum")
+    # spec 009 R13: no sheet is created or appended to
+    assert patched_engine["account_rows"] == []
+    assert patched_engine["detail_rows"] == []
     # account_id is threaded into both writes once the account is resolved
     assert patched_engine["dedup_record"][0]["account_id"] == "acct-1"
     assert patched_engine["signal_record"][0]["account_id"] == "acct-1"
@@ -428,6 +426,7 @@ async def test_profile_not_found_is_skipped_and_run_continues(patched_engine, mo
     assert result["error"] is None
     assert result["summary"]["profiles_processed"] == 1
     assert result["summary"]["items_collected"] == 1
+    assert result["summary"]["profiles_not_found"] == 1
 
 
 @pytest.mark.asyncio
@@ -457,7 +456,7 @@ async def test_rate_limited_download_backs_off_defers_profile_retains_prior_item
     # item 1 collected before the block; items 2/3 deferred, not lost/errored as failures
     assert result["summary"]["items_collected"] == 1
     assert result["summary"]["profiles_blocked"] == 1
-    assert len(patched_engine["account_rows"]) == 1
+    assert len(patched_engine["dedup_record"]) == 1
 
 
 @pytest.mark.asyncio
@@ -495,9 +494,9 @@ async def test_prior_failed_item_is_purged_and_reharvested(patched_engine, monke
         ["https://www.tiktok.com/@acct"], engine.make_recent_n_selector(10), harvest_name="test",
     )
 
-    # purge: old media files deleted, old sheet rows deleted, ledger record deleted
+    # purge: old media files deleted, ledger record deleted; no sheet row to delete any more
     assert set(patched_engine["deleted_files"]) == {"oldfile1", "oldfile2"}
-    assert patched_engine["deleted_rows"] == [("acct-sheet", "1")]
+    assert patched_engine["deleted_rows"] == []
     assert patched_engine["dedup_delete"] == [("tiktok", "1", "folder-acct")]
     # then re-harvested fresh
     assert result["summary"]["items_retried_failed"] == 1
@@ -524,7 +523,7 @@ async def test_single_item_failure_is_skipped_and_run_continues(patched_engine, 
 
     assert result["error"] is None
     assert result["summary"]["items_collected"] == 1  # item 2 still delivered
-    assert len(patched_engine["account_rows"]) == 1
+    assert len(patched_engine["dedup_record"]) == 1
 
 
 @pytest.mark.asyncio
@@ -894,3 +893,26 @@ async def test_refresh_updates_metrics_without_touching_analysis_columns(patched
     assert not patched_engine.get("signal_record"), (
         "a refreshed item must not go through social.signal.record"
     )
+
+
+def test_engine_no_longer_imports_sheet_writers():
+    """Spec 009 R13: the per-account and detail sheets are retired; review marks live in
+    the Hub. A sheet writer back in the engine's namespace would be a sheet write back."""
+    for name in ("sheets_create", "sheets_rows_append", "sheets_spreadsheet_ensure",
+                 "sheets_tab_ensure", "sheets_tab_row_count", "sheets_rows_delete_by_content_id"):
+        assert not hasattr(engine, name), name
+
+
+@pytest.mark.asyncio
+async def test_unresolved_account_is_counted_for_harvest_registry(patched_engine, monkeypatch):
+    async def fake_list(profile_url, platform, max_items=30, stories_only=False):
+        return {"profile": {"handle": "ghost"}, "items": [_item("1")]}
+
+    async def unregistered(platform, handle):
+        return {"outcome": "unregistered", "account_id": None}
+
+    monkeypatch.setattr(engine, "social_profile_list", fake_list)
+    monkeypatch.setattr(engine, "social_account_resolve", unregistered)
+    result = await engine.run_harvest(["https://www.tiktok.com/@ghost"], engine.make_recent_n_selector(10))
+    assert result["summary"]["profiles_unresolved"] == 1
+    assert result["summary"]["items_collected"] == 0

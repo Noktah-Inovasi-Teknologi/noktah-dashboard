@@ -15,6 +15,7 @@ changed by the Owner only.
 A Person who leaves is never deleted: roles, team assignments and permissions end,
 sign-in stops (auth.load_caller requires status active), and history keeps their name.
 """
+from datetime import date
 from typing import Any, Dict, Iterable, List, Optional
 
 import asyncpg
@@ -26,7 +27,7 @@ from ..permissions import (OWNER_ONLY_ROLES, PERMISSIONS, in_scope, is_owner, ma
 from ..registry.changes import record_change
 from . import catalog
 
-PERSON_FIELDS = ("display_name", "jira_account_id", "slack_user_id", "status")
+PERSON_FIELDS = ("display_name", "jira_account_id", "slack_user_id", "status", "started_on")
 
 
 async def _roles(conn: asyncpg.Connection, person_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
@@ -82,7 +83,7 @@ async def list_people(conn: asyncpg.Connection, caller: Caller, status: str) -> 
 
 async def get_person(conn: asyncpg.Connection, caller: Caller, person_id: str) -> Dict[str, Any]:
     row = await conn.fetchrow(
-        """SELECT id::text AS id, display_name, status, jira_account_id, slack_user_id, version, left_at
+        """SELECT id::text AS id, display_name, status, jira_account_id, slack_user_id, version, left_at, started_on
            FROM people WHERE id = $1::uuid""", person_id)
     if row is None:
         raise NotFound("Orang tidak ditemukan.")
@@ -106,7 +107,8 @@ async def get_person(conn: asyncpg.Connection, caller: Caller, person_id: str) -
              AND r.entity_id = $1::uuid
            ORDER BY r.at DESC, r.id DESC LIMIT 200""", person_id)
     return dict(row) | {
-        "left_at": row["left_at"].isoformat() if row["left_at"] else None, "emails": emails,
+        "left_at": row["left_at"].isoformat() if row["left_at"] else None,
+        "started_on": row["started_on"].isoformat() if row["started_on"] else None, "emails": emails,
         "units": units, "roles": roles, "permissions": perms,
         "team": [dict(t) for t in team],
         "history": [{"id": h["id"], "entity": h["entity"], "field": h["field"], "old_value": h["old_value"],
@@ -179,6 +181,10 @@ async def lock_person(conn: asyncpg.Connection, person_id: str, version: Optiona
     return row
 
 
+def _jsonable(value: Any) -> Any:
+    return value.isoformat() if isinstance(value, date) else value
+
+
 async def update_person(conn: asyncpg.Connection, person_id: str, version: Optional[int], changes: Dict[str, Any],
                         by: Optional[str]) -> None:
     current = await lock_person(conn, person_id, version)
@@ -192,6 +198,13 @@ async def update_person(conn: asyncpg.Connection, person_id: str, version: Optio
         elif field == "status":
             if value not in ("active", "left"):
                 raise Invalid("Status harus active atau left.")
+        elif field == "started_on":
+            # "Mulai bekerja": the start of the Incentive Framework's 30-day adaptation (spec 009 G-27)
+            if isinstance(value, str):
+                try:
+                    value = date.fromisoformat(value) if value.strip() else None
+                except ValueError:
+                    raise Invalid("Tanggal mulai bekerja tidak valid.")
         else:
             value = (value or "").strip() or None
         if value == current[field]:
@@ -202,8 +215,8 @@ async def update_person(conn: asyncpg.Connection, person_id: str, version: Optio
             await conn.execute("UPDATE people SET status = 'active', left_at = NULL WHERE id = $1::uuid", person_id)
         else:
             await conn.execute(f"UPDATE people SET {field} = $2 WHERE id = $1::uuid", person_id, value)
-        await record_change(conn, entity="person", entity_id=person_id, field=field, old=current[field], new=value,
-                            person_id=by)
+        await record_change(conn, entity="person", entity_id=person_id, field=field,
+                            old=_jsonable(current[field]), new=_jsonable(value), person_id=by)
     await conn.execute("UPDATE people SET version = version + 1, updated_at = now() WHERE id = $1::uuid", person_id)
 
 

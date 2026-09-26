@@ -168,6 +168,8 @@ export interface Person {
   units: string[]
   roles: PersonRole[]
   permissions: string[]
+  /** "Mulai bekerja" (YYYY-MM-DD): starts the Incentive Framework's 30-day adaptation. */
+  started_on?: string | null
   version?: number
 }
 
@@ -200,4 +202,377 @@ export interface AiCosts {
   cases: AiCostCase[]
   totals: Record<string, number>
   hub_cap: { cap_usd: number, spent_usd: number }
+}
+
+// ── spec 009: Otomasi & Laporan (specs/009-hub-otomasi-laporan/contracts/hub-api.md) ──
+
+export interface ClientRef { id: string, name: string }
+
+export interface AutomationRun {
+  id?: string
+  name: string | null
+  deployment?: string
+  /** Prefect state type: COMPLETED, FAILED, CRASHED, RUNNING, … */
+  state: string | null
+  state_name?: string | null
+  started_at: string | null
+  ended_at?: string | null
+  failures?: number
+}
+
+export interface Automation {
+  key: string
+  label: string
+  deployments: string[]
+  /** Prefect couldn't be reached; runs are then empty. */
+  unavailable?: boolean
+  last_run: AutomationRun | null
+  next_run_at: string | null
+  /** Failed or crashed runs in the history. */
+  failures?: number
+  /** 90 days, newest first. */
+  history: AutomationRun[]
+}
+
+export type PlanState = 'found' | 'missing' | 'ambiguous' | 'unreadable' | 'not_scanned'
+export type PlanStatus = 'found' | 'greenlit' | 'changed_since_greenlight' | 'partly_created' | 'issues_created'
+  | 'changed_after_issues' | 'missing' | 'ambiguous' | 'unreadable' | 'not_scanned'
+
+export interface PlanSummary {
+  /** Null when the plan was never scanned. */
+  id: string | null
+  client: ClientRef
+  state: PlanState
+  file_name: string | null
+  file_url: string | null
+  problem: string | null
+  rows: number
+  issues: number
+  status: PlanStatus
+  greenlit: { by: string, at: string } | null
+  open_flags: number
+  scanned_at?: string | null
+}
+
+export interface PlanList { month: string, scanned_at: string | null, plans: PlanSummary[] }
+
+export type PlanFlagKind = 'changed_after_issue' | 'deleted_from_plan' | 'key_erased' | 'key_duplicated' | 'key_unknown'
+
+export interface PlanFlag {
+  id: string
+  kind: PlanFlagKind
+  issue_key: string | null
+  row_number: number | null
+  changes: { column: string, old: string | null, new: string | null }[]
+  detected_at: string
+  comment_state: 'not_needed' | 'pending' | 'posted' | 'failed'
+}
+
+export interface PlanProblem { code: string, message: string, row_number?: number | null }
+
+export interface PlanRow {
+  row_number: number
+  tanggal: string | null
+  bentuk: string | null
+  topik: string | null
+  issue_key: string | null
+  flags: PlanFlagKind[]
+}
+
+export interface PlanDetail {
+  id: string
+  client: ClientRef
+  month: string
+  state: PlanState
+  status: PlanStatus
+  file_name: string | null
+  file_url: string | null
+  problem: string | null
+  /** The plan as the manager sees it; sent back with a Greenlight. */
+  fingerprint: string
+  scanned_at: string | null
+  quota: Record<string, { planned: number, quota: number | null }>
+  blocking: PlanProblem[]
+  warnings: PlanProblem[]
+  team?: { field_associate: string | null, content_editor: string | null }
+  rows: PlanRow[]
+  rows_without_issue?: number
+  flags: PlanFlag[]
+  greenlights: { by: string, at: string }[]
+  can_greenlight: boolean
+  can_create: boolean
+}
+
+export type BatchStatus = 'queued' | 'running' | 'done' | 'failed'
+
+export interface JiraBatchRow {
+  plan_id?: string
+  client: string
+  row_number: number
+  outcome: 'created' | 'failed' | 'refused'
+  issue_key: string | null
+  reason: string | null
+}
+
+export interface JiraBatch {
+  id: string
+  status: BatchStatus
+  total: number
+  created: number
+  failed: number
+  requested_by: string
+  requested_at: string
+  finished_at: string | null
+  error?: string | null
+  rows?: JiraBatchRow[]
+}
+
+export type HarvestOutcome = 'collected' | 'nothing_new' | 'blocked' | 'not_found' | 'failed' | 'skipped'
+
+export interface HarvestAccount {
+  id: string
+  platform: string
+  handle: string
+  url: string
+  client: ClientRef
+  role: 'own' | 'competitor'
+  last_harvested_at: string | null
+  last_outcome: HarvestOutcome | null
+  last_reason: string | null
+  posts_collected: number | null
+  status: 'ok' | 'blocked' | 'not_found' | 'failed' | 'never'
+  first_harvest: boolean
+}
+
+export type ReviewMark = 'iklan' | 'tidak_relevan' | 'bukan_konten_akun_ini'
+
+export interface HarvestPost {
+  platform: string
+  content_id: string
+  url: string | null
+  published_at: string | null
+  content_type: string | null
+  caption: string | null
+  views: number | null
+  likes: number | null
+  comments: number | null
+  shares: number | null
+  marks: ReviewMark[]
+}
+
+export interface HarvestPosts {
+  /** `clients`: every Client this account belongs to (an account may be shared). */
+  account: HarvestAccount & { clients?: { client: ClientRef, role: 'own' | 'competitor' }[] }
+  month: string
+  posts: HarvestPost[]
+}
+
+// Laporan
+
+export interface DeliveryCounts {
+  /** Null when the Client has no Content Plan the Hub knows of. */
+  planned: number | null
+  created: number
+  published: number
+  late: number
+  published_late: number
+  cancelled: number
+  on_hold: number
+}
+
+export interface LateItem {
+  key: string
+  topik: string | null
+  publication_date: string | null
+  status: string
+  /** Station letter A–E, or null for a status outside the map. */
+  station: string | null
+  station_label?: string | null
+  days_late: number
+}
+
+export interface DeliveryReport {
+  month: string
+  refreshed_at: string | null
+  clients: (DeliveryCounts & { client: ClientRef, late_items: LateItem[] })[]
+  totals: DeliveryCounts
+}
+
+export interface HeldHours { median: number | null, longest: number | null }
+
+export interface StationRow {
+  station: string
+  label: string
+  role: string
+  in: number
+  out: number
+  returns: { total: number, by_origin: Record<string, number> }
+  held_hours: HeldHours
+  waiting: { key: string, client: string, since: string, hours: number }[]
+}
+
+export interface StationPerson {
+  /** A Person, or someone Jira names who isn't in the Hub: {name: 'tidak terdaftar', account_id}. */
+  person: { id?: string | null, name: string, account_id?: string }
+  station: string
+  in: number
+  out: number
+  returns_against: number
+  held_hours: HeldHours
+  waiting: number
+}
+
+export interface StationTeam {
+  client: ClientRef
+  first_pass: { rate: number | null, counted: number, target: number }
+  qa_rounds: { average: number | null, counted: number, target: number }
+  both_met: boolean
+  returns: number
+}
+
+export interface StationReturn {
+  key: string
+  client?: string | null
+  at: string
+  from_status: string
+  to_status: string
+  /** Station of the Defect Category; null = "tanpa kategori" (G-35). */
+  origin: string | null
+  /** The Station that sent it back (where a "tanpa kategori" return is shown). */
+  sent_back_by?: string | null
+  defect: string | null
+  reason: string | null
+  bucket?: string | null
+}
+
+export interface StationsReport {
+  month: string
+  refreshed_at: string | null
+  stations: StationRow[]
+  people: StationPerson[]
+  teams: StationTeam[]
+  round_flags: { key: string, client: string, stations: string[], rounds: number }[]
+  returns: StationReturn[]
+  unknown_statuses: string[]
+}
+
+export interface MetricSummary { total: number | null, average: number | null, n: number, accounts?: number }
+export interface RateSummary { value: number | null, n?: number, followers?: number | null, unavailable?: string | null }
+
+export interface PerfPost {
+  platform: string
+  content_id: string
+  url: string | null
+  handle?: string | null
+  published_at: string | null
+  content_type: string | null
+  caption: string | null
+  views: number | null
+  likes: number | null
+  comments: number | null
+  shares: number | null
+  engagement?: number | null
+  marks?: ReviewMark[]
+}
+
+export type PerfAccount = { platform: string, handle: string, followers?: number | null } | string
+
+export interface PerfSide {
+  accounts: PerfAccount[]
+  posts: number
+  /** Posts left after marked ones are set aside. */
+  posts_counted?: number
+  posts_by_type: Record<string, number>
+  views: MetricSummary
+  likes: MetricSummary
+  comments: MetricSummary
+  shares: MetricSummary
+  engagement_rate_views: RateSummary
+  engagement_rate_followers: RateSummary
+  top_posts?: PerfPost[]
+  marked?: PerfPost[]
+  /** Change from last month, as a fraction (0.12 = +12%), per figure. */
+  change?: Record<string, number | null>
+}
+
+export interface PerformanceReport {
+  client: ClientRef
+  month: string
+  refreshed_at?: string | null
+  own: PerfSide
+  /** The competitors' average per account, with the same figures as `own`. */
+  competitors: { accounts: PerfAccount[], average: Partial<PerfSide>, n_accounts: number } | null
+}
+
+export interface PerformanceList {
+  month: string
+  refreshed_at?: string | null
+  clients: { client: ClientRef, accounts?: number, posts?: number, views_total?: number | null, engagement_rate_views?: number | null }[]
+}
+
+export type SanctionLevel = 'teguran_lisan' | 'sp1' | 'sp2' | 'sp3' | 'peringatan_terakhir' | 'phk_flag'
+export type SanctionState = 'computed' | 'held' | 'issued' | 'on_appeal' | 'flagged'
+export type EventState = 'counted' | 'zero' | 'belum_lengkap' | 'reference' | 'adaptation' | 'on_hold' | 'not_judged'
+
+export interface IncentiveSanction {
+  id: string
+  level: SanctionLevel
+  level_label?: string
+  with_pip?: boolean
+  source?: 'recorded' | 'ladder' | 'direct'
+  state: SanctionState
+  /** `YYYY-MM` of the points behind it; null for a recorded or direct sanction. */
+  period?: string | null
+  category_code?: string | null
+  event_keys?: string[]
+  points?: number | null
+  hold_until: string | null
+  hold_reason?: string | null
+  issued_on?: string | null
+  valid_until?: string | null
+  letter_number?: string | null
+  letter_state?: 'not_needed' | 'pending' | 'written' | 'failed'
+  letter_url?: string | null
+  note?: string | null
+}
+
+export interface IncentiveEvent {
+  key: string
+  summary?: string | null
+  type: 'violation' | 'excellence' | string | null
+  category: string | null
+  /** Signed: negative for a Violation, positive for an Excellence. */
+  points: number | null
+  state: EventState
+  reason: string | null
+  missing?: string[]
+  formula?: string | null
+  direct_item?: string | null
+  status?: string | null
+  created_at?: string | null
+  judged_at?: string | null
+}
+
+export interface IncentivePerson {
+  person: { id: string, name: string }
+  /** ≤ 0 */
+  violation_points: number
+  /** ≥ 0 */
+  excellence_points: number
+  sanctions?: IncentiveSanction[]
+  /** The newest of `sanctions`. */
+  sanction: IncentiveSanction | null
+  team_reward: { qualifies: boolean, teams_met: number, teams: number } | null
+  events: IncentiveEvent[]
+}
+
+export interface IncentiveReport {
+  month: string
+  refreshed_at: string | null
+  levels?: Record<string, string>
+  people: IncentivePerson[]
+  incomplete: { key: string, summary?: string | null, missing: string[], person?: string | null }[]
+  /** Events whose Person/Assignee isn't anyone in the Hub. */
+  unmatched?: { key: string, account_id: string | null }[]
+  direct_sanctions_manual: { key: string, person: string | null, summary?: string | null }[]
 }

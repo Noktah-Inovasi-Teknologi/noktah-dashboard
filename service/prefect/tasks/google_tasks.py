@@ -608,3 +608,58 @@ async def sheets_rows_delete_by_content_id(
         raise
 
 
+
+
+@task(name="google.sheets.write-cells", retries=2, retry_delay_seconds=30)
+async def sheets_write_cells(
+    spreadsheet_id: str,
+    cells: Dict[str, Any],
+    credentials_block_name: str = "google-creds",
+) -> Dict[str, Any]:
+    """Write single cells by A1 address, e.g. {"'Sheet1'!T5": '=HYPERLINK("…","ESKL-12")'}.
+
+    One `values.batchUpdate` with USER_ENTERED, so a formula is stored as a formula. Only
+    the addressed cells are touched; nothing else in the sheet is rewritten.
+    """
+    if not cells:
+        return {"totalUpdatedCells": 0}
+    try:
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
+        client = google_creds.get_client()
+        body = {
+            "valueInputOption": "USER_ENTERED",
+            "data": [{"range": a1, "values": [[value]]} for a1, value in cells.items()],
+        }
+        return client.sheets_service.spreadsheets().values().batchUpdate(
+            spreadsheetId=spreadsheet_id, body=body).execute()
+    except Exception as e:
+        logger.error(f"Failed to write {len(cells)} cell(s) in {spreadsheet_id}: {str(e)}")
+        raise
+
+
+@task(name="google.drive.upload-doc", retries=2, retry_delay_seconds=30)
+async def drive_upload_doc(
+    name: str,
+    html: str,
+    folder_id: str,
+    credentials_block_name: str = "google-creds",
+) -> str:
+    """Upload HTML as a Google Doc (Drive converts it) into `folder_id`; returns the file id."""
+    from googleapiclient.http import MediaIoBaseUpload
+    import io
+
+    try:
+        google_creds = await GoogleCredentials.load_or_env(credentials_block_name)
+        client = google_creds.get_client()
+        media = MediaIoBaseUpload(io.BytesIO(html.encode("utf-8")), mimetype="text/html", resumable=False)
+        created = client.get_drive_service().files().create(
+            body={"name": name, "mimeType": "application/vnd.google-apps.document", "parents": [folder_id]},
+            media_body=media,
+            fields="id",
+            supportsAllDrives=True,
+        ).execute()
+        logger.info(f"Uploaded Google Doc '{name}' to folder {folder_id} -> {created['id']}")
+        return created["id"]
+    except Exception as e:
+        logger.error(f"Failed to upload Google Doc '{name}': {str(e)}")
+        raise

@@ -48,6 +48,10 @@ Prefect (Docker network only) ─X-Hub-Internal-Token─▶ hub-api:8000/interna
 | `app/ai/` | OpenRouter call (length checked before parsing, one quoted retry, no salvage), the monthly cap |
 | `app/ai/` | OpenRouter client, the Hub's monthly cap (`budget.py`), and `costs.py`: AI spend per case and month for `GET /v1/ai/costs` (Owner and Brand Managers) |
 | `app/people/` | People, emails, Units, roles, permissions; the role catalog (`catalog.py`) |
+| `app/automation/` | Otomasi (spec 009): Content Plan rules and fingerprints (`plans.py`, pure), the watcher (`watcher.py`), Greenlight/status (`store.py`), "Buat issue Jira" batches (`batches.py`), the Registry-driven Harvest and review marks (`harvest.py`) |
+| `app/reports/` | Laporan: the Jira copy (`jira_store.py`), the status → Station table (`stations.py`, pure), Delivery, Stations, Performa |
+| `app/incentive/` | Incentive Framework v2.1: points (`points.py`, pure), the sanction ladder (`ladder.py`, pure), sanctions and the hourly tick (`sanctions.py`), SP letters (`letters.py`) |
+| `app/prefect_api.py`, `app/workdays.py` | Starting Otomasi flows through the Prefect API; working days (Mon–Fri minus `config/hub/holidays.yaml`) |
 
 ## Rules that are easy to undo by accident
 
@@ -64,6 +68,15 @@ Prefect (Docker network only) ─X-Hub-Internal-Token─▶ hub-api:8000/interna
   of the Clients tab but keep their Hashmaps rows. Hashmaps keys keep their live spelling.
 - **Validate-only is the default** for everything that writes outside the Hub or spends:
   the import (`validate_only=true`, a rolled-back transaction) and the sheet copy (`dry_run`).
+- **Otomasi & Laporan are Eskala only** (spec 009 G-39), behind three stored permissions:
+  `manage_automation`, `view_reports`, `view_incentive` (checked on brand `eskala`).
+- **A Content Plan row → issue is recorded exactly** (`content_plan_issues`), never inferred
+  by order; a row with a recorded issue is never created again, and an erased or duplicated
+  Key blocks creation until a Manager resolves it. After creation the Hub only comments on
+  issues, never changes their fields.
+- **Points never guess** (`incentive/points.py`): an Event missing a needed verdict field is
+  `belum_lengkap` and counts nothing. **Sanctions are issued automatically after a one-day
+  hold** (ADR-0001); `phk_flag` is only ever flagged (a CHECK enforces it).
 
 ## Settings (env)
 
@@ -78,7 +91,7 @@ Prefect (Docker network only) ─X-Hub-Internal-Token─▶ hub-api:8000/interna
 | `GOOGLE_CLIENT_ID` / `_SECRET` / `_REFRESH_TOKEN` | Google Docs intake, the import, the sheet copy |
 | `SLACK_AUTOMATION_NOKTAH` | 80%-of-cap alert |
 | `SLACK_MANAGERIAL_ESKALA` / `SLACK_MANAGERIAL_NOKTAH` | "Guideline change waiting" notices, by Noktah Brand |
-| `PREFECT_API_URL` | Only to pause `roster-sync` after the real import |
+| `PREFECT_API_URL` | Pause `roster-sync` after the real import; start the Otomasi flows and read their runs (spec 009) |
 
 ## Commands
 

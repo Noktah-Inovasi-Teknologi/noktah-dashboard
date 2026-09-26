@@ -1,4 +1,5 @@
 """Identity (/v1/me) and People management (US1, US5)."""
+from datetime import date
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -45,6 +46,10 @@ async def me(caller: Caller = Depends(current_caller)) -> dict:
             "appoint_bm": anywhere(Action.APPOINT_BRAND_MANAGER),
             "run_intake": anywhere(Action.RUN_INTAKE),
             "view_ai_costs": costs.may_view(caller),
+            # Otomasi & Laporan (spec 009): Eskala only
+            "manage_automation": can(access, Action.MANAGE_AUTOMATION, "eskala") is Decision.ALLOW,
+            "view_reports": can(access, Action.VIEW_REPORTS, "eskala") is Decision.ALLOW,
+            "view_incentive": can(access, Action.VIEW_INCENTIVE, "eskala") is Decision.ALLOW,
         },
     }
 
@@ -77,6 +82,8 @@ class PersonSave(BaseModel):
     units: List[str]
     roles: List[RoleIn]
     permissions: List[str]
+    # "Mulai bekerja" (spec 009 G-27). Optional so an older form that doesn't send it keeps the date.
+    started_on: Optional[date] = None
 
 
 class PersonPatch(BaseModel):
@@ -86,6 +93,7 @@ class PersonPatch(BaseModel):
     jira_account_id: Optional[str] = None
     slack_user_id: Optional[str] = None
     status: Optional[str] = None
+    started_on: Optional[date] = None
 
 
 class EmailIn(BaseModel):
@@ -140,6 +148,10 @@ async def save_person(person_id: str, body: PersonSave, caller: Caller = Depends
                         "slack_user_id": body.slack_user_id},
                 emails=body.emails, units=body.units, roles=[(r.role, r.brand) for r in body.roles],
                 permissions=body.permissions)
+            if "started_on" in body.model_fields_set:
+                person = await _loaded(conn, caller, person_id)
+                service.require_manage(caller, person["units"], person["roles"])
+                await service.update_person(conn, person_id, None, {"started_on": body.started_on}, caller.person_id)
         return await _loaded(conn, caller, person_id)
 
 

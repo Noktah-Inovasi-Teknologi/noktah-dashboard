@@ -339,6 +339,34 @@ results live (`ai_ledger`, `content_extractions`, `extraction_quarantine`), and 
 Hub's `GET /v1/ai/costs` (`service/api/app/ai/costs.py`) reads all of them per case and
 month. `ai_usage` is not in the Hub's monthly cap, which counts `ai_ledger` only.
 
+## Otomasi & Laporan (migration 015, spec 009)
+
+Migration 015 adds three permission keys (widening `chk_person_permissions_permission`
+by DROP + ADD with a strict superset, and granting them to every current Owner and Brand
+Manager), `people.started_on`, and these tables:
+- Content Plans: `content_plans`, `content_plan_greenlights`, `content_plan_issues`,
+  `content_plan_flags`, `jira_batches`, `jira_batch_rows`
+- the Jira copy: `jira_issues`, `jira_issue_changes`, `jira_sync_state`,
+  `event_point_comments`
+- the Harvest: `harvest_attempts` (written by Prefect), `post_review_marks`
+- sanctions: `sanctions`, `sanction_letter_counters`
+
+Details that are easy to get wrong:
+
+- **`content_plans` is a cache of the sheet, updated in place**; history lives in
+  Greenlights (append-only) and `content_plan_issues` (which row made which issue).
+  `content_plan_issues` is what makes a second press never duplicate: a row with a
+  recorded issue is never created again, even if the sheet lost its Key.
+- **`jira_issue_changes` is append-only**, unique on `(history_id, field, issue_key)`, so a
+  page read twice adds nothing. `jira_issues.fields` is keyed by field **name**.
+- **`post_review_marks` has set/cleared history**; `harvested_signals.advertisement` is kept
+  equal to "has an active `iklan` mark" so older readers stay right. The migration's data
+  step imports the sheet-reviewed ad flags once.
+- **`chk_sanctions_phk_never_issued`**: a `phk_flag` row can only ever be `flagged`.
+  `chk_sanctions_hold_reason` has the load-bearing `IS NOT NULL` (as in capture_outcomes).
+  `uq_sanctions_ladder_month` makes the month's calculation idempotent;
+  `uq_sanctions_direct_event` does the same for a direct sanction per Event.
+
 ## Naming
 
 Flows: `roster-sync`, `spine-backfill`, `field-availability-sync`,
@@ -355,6 +383,10 @@ Tasks: `roster.client.upsert`, `roster.alias.upsert`, `roster.account.upsert`, `
 
 Feature 006 adds the flows `velocity-derive` (monthly) and `observation-backfill`
 (one-time, unscheduled).
+
+Feature 009 adds the flows `hub-plan-watch`, `hub-jira-create`, `hub-jira-sync`,
+`harvest-registry` and `hub-sanctions`, and retires `social-harvest-sync` and the
+`harvest-monthly-*` deployments.
 
 Feature 008 adds the flows `hub-summary-refresh`, `hub-sheet-sync` (also deployed as
 `hub-sheet-check`), `hub-intake-purge` and `hub-registry-import`, all calling `hub-api` through the one task `hub.internal.call`.

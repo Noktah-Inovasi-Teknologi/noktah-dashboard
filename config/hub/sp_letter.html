@@ -1,0 +1,33 @@
+<!-- SP letter (spec 009, specs/009-hub-otomasi-laporan/sp-letter-template.md).
+     Filled by hub-api (app/incentive/letters.py) with string.Template ($name placeholders),
+     then uploaded by the hub-sanctions flow as a Google Doc. Keep it plain HTML: Google Docs
+     converts headings, paragraphs and tables, nothing else. -->
+<html><head><meta charset="utf-8"></head><body>
+<p><b>CV Amerta Meta Data</b><br>
+Alamat: Jl. Dr Cipto No. 9A, Perum Bimantara, Kolor, Kota Sumenep, Jawa Timur 69417<br>
+Kantor: Jl. Perumnas Seturan No. 279, Kledokan, Caturtunggal, Sleman, D.I. Yogyakarta 55281</p>
+<hr>
+<h2 style="text-align:center">$judul</h2>
+<p style="text-align:center">Nomor: $nomor</p>
+<p>Yang bertanda tangan di bawah ini, atas nama CV Amerta Meta Data, memberikan $jenis_surat kepada:</p>
+<table>
+<tr><td>Nama</td><td>: $nama</td></tr>
+<tr><td>Jabatan</td><td>: $peran</td></tr>
+<tr><td>Unit</td><td>: Eskala</td></tr>
+</table>
+<h3>Dasar</h3>
+<p>Peraturan Perusahaan, Lampiran I: Incentive Framework v2.1, $dasar_pasal.</p>
+<h3>Alasan</h3>
+$alasan
+<h3>Masa berlaku</h3>
+<p>Surat ini berlaku <b>90 hari</b>, sejak $tanggal_terbit sampai $tanggal_berakhir. Apabila dalam
+masa tersebut Saudara/i kembali memenuhi syarat sanksi, sanksi berikutnya naik satu tingkat.$kalimat_tingkat_akhir</p>
+$blok_pip
+<h3>Hak banding</h3>
+<p>Saudara/i berhak mengajukan banding secara tertulis paling lambat <b>3 hari kerja</b> sejak surat ini
+diberitahukan. Banding diputus paling lambat <b>5 hari kerja</b> oleh pejabat yang bukan atasan langsung
+Saudara/i. Selama proses banding, sanksi ditangguhkan; apabila banding dikabulkan, poin dikembalikan (Bagian 7.2).</p>
+<p>Demikian surat ini dibuat untuk diperhatikan dan dijadikan bahan perbaikan.</p>
+<p>Yogyakarta, $tanggal_terbit</p>
+$tanda_tangan
+</body></html>

@@ -117,3 +117,13 @@ async def sheet_sync(check: bool = False, dry_run: bool = False) -> dict:
     from .registry.sheet_copy import sync
     async with db.pool().acquire() as conn:
         return await sync(conn, get_settings().clients_spreadsheet_id, check=check, dry_run=dry_run)
+
+
+# ── Otomasi & Laporan (spec 009): flows' side ────────────────────────────────
+from .automation.internal import router as _automation_internal  # noqa: E402
+from .incentive.routes import internal as _incentive_internal  # noqa: E402
+from .reports.internal import router as _reports_internal  # noqa: E402
+
+router.include_router(_automation_internal)
+router.include_router(_reports_internal)
+router.include_router(_incentive_internal)

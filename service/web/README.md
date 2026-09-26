@@ -16,7 +16,12 @@ tunnel. Never put database access or OpenRouter calls here.
 | `/clients/[id]/intake` | Intake: paste text, a screenshot, a Google Doc or a PDF → Proposals to decide |
 | `/approvals` | Persetujuan: Guideline changes waiting for the Brand Manager / Owner |
 | `/ai-costs` | Biaya AI: AI spend per case (summary, Intake text/image, songbird, image and video analysis) and month, the Hub's cap, and each case's models in order. Owner and Brand Managers only |
-| `/people`, `/people/[id]` | Orang: filters (status, Unit, role), pages of 20; one form per Person (name, IDs, emails, Units, roles, permissions), leaving |
+| `/people`, `/people/[id]` | Orang: filters (status, Unit, role), pages of 20; one form per Person (name, IDs, emails, Units, roles, permissions, Mulai bekerja), leaving |
+| `/automations` | Otomasi (Eskala, Kelola otomasi): cards per automation (last and next run, failures, 90 days of runs); tab Jira: a month's Content Plans, pick greenlit ones, "Buat issue Jira", batch progress polled every 3 s and rejected rows; tab Harvest: every Registry account, its last Harvest, "Jalankan sekarang" |
+| `/automations/plans/[id]` | One Content Plan: rows per Bentuk against the quota, what blocks a Greenlight and what only warns, rows with their issue keys, change flags (old → new, comment state, Tandai selesai), Greenlight and its history |
+| `/automations/accounts/[id]` | One account's harvested posts per month, each with the Review marks Iklan, Tidak relevan, Bukan konten akun ini |
+| `/reports` | Laporan (Eskala, Lihat laporan), by month, "diperbarui HH:MM": tabs Delivery (planned, created, Published, Late, published late, cancelled; the Late list), Stations (per Station, person and Client team; Returns by origin; round flags), Performa (own accounts beside the competitors' average, top 5, marked posts) |
+| `/reports/incentive` | Insentif (Lihat poin insentif): Violation and Excellence points per person, sanctions (Tahan with a reason, Batalkan tahan), team reward, Events; Event belum lengkap; Sanksi langsung, tentukan manual; Catat sanksi |
 | `/no-access` | Signed in to Cloudflare, but no Masuk Hub permission in the Hub |
 
 ## Forms and lists
