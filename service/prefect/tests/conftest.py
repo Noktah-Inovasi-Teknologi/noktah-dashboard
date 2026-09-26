@@ -43,6 +43,7 @@ FULL_CHAIN = [
     "011_client_brand_required",
     "012_hub_units_roles_permissions",
     "013_ai_usage",
+    "014_venyu_team_slots",
 ]
 
 # `spine_db` skips 006: it enforces account_id IS NOT NULL and fails by design

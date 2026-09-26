@@ -1600,3 +1600,22 @@ CREATE INDEX IF NOT EXISTS idx_ai_usage_case_at ON ai_usage (ai_case, at);
 
 INSERT INTO schema_migrations (version) VALUES ('013_ai_usage')
 ON CONFLICT (version) DO NOTHING;
+
+-- 014_venyu_team_slots: mirrored verbatim from config/postgres/migrations/014_venyu_team_slots.sql.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_team_role') THEN
+        ALTER TABLE client_team_assignments DROP CONSTRAINT chk_team_role;
+    END IF;
+    ALTER TABLE client_team_assignments ADD CONSTRAINT chk_team_role CHECK (team_role IN (
+        'account_executive', 'content_planner', 'field_associate', 'content_editor', 'qc',
+        'quality_assurance', 'production_manager'));
+END $$;
+
+UPDATE unit_roles u SET team_slot = true
+FROM noktah_brands b
+WHERE b.id = u.noktah_brand_id AND b.brand_key = 'venyu'
+  AND u.role IN ('production_manager', 'quality_assurance') AND NOT u.team_slot;
+
+INSERT INTO schema_migrations (version) VALUES ('014_venyu_team_slots')
+ON CONFLICT (version) DO NOTHING;
