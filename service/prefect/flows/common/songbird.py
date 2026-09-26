@@ -484,7 +484,7 @@ def _build_prompt(
     # actually publish, rather than inventing brand facts.
     if records:
         kb = "\n".join(f"- {r['subject']}: {r['information']}" for r in records)
-        kb_section = f"Pengetahuan brand (knowledge base):\n{kb}\n\n"
+        kb_section = f"Pengetahuan brand (fakta klien):\n{kb}\n\n"
     else:
         kb_section = (
             "Pengetahuan brand (knowledge base): TIDAK TERSEDIA untuk klien ini.\n"
@@ -741,6 +741,7 @@ async def run_generation(
         "signal_available": False,
         "signal": None,
         "grounding": None,
+        "client_facts": None,
         "trends": [],
         "themes": [],
         "allocation": None,
@@ -815,6 +816,9 @@ async def run_generation(
         context = await songbird_client_context(client)
         records = context.get("records", [])
         client_name = context.get("client_name", client)
+        # Where the client facts came from: the Hub's Client Card, the pre-Hub knowledge
+        # records (the card is still empty), or nothing.
+        summary["client_facts"] = context.get("source")
 
         # With no knowledge base, harvested content is the only grounding there is — so
         # widen the exemplar budget to give the model more of it to work from.

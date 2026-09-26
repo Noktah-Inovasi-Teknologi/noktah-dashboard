@@ -50,7 +50,7 @@ tasks):
 
 ## Signals (the "hit" bias)
 
-1. **Client knowledge** — current `knowledge_records` (feature 001), fuzzy-matched by client.
+1. **Client facts** — the Hub's **Client Card** first: current Profil and Guideline values (every one accepted by a manager) plus open client requests, found by exact client key or alias (`_client_card` in `tasks/songbird_tasks.py`). The PIC field stays out of the prompt: it is the team's contact, not content. Only when a client's card is still empty does songbird fall back to the pre-Hub `knowledge_records` (feature 001), fuzzy-matched by client. `summary.client_facts` records which source a run used (`client_card`, `knowledge_records`, or null).
 2. **Own + competitor performance** — top `harvested_signals` rows by engagement (likes+comments) over a
    rolling **180-day** window (configurable). Handles come from `hashmap.py::CLIENT_SOCIAL`
    (`client → {own[], competitors[], competitor_profiles[]}`) merged with per-run params.
