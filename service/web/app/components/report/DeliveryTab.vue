@@ -18,7 +18,7 @@ const rows = computed<Row[]>(() => data.value?.clients.length
   : [])
 const num = (label: string, key: keyof DeliveryCounts, show = 'sm'): TableColumn<Row> => ({
   accessorKey: key, header: label,
-  meta: { class: { th: `hidden ${show}:table-cell text-right`, td: `hidden ${show}:table-cell text-right tabular-nums` } }
+  meta: { class: { th: `hidden ${show}:table-cell text-right whitespace-nowrap`, td: `hidden ${show}:table-cell text-right tabular-nums` } }
 })
 const columns: TableColumn<Row>[] = [
   { id: 'client', header: 'Klien', meta: { class: { td: 'whitespace-normal' } } },
