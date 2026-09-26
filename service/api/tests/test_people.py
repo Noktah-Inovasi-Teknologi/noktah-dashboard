@@ -241,3 +241,15 @@ async def test_people_in_no_unit_are_visible_to_every_manager(hub_db, api):
         await add_person(conn, "pm@noktah.co", "PM Eskala", "production_manager", "eskala")
         staff = await add_person(conn, "staff@noktah.co", "Staf Impor", None, None)
     assert staff in [p["id"] for p in (await api("pm@noktah.co").get("/v1/people")).json()]
+
+
+async def test_a_venyu_client_has_production_manager_and_quality_assurance_slots(hub_db, api):
+    owner = api(OWNER)
+    pm = await _new(owner, "PM Venyu", ["pm.venyu@noktah.co"], units=["venyu"],
+                    roles=[{"role": "production_manager", "brand": "venyu"}])
+    async with hub_db.acquire() as conn:
+        cid = await add_client(conn, "Aplikasi Klien Venyu", "venyu")
+    rec = (await owner.get(f"/v1/clients/{cid}")).json()
+    assert list(rec["team"]) == ["production_manager", "quality_assurance"]
+    r = await owner.put(f"/v1/clients/{cid}/team/production_manager", json={"version": rec["version"], "person_id": pm["id"]})
+    assert r.status_code == 200 and r.json()["team"]["production_manager"]["name"] == "PM Venyu"

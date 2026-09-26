@@ -32,6 +32,7 @@ CHAIN = [
     "011_client_brand_required",
     "012_hub_units_roles_permissions",
     "013_ai_usage",
+    "014_venyu_team_slots",
 ]
 
 

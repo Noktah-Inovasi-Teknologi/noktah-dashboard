@@ -81,7 +81,7 @@ One submission of raw information (a pasted chat, notes, or a screenshot) for on
 _Avoid_: upload, import, ingestion
 
 **Team**:
-The staff assigned to one Client, one Person per team-slot role of its Noktah Brand's catalog (for Eskala: Account Executive, Content Planner, Field Associate, Content Editor and Quality Assurance). Each slot takes only a Person holding that role in the Client's Noktah Brand; ending the role releases the slot.
+The staff assigned to one Client, one Person per team-slot role of its Noktah Brand's catalog (for Eskala: Account Executive, Content Planner, Field Associate, Content Editor and Quality Assurance; for Venyu: Production Manager and Quality Assurance). Each slot takes only a Person holding that role in the Client's Noktah Brand; ending the role releases the slot.
 _Avoid_: crew, PIC (that is the Client's person)
 
 **Approval**:
