@@ -4,9 +4,15 @@
 #   docker exec prefect prefect deploy --all
 #
 # Runs are executed by the `prefect-worker` container polling the `noktah-pool`
-# process work pool. These deployments have NO schedule — trigger them manually
-# (Prefect UI "Run", or `prefect deployment run ... --param profiles=[...]`).
-# Both ship with empty `profiles`; pass real profile URLs at run time.
+# process work pool. Deployments without `schedules` are triggered by hand
+# (Prefect UI "Run", or `prefect deployment run ... --param ...`) or, for
+# hub-jira-create and harvest-registry's "Jalankan sekarang", by hub-api.
+#
+# The social-harvest-recent/-window deployments ship with empty `profiles`; pass
+# real profile URLs at run time. The scheduled monthly harvest is harvest-registry
+# (spec 009), which reads its accounts from the Hub Registry; the per-account
+# harvest-monthly-* deployments and the social-harvest-sync sheet sync are gone
+# (the harvest sheets are retired; review marks live in the Hub).
 
 name: prefect-noktah
 prefect-version: 3.6.9
@@ -131,30 +137,14 @@ deployments:
       - prefect.deployments.steps.set_working_directory:
           directory: /app
 
-  # Social harvest — Sheet→DB sync. Reconciles harvested_signals + detail sheets
-  # from the canonical Account Social Harvest sheets (reviewer-edited `advertisement`
-  # flag). Scheduled daily; tighten the cron if staff edits need to reflect sooner.
-  - name: social-harvest-sync
-    entrypoint: flows/social_harvest_sync.py:social_harvest_sync_flow
-    work_pool:
-      name: noktah-pool
-    schedules:
-      - cron: "0 3 * * *"
-        timezone: "Asia/Jakarta"
-    parameters: {}
-    pull:
-      - prefect.deployments.steps.set_working_directory:
-          directory: /app
-
   # Velocity derive (feature 006-longitudinal-metric-capture) — turns the
   # append-only observation history into rate of change. Reads the datastore
   # only: no platform request, no model call.
   #
-  # 06:00 on the 2nd, deliberately AFTER both harvest waves close — per-client
-  # runs occupy 17:30 on the 1st through 02:00 on the 2nd, competitor runs
-  # 02:30-05:00 on the 2nd. Deriving before a wave finishes is harmless (the
-  # next run picks up the rest, and `velocity_status.not_yet_derived` makes the
-  # gap visible), but deriving after means one pass covers the whole month.
+  # 06:00 on the 2nd. harvest-registry starts 17:30 on the 1st and spaces accounts
+  # 30 minutes apart, so with ~20+ accounts its tail can still be running at 06:00.
+  # Deriving before a harvest finishes is harmless (the next run picks up the rest,
+  # and `velocity_status.not_yet_derived` makes the gap visible).
   #
   # Separate from collection on purpose: a derivation failure must not affect a
   # harvest, and a blocked profile must not prevent derivation over what was
@@ -197,6 +187,9 @@ deployments:
     schedules:
       - cron: "30 3 * * *"
         timezone: "Asia/Jakarta"
+        # Off since the Hub owns the roster (spec 008 import): a redeploy must not
+        # turn it back on, or it would rewrite the roster from the sheet.
+        active: false
     parameters: {}
     pull:
       - prefect.deployments.steps.set_working_directory:
@@ -295,321 +288,69 @@ deployments:
           directory: /app
 
   # ---------------------------------------------------------------------------
-  # Per-client monthly harvest (harvest-monthly-*)
-  #
-  # Source of truth for the client list + handles: the "Clients" sheet
-  # https://docs.google.com/spreadsheets/d/1-aV46TIn4m_zs3vtCNeS_Bvl3Tt-tgg09uuG_NqgNNY
-  # One deployment == one client == one run (roach is stateless per call; all
-  # pacing/rate-limiting lives in the harvest engine).
-  #
-  # Schedule: monthly, on the 1st, staggered 30 minutes apart starting 17:30 WIB.
-  # Slots 1-13 land on the 1st (17:30-23:30), slots 14-18 spill to the 2nd
-  # (00:00-02:00) — hence the `2` day-of-month on the last five crons.
-  #
-  # Window: days: 31 — a monthly run collects the month it just covered. Dedup
-  # (FR-021) skips already-harvested items, so the corpus still accumulates month
-  # over month; the window only bounds how far back a single run reaches. A NEW
-  # account therefore back-fills one month, not a quarter — run
-  # `social-harvest-window --days 90` once by hand when onboarding one.
-  #
-  # No `harvest_name` parameter: _resolve_harvest_name (flows/common/social_harvest.py)
-  # falls back to Prefect's auto-generated flow-RUN name, which is unique per run and
-  # traces a delivered sheet row back to the run that produced it. The client name
-  # was redundant — the sheet is already per-account — and identical across runs.
-  #
-  # Clients #18 Breko and #19 The StarFit are omitted — the sheet lists no
-  # Instagram/TikTok handle for either. Add a block here once they have one.
+  # Noktah Hub: Otomasi & Laporan (spec 009). All report problems to #eskala-otomasi.
   # ---------------------------------------------------------------------------
 
-  - name: harvest-monthly-ecky-dental-center
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
+  # The monthly harvest of every active Eskala Client's own and competitor accounts,
+  # read from the Hub Registry (replaces the 22 harvest-monthly-* deployments, which
+  # must also be deleted from the Prefect server once; see the spec's quickstart).
+  # One account at a time, 30 minutes apart; 31 days each, 90 on a first harvest; own
+  # and competitor accounts alike, so songbird's within-account ranking compares
+  # like with like. The Hub's "Jalankan sekarang" starts this same deployment with
+  # account_ids=[id] and trigger=manual.
+  - name: harvest-registry
+    entrypoint: flows/harvest_registry.py:harvest_registry_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
+    tags: [social-harvest, hub]
     schedules:
       - cron: "30 17 1 * *"
         timezone: "Asia/Jakarta"
     parameters:
-      profiles: ["https://www.instagram.com/eckydentalcenter/"]
-      days: 31
+      trigger: monthly
     pull: *app_dir
 
-  - name: harvest-monthly-nirwana-coffee-sumenep
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
+  # Reads each Eskala Client's Content Plan (this month and next) into the Hub, and
+  # posts the watcher's Jira comments on issues whose row changed after creation.
+  - name: hub-plan-watch
+    entrypoint: flows/hub_plan_watch.py:hub_plan_watch_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
+    tags: [hub]
     schedules:
-      - cron: "0 18 1 * *"
+      - cron: "*/15 * * * *"
         timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/nirwanacoffee_smnp/"]
-      days: 31
+    parameters: {}
     pull: *app_dir
 
-  - name: harvest-monthly-nirwana-coffee-pamekasan
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
+  # "Buat issue Jira": started by hub-api with batch_id. No schedule.
+  - name: hub-jira-create
+    entrypoint: flows/hub_jira_create.py:hub_jira_create_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
-    schedules:
-      - cron: "30 18 1 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/nirwanacoffee_pmks/"]
-      days: 31
+    tags: [hub]
+    parameters: {}
     pull: *app_dir
 
-  - name: harvest-monthly-klinik-utama-gresik
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
+  # The Hub's copy of ESKL Content and Event issues (Laporan, incentive points), and
+  # the Event point comments.
+  - name: hub-jira-sync
+    entrypoint: flows/hub_jira_sync.py:hub_jira_sync_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
+    tags: [hub]
     schedules:
-      - cron: "0 19 1 * *"
+      - cron: "*/15 * * * *"
         timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/klinikutamagresik/"]
-      days: 31
+    parameters: {}
     pull: *app_dir
 
-  - name: harvest-monthly-klinik-mata-boyolali
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
+  # Hourly sanctions tick: hub-api decides the working day; the flow writes the SP
+  # letters as Google Docs into HUB_SP_LETTER_FOLDER_ID.
+  - name: hub-sanctions
+    entrypoint: flows/hub_sanctions.py:hub_sanctions_flow
     work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
+    tags: [hub]
     schedules:
-      - cron: "30 19 1 * *"
+      - cron: "5 * * * *"
         timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/klinikmataboyolali/"]
-      days: 31
-    pull: *app_dir
-
-  - name: harvest-monthly-lasik-asyik-tebet
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
-    work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
-    schedules:
-      - cron: "0 20 1 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/lasikasyik/"]
-      days: 31
-    pull: *app_dir
-
-  - name: harvest-monthly-klinik-utama-sumenep
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
-    work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
-    schedules:
-      - cron: "30 20 1 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/klinikutama.sumenep/"]
-      days: 31
-    pull: *app_dir
-
-  - name: harvest-monthly-klinik-mata-sampang
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
-    work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
-    schedules:
-      - cron: "0 21 1 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/klinikmatasampang/"]
-      days: 31
-    pull: *app_dir
-
-  - name: harvest-monthly-karung-jumbo-sidoarjo
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
-    work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
-    schedules:
-      - cron: "30 21 1 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.tiktok.com/@karungjumbosidoarjo"]
-      days: 31
-    pull: *app_dir
-
-  - name: harvest-monthly-pelita-delapan
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
-    work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
-    schedules:
-      - cron: "0 22 1 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/tokopelitadelapan/"]
-      days: 31
-    pull: *app_dir
-
-  - name: harvest-monthly-klinik-mata-jogja
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
-    work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
-    schedules:
-      - cron: "30 22 1 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/klinikmatajogja/"]
-      days: 31
-    pull: *app_dir
-
-  - name: harvest-monthly-balakosa-rnp
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
-    work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
-    schedules:
-      - cron: "0 23 1 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/balakosa.rnp/"]
-      days: 31
-    pull: *app_dir
-
-  - name: harvest-monthly-klinik-spesialis-langsa
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
-    work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
-    schedules:
-      - cron: "30 23 1 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/klinikspesialislangsa/"]
-      days: 31
-    pull: *app_dir
-
-  # --- spills past midnight onto the 2nd ---
-
-  - name: harvest-monthly-klinik-mata-bireuen
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
-    work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
-    schedules:
-      - cron: "0 0 2 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/klinikmatabireuen/"]
-      days: 31
-    pull: *app_dir
-
-  - name: harvest-monthly-rs-mata-smec-medan
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
-    work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
-    schedules:
-      - cron: "30 0 2 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/rsmatasmec/"]
-      days: 31
-    pull: *app_dir
-
-  - name: harvest-monthly-klinik-utama-gasa
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
-    work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
-    schedules:
-      - cron: "0 1 2 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/klinikutamagasa/"]
-      days: 31
-    pull: *app_dir
-
-  - name: harvest-monthly-klinik-mata-smec-bitung
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
-    work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
-    schedules:
-      - cron: "30 1 2 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/klinikmatasmecbitung/"]
-      days: 31
-    pull: *app_dir
-
-  - name: harvest-monthly-mcafe
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
-    work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly]
-    schedules:
-      - cron: "0 2 2 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/mcafespace/"]
-      days: 31
-    pull: *app_dir
-
-  # ---------------------------------------------------------------------------
-  # Per-competitor monthly harvest (harvest-monthly-comp-*)
-  #
-  # Source of truth for the competitor list: the CLIENT_SOCIAL block of the
-  # "Hashmaps" worksheet (cols R/S/T) — the same mapping songbird reads to pick
-  # competitor exemplars. Dump it with:
-  #   docker exec prefect python hashmap.py --block CLIENT_SOCIAL
-  #
-  # These exist because songbird's competitor signal was configured but never
-  # collected: CLIENT_SOCIAL named four competitor handles, no deployment
-  # harvested any of them, and `harvested_signals` held zero competitor rows —
-  # so every "own vs competitor" comparison ran on one side of the data.
-  #
-  # Same shape as the client blocks above (one deployment == one account == one
-  # run, days: 31, monthly on the 2nd) so competitor and client content are
-  # measured identically — songbird's ranking is a *within-account* comparison,
-  # which only means anything when both sides are sampled the same way.
-  # Staggered 02:30-05:00 WIB, clear of the 03:00 social-harvest-sync cron.
-  #
-  # Adding a competitor row to the sheet does NOT create a deployment — add a
-  # block here too, then `docker exec prefect prefect deploy --all`.
-  # ---------------------------------------------------------------------------
-
-  # LASIK Asyik by SMEC Tebet — 3 competitors
-  - name: harvest-monthly-comp-lasikindonesia
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
-    work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly, competitor]
-    schedules:
-      - cron: "30 2 2 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/lasikindonesia/"]
-      days: 31
-    pull: *app_dir
-
-  - name: harvest-monthly-comp-kmneyecare
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
-    work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly, competitor]
-    schedules:
-      - cron: "0 4 2 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/kmneyecare/"]
-      days: 31
-    pull: *app_dir
-
-  - name: harvest-monthly-comp-jeceyehospital
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
-    work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly, competitor]
-    schedules:
-      - cron: "30 4 2 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/jeceyehospital/"]
-      days: 31
-    pull: *app_dir
-
-  # Ecky Dental Center — 1 competitor
-  - name: harvest-monthly-comp-sebayadental
-    entrypoint: flows/social_harvest_window.py:social_harvest_window_flow
-    work_pool: *noktah_pool
-    tags: [social-harvest, harvest-monthly, competitor]
-    schedules:
-      - cron: "0 5 2 * *"
-        timezone: "Asia/Jakarta"
-    parameters:
-      profiles: ["https://www.instagram.com/sebayadental/"]
-      days: 31
+    parameters: {}
     pull: *app_dir
 
   # ---------------------------------------------------------------------------

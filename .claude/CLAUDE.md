@@ -48,28 +48,18 @@ docker exec prefect prefect deployment run 'social-harvest-recent/social-harvest
 # Stories-only harvest (ephemeral ~24h; run frequently, unscheduled for now)
 docker exec prefect python flows/social_harvest_stories.py --profiles "https://www.instagram.com/lasikasyik/"
 
-# Per-client monthly harvest: harvest-monthly-<client> deployments (one per client in
-# the Clients sheet), monthly cron on the 1st, staggered 30 min apart from 17:30 WIB
-# (slots 14-18 spill onto the 2nd, 00:00-02:00). Window = days: 31 — a run collects the
-# month it just covered. Dedup means the corpus still accumulates month over month, so
-# the window only bounds a single run's reach; a NEW account back-fills one month, not a
-# quarter, so run `social-harvest-window --days 90` once by hand when onboarding one.
-# These deployments pass NO harvest_name — the flow falls back to Prefect's
-# auto-generated flow-run name, so a delivered sheet row traces to the run that made it.
-docker exec prefect prefect deployment run 'social-harvest-window/harvest-monthly-ecky-dental-center'
-
-# Per-competitor monthly harvest: harvest-monthly-comp-<handle>, one per handle in the
-# CLIENT_SOCIAL block of the Hashmaps sheet. Same shape as the client blocks (days: 31,
-# monthly) so both sides are measured identically — songbird's ranking is a
-# within-account comparison, which only means anything on symmetric sampling.
-# Runs 02:30-05:00 WIB on the 2nd, clear of the 03:00 social-harvest-sync cron.
-# Adding a competitor row to the sheet does NOT create a deployment — add a block
-# to prefect.yaml too, then redeploy.
-docker exec prefect prefect deployment run 'social-harvest-window/harvest-monthly-comp-kmneyecare'
-
-# Sheet→DB sync: reconcile harvested_signals + detail sheets from the canonical
-# Account Social Harvest sheets (reviewer-edited `advertisement` flag). Scheduled daily.
-docker exec prefect python flows/social_harvest_sync.py
+# Monthly harvest follows the Hub Registry (spec 009): ONE deployment, harvest-registry,
+# 17:30 WIB on the 1st. It harvests every own + competitor account of every active Eskala
+# Client, one at a time, 30 min apart, 31 days each; an account never harvested before
+# gets 90 days automatically. Adding/removing an account in the Registry IS the setup —
+# there is no schedule to edit. The 22 hand-written harvest-monthly-* deployments and
+# social-harvest-sync (the Account Social Harvest sheets) are retired: review marks
+# (Iklan / Tidak relevan / Bukan konten akun ini) are set in the Hub, Otomasi → Harvest.
+# Own and competitor accounts are sampled identically, which songbird's within-account
+# ranking needs.
+docker exec prefect python flows/harvest_registry.py --validate-only     # targets + windows only
+docker exec prefect prefect deployment run 'harvest-registry/harvest-registry' \
+  --param account_ids='["<account uuid>"]' --param trigger=manual   # = "Jalankan sekarang"
 
 # Worker logs (deployed run execution)
 docker-compose logs -f prefect-worker
@@ -402,6 +392,41 @@ Intake and AI rules: `service/api/README.md`.
 cd service/web && bun run test:ui && bun run ui:gate
 ```
 
+### Hub Otomasi & Laporan (spec 009, Eskala only)
+```bash
+# hub-api keeps the state and computes; these Prefect flows do every outside read/write and
+# talk to hub-api through /internal. hub-api STARTS flows through the Prefect API when a
+# manager presses a button (Greenlight → "Buat issue Jira", "Jalankan sekarang", "Periksa").
+#   hub-plan-watch   */15   scan Content Plans (this + next month); watcher flags changes to
+#                           rows that already have issues and posts ONE Jira comment each
+#   hub-jira-create  manual one "Buat issue Jira" batch: bulk ≤45, key written into Key
+#   hub-jira-sync    */15   ESKL Content + Event issues and changelog → the Hub's Jira copy
+#   harvest-registry 1st    the monthly Harvest (see above)
+#   hub-sanctions    :05    Incentive Framework v2.1 sanctions tick + SP letters to Drive
+docker exec prefect python flows/hub_plan_watch.py --validate-only --month 2026-10
+docker exec prefect python flows/hub_jira_sync.py --validate-only
+docker exec prefect python flows/hub_sanctions.py --validate-only
+```
+Rules that are easy to undo by accident:
+- **A plan row → issue is recorded exactly, never by order.** Jira's bulk create doesn't say
+  which key came from which row, so every issue carries the entity property
+  `noktah.plan-row` and the flow reads it back. A row with a recorded issue is never created
+  again, even if its Key cell was erased: that is flagged (`key_erased`) and blocks creation.
+- **After creation the Hub never changes an issue's fields**, and never shelves one. Its
+  only writes to existing issues are comments (plan changes, Event points).
+- **Plan fingerprints ignore Key/TicketID/Approval/Keterangan/No.**, so writing the key back
+  never looks like a change. hub-api (`app/automation/plans.py`) and Prefect
+  (`tasks/content_plan_rows.py`) must compute them identically; a test compares them.
+- **Points are computed only from judged Events and never guessed**: a missing verdict field
+  is "belum lengkap" and counts nothing. Field names, not ids (`specs/009…/jira-fields.md`).
+  v2.1 counts from 2026-09-27. Violation points are negative, Excellence positive.
+- **Sanctions are issued automatically after a one-day hold** (ADR-0001,
+  `docs/adr/0001-…`): worked out on working day 2 (08:00 WIB), issued once working day 3
+  has ended unless a manager held them. "Proses PHK" is only ever flagged (a CHECK forbids
+  issuing it). Working days = Mon–Fri minus `config/hub/holidays.yaml` — maintain it yearly.
+- SP letters: `config/hub/sp_letter.html` → Google Docs in `HUB_SP_LETTER_FOLDER_ID`
+  (Company > HR > Surat Peringatan). The Hub never sends a letter to anyone.
+
 ### Database Backup (nightly)
 ```bash
 # db-backup deployment: 02:00 WIB daily. pg_dump of noktah_dashboard →
@@ -540,6 +565,10 @@ HARVEST_DRIVE_PARENT_ID=your_google_drive_parent_folder_id
 SLACK_AUTOMATION_NOKTAH=https://hooks.slack.com/services/...  # #noktah-otomasi
 SLACK_AUTOMATION_ESKALA=https://hooks.slack.com/services/...  # #eskala-otomasi
 SLACK_AUTOMATION_VENYU=https://hooks.slack.com/services/...   # #venyu-otomasi
+
+# Noktah Hub Otomasi & Laporan (spec 009): Drive folder id of Company > HR > Surat Peringatan
+# (restricted). hub-sanctions writes SP letters there as Google Docs.
+HUB_SP_LETTER_FOLDER_ID=your_drive_folder_id
 
 # Songbird content generation (songbird-* flows)
 OPENROUTER_API_KEY=your_openrouter_api_key  # now needed by the Prefect services (was roach-only)

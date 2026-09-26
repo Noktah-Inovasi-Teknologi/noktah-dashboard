@@ -11,6 +11,12 @@ interface FetchErrorLike {
   data?: { data?: HubErrorBody, statusMessage?: string } & HubErrorBody
 }
 
+/** The whole error envelope, for routes that send more than a message (e.g. 422 `plans`). */
+export function hubErrorBody(err: unknown): HubErrorBody {
+  const e = (err ?? {}) as FetchErrorLike
+  return (e.data?.data ?? e.data ?? {}) as HubErrorBody
+}
+
 /** Normalise a useFetch / $fetch error into {status, code, message}. */
 export function hubError(err: unknown): { status: number, code: string, message: string } {
   const e = (err ?? {}) as FetchErrorLike

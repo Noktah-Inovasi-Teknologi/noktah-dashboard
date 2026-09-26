@@ -33,6 +33,7 @@ CHAIN = [
     "012_hub_units_roles_permissions",
     "013_ai_usage",
     "014_venyu_team_slots",
+    "015_hub_automation_reports",
 ]
 
 
@@ -69,6 +70,8 @@ def pytest_collection_modifyitems(config, items):
 async def hub_db(monkeypatch):
     monkeypatch.setenv("HUB_API_DATABASE_URL", TEST_DSN)
     monkeypatch.setenv("HUB_API_ACCESS_API_AUD", "test-api-aud")
+    # SP letter template and holidays (spec 009) live beside the card definition
+    monkeypatch.setenv("HUB_API_CARD_DEFINITION_DIR", str(ROOT / "config" / "hub"))
     admin = await asyncpg.connect(_admin_dsn())
     name = _db_name()
     await admin.execute(

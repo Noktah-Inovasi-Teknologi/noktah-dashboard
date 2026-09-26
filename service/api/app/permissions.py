@@ -26,7 +26,7 @@ GROUP_UNIT = "noktah"
 
 # In the order the Hub lists them. `hub_access` is implied by any other.
 PERMISSIONS = ("hub_access", "edit_clients", "edit_profil", "approve_guideline", "edit_requests",
-               "run_intake", "manage_people")
+               "run_intake", "manage_people", "manage_automation", "view_reports", "view_incentive")
 
 # Roles only the Owner may grant or end.
 OWNER_ONLY_ROLES = {"owner", "brand_manager"}
@@ -48,6 +48,10 @@ class Action(str, Enum):
     RUN_INTAKE = "run_intake"
     MANAGE_PEOPLE = "manage_people"
     APPOINT_BRAND_MANAGER = "appoint_brand_manager"
+    # Otomasi & Laporan (spec 009); checked against brand "eskala"
+    MANAGE_AUTOMATION = "manage_automation"
+    VIEW_REPORTS = "view_reports"
+    VIEW_INCENTIVE = "view_incentive"
 
 
 _NEEDS = {
@@ -58,6 +62,9 @@ _NEEDS = {
     Action.EDIT_REQUESTS: "edit_requests",
     Action.RUN_INTAKE: "run_intake",
     Action.MANAGE_PEOPLE: "manage_people",
+    Action.MANAGE_AUTOMATION: "manage_automation",
+    Action.VIEW_REPORTS: "view_reports",
+    Action.VIEW_INCENTIVE: "view_incentive",
 }
 
 

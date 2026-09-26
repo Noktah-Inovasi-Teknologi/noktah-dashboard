@@ -16,6 +16,10 @@ const items = computed<NavigationMenuItem[]>(() => {
     list.push({ label: 'Persetujuan', icon: 'i-lucide-badge-check', to: '/approvals', badge: approvals.value?.length || undefined })
   }
   list.push({ label: 'Orang', icon: 'i-lucide-users', to: '/people' })
+  if (can?.manage_automation) list.push({ label: 'Otomasi', icon: 'i-lucide-workflow', to: '/automations' })
+  if (can?.view_reports || can?.view_incentive) {
+    list.push({ label: 'Laporan', icon: 'i-lucide-chart-column', to: can.view_reports ? '/reports' : '/reports/incentive' })
+  }
   if (can?.view_ai_costs) list.push({ label: 'Biaya AI', icon: 'i-lucide-receipt', to: '/ai-costs' })
   return list
 })

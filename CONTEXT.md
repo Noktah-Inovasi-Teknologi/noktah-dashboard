@@ -19,7 +19,7 @@ What a Person is in one Unit, from that Unit's catalog. Noktah: Owner, Sales & M
 _Avoid_: jabatan, QC (write Quality Assurance), Project Manager (the role is Production Manager), PM (in written text)
 
 **Permission**:
-One thing a Person may do in the Hub (Izin): Masuk Hub, Ubah Registry, Ubah Profil, Setujui Guideline, Kelola permintaan, Jalankan Intake, Kelola orang. Picking a role pre-ticks its usual permissions; the Person's own set is what counts. Nobody gives a permission they don't hold; the Owner holds them all.
+One thing a Person may do in the Hub (Izin): Masuk Hub, Ubah Registry, Ubah Profil, Setujui Guideline, Kelola permintaan, Jalankan Intake, Kelola orang, Kelola otomasi, Lihat laporan, Lihat poin insentif. Picking a role pre-ticks its usual permissions; the Person's own set is what counts. Nobody gives a permission they don't hold; the Owner holds them all.
 _Avoid_: akses (loosely), hak, privilege
 
 **Owner**:
@@ -91,3 +91,49 @@ _Avoid_: review (for this step), sign-off
 **Proposal**:
 A suggested change to one Client Card fact, with the exact excerpt it came from, that a person accepts, edits or rejects. Nothing reaches a Client Card as a Proposal alone.
 _Avoid_: suggestion, AI result, draft (for a single change)
+
+### Production and reports
+
+**Content Plan**:
+One Client's planned content for one month: a Google Sheet named "Content Plan - {Client} - {month}", one row per piece of content with its date, Bentuk and Topik. Each row becomes one Jira issue.
+_Avoid_: plan (on its own), jadwal, kalender konten
+
+**Greenlight**:
+A Manager's go-ahead on a whole Content Plan, given in the Hub, without which none of its Jira issues can be created. A plan that changes before its issues are created needs a new Greenlight.
+_Avoid_: Approval (that is a Guideline change), setujui (for this), ACC
+
+**Station**:
+One role's turn in making a piece of content, from the moment the work is theirs until they pass it on. There are five, lettered as in the Incentive Framework: A Planning (Content Planner), B Footage (Field Associate), C Editing (Content Editor), D Quality control (Quality Assurance), E Client & publication (Field Associate). The content's Jira status says which station holds it; an error is charged to its origin station.
+_Avoid_: stage, step, divisi
+
+**Return**:
+A piece of content sent back to an earlier station because something was not approved. Counted, but only an Event can charge it to someone.
+_Avoid_: revisi (for the movement itself), reject, bolak-balik (for a single return; that is several)
+
+**Event**:
+One judged record under the Incentive Framework, kept as a Jira Event ticket: a Violation or an Excellence, with its category, origin station, the person it concerns and its evidence. Only managers judge it; points follow from the judgement, written negative for a Violation (−30) and positive for an Excellence (+3).
+_Avoid_: insiden, pelanggaran (for the ticket), laporan
+
+**Sanction**:
+What the Incentive Framework gives a Person for a month's Violations or a direct-sanction violation: a teguran lisan, an SP (1 to 3), a Peringatan Pertama dan Terakhir, or a PIP. Each is valid 90 days from issue and decides the next rung of the ladder.
+_Avoid_: hukuman, punishment, SP (for a teguran lisan)
+
+**Review mark**:
+A reviewer's label on one harvested post that keeps it out of performance numbers: Iklan, Tidak relevan or Bukan konten akun ini. A post may carry several.
+_Avoid_: tag, flag (loosely), ad flag (for all three)
+
+**Competitor**:
+A social account of another business that a Client is measured against, listed on the Client in the Registry and harvested like its own accounts. Written "pesaing" in the Hub.
+_Avoid_: kompetitor (in the Hub), rival, reference (for this)
+
+**Harvest**:
+Collecting a social account's recent posts and their public numbers, for a Client's own accounts and its competitors'.
+_Avoid_: scrape, crawl, sync (for this)
+
+**Published**:
+A piece of content whose Jira issue has reached *Published, Need Review* or *Done*.
+_Avoid_: tayang (in reports), selesai (Done alone), posted
+
+**Late**:
+A piece of content whose publication date has passed without it being Published. Shelved (cancelled) and On Hold (paused) are managers' decisions and never Late; content Published after its date is **published late**.
+_Avoid_: overdue, telat (in reports), missed

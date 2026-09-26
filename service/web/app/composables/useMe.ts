@@ -22,6 +22,12 @@ export interface Me {
     appoint_bm: boolean
     run_intake: boolean
     view_ai_costs: boolean
+    /** Otomasi: Content Plans, Greenlight, "Buat issue Jira", the Harvest (Eskala). */
+    manage_automation: boolean
+    /** Laporan: Delivery, Stations, Performa (Eskala). */
+    view_reports: boolean
+    /** Laporan → Insentif: points and sanctions (Eskala). */
+    view_incentive: boolean
   }
 }
 
@@ -38,7 +44,10 @@ export const PERMISSIONS: { key: string, label: string, help: string }[] = [
   { key: 'approve_guideline', label: 'Setujui Guideline', help: 'Mengubah Guideline langsung dan menyetujui perubahan yang menunggu persetujuan.' },
   { key: 'edit_requests', label: 'Kelola permintaan', help: 'Mencatat dan memperbarui permintaan klien.' },
   { key: 'run_intake', label: 'Jalankan Intake', help: 'Mengirim chat, screenshot, atau dokumen klien untuk dibaca AI.' },
-  { key: 'manage_people', label: 'Kelola orang', help: 'Menambah orang dan mengatur unit, peran, dan izinnya.' }
+  { key: 'manage_people', label: 'Kelola orang', help: 'Menambah orang dan mengatur unit, peran, dan izinnya.' },
+  { key: 'manage_automation', label: 'Kelola otomasi', help: 'Memberi Greenlight Content Plan, membuat issue Jira, menjalankan Harvest, dan menandai post.' },
+  { key: 'view_reports', label: 'Lihat laporan', help: 'Delivery, Station, dan Performa, termasuk angka per orang. Tanpa poin dan sanksi.' },
+  { key: 'view_incentive', label: 'Lihat poin insentif', help: 'Poin Incentive Framework dan sanksi tiap orang, termasuk menahan dan mencatat sanksi.' }
 ]
 
 // Role keys renamed by migration 012; old history rows still carry them.

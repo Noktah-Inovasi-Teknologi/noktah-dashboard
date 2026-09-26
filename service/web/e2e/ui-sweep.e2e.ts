@@ -87,7 +87,19 @@ const ROUTES: Route[] = [
   { slug: 'person', path: '/people/00000000-0000-4000-8000-000000000901', states: ['full', 'down'], shellStates: true },
   { slug: 'person-left', path: '/people/00000000-0000-4000-8000-000000000904', states: ['full'] },
   // Intake: Proposals with every flag (full), nothing found (empty), AI failed, cap reached.
-  { slug: 'intake', path: `${CLIENT}/intake`, states: ['full', 'empty', 'down', 'failed', 'cap'], shellStates: true }
+  { slug: 'intake', path: `${CLIENT}/intake`, states: ['full', 'empty', 'down', 'failed', 'cap'], shellStates: true },
+  // Otomasi (spec 009): the cards and each tab; empty also shows Prefect unreachable on a card.
+  { slug: 'automations', path: '/automations', states: ['full', 'empty', 'down'], shellStates: true },
+  { slug: 'automations-harvest', path: '/automations?tab=harvest', states: ['full', 'empty', 'down'] },
+  // A Content Plan with blockers, warnings and flags (full); a missing plan (empty).
+  { slug: 'automations-plan', path: '/automations/plans/00000000-0000-4000-8000-000000000300', states: ['full', 'empty', 'down'] },
+  // One account's harvested posts with Review marks.
+  { slug: 'automations-account', path: '/automations/accounts/00000000-0000-4000-8000-000000000700', states: ['full', 'empty', 'down'] },
+  // Laporan: each tab, then Insentif.
+  { slug: 'reports', path: '/reports', states: ['full', 'empty', 'down'], shellStates: true },
+  { slug: 'reports-stations', path: '/reports?tab=stations', states: ['full', 'empty', 'down'] },
+  { slug: 'reports-performa', path: '/reports?tab=performa', states: ['full', 'empty', 'down'] },
+  { slug: 'reports-incentive', path: '/reports/incentive', states: ['full', 'empty', 'down'] }
 ]
 
 interface Cell {

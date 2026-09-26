@@ -14,11 +14,14 @@ from fastapi import FastAPI
 
 from . import db, deps, errors, internal
 from .ai.routes import router as ai_router
+from .automation.routes import router as automation_router
 from .card import definition as card_definition
 from .card.routes import router as card_router
+from .incentive.routes import router as incentive_router
 from .intake.routes import router as intake_router
 from .people.routes import router as people_router
 from .registry.routes import router as registry_router
+from .reports.routes import router as reports_router
 from .requests.routes import router as requests_router
 from .settings import get_settings
 
@@ -47,6 +50,10 @@ app.include_router(card_router)
 app.include_router(requests_router)
 app.include_router(intake_router)
 app.include_router(ai_router)
+# Otomasi & Laporan (spec 009)
+app.include_router(automation_router)
+app.include_router(reports_router)
+app.include_router(incentive_router)
 app.include_router(internal.router)
 
 

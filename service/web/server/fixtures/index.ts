@@ -1,5 +1,6 @@
 import type { H3Event } from 'h3'
 import definition from './card-definition.json'
+import { otomasiGet, otomasiWrite } from './otomasi'
 
 /**
  * Sample data for the UI sweep and local development: the Hub's own login is
@@ -42,7 +43,7 @@ const CLIENT_ID = idOf(7) // Klinik Mata Sampang
 
 // The role catalog as migration 012 seeds it.
 const role = (key: string, name: string, team_slot = false, default_permissions: string[] = []) => ({ key, name, team_slot, default_permissions })
-const ALL_PERMISSIONS = ['hub_access', 'edit_clients', 'edit_profil', 'approve_guideline', 'edit_requests', 'run_intake', 'manage_people']
+const ALL_PERMISSIONS = ['hub_access', 'edit_clients', 'edit_profil', 'approve_guideline', 'edit_requests', 'run_intake', 'manage_people', 'manage_automation', 'view_reports', 'view_incentive']
 const EDITOR = ['hub_access', 'edit_clients', 'edit_profil', 'edit_requests', 'run_intake']
 const CATALOG = [
   { key: 'noktah', name: 'Noktah', kind: 'group', roles: [role('owner', 'Owner', false, ALL_PERMISSIONS), role('sales_marketing', 'Sales & Marketing', false, ['hub_access'])] },
@@ -65,13 +66,13 @@ const ME = {
   brands: ['eskala'],
   manageable_units: ['eskala'],
   catalog: CATALOG,
-  can: { edit_registry: true, edit_profil: true, edit_guideline: true, approve: true, edit_requests: true, manage_people: true, appoint_bm: false, run_intake: true, view_ai_costs: true }
+  can: { edit_registry: true, edit_profil: true, edit_guideline: true, approve: true, edit_requests: true, manage_people: true, appoint_bm: false, run_intake: true, view_ai_costs: true, manage_automation: true, view_reports: true, view_incentive: true }
 }
 
 const eskala = (id: number, key: string) => ({ id: idOf(id), role: key, noktah_brand: 'eskala' })
 const PEOPLE = [
   { id: idOf(900), display_name: 'Defila Priana Falarima', status: 'active', jira_account_id: '712020:aaa', slack_user_id: 'U0C45JQ8CH0', emails: ['defila@noktah.co'], units: ['eskala'], roles: [eskala(950, 'brand_manager')], permissions: ALL_PERMISSIONS },
-  { id: idOf(901), display_name: 'Ardella Bernica', status: 'active', jira_account_id: '712020:bbb', slack_user_id: null, emails: ['ardellabernica8@gmail.com'], units: ['eskala'], roles: [eskala(951, 'production_manager'), eskala(955, 'account_executive')], permissions: EDITOR },
+  { id: idOf(901), display_name: 'Ardella Bernica', status: 'active', jira_account_id: '712020:bbb', slack_user_id: null, emails: ['ardellabernica8@gmail.com'], units: ['eskala'], roles: [eskala(951, 'production_manager'), eskala(955, 'account_executive')], permissions: EDITOR, started_on: '2026-09-15' },
   { id: idOf(902), display_name: 'Juliana Devina Santosa', status: 'active', jira_account_id: '712020:ccc', slack_user_id: null, emails: ['juliana.devn@gmail.com'], units: ['eskala'], roles: [eskala(952, 'content_planner')], permissions: [] },
   { id: idOf(903), display_name: 'Nadya Safira Alia Adinda', status: 'active', jira_account_id: '712020:ddd', slack_user_id: null, emails: [], units: ['eskala'], roles: [eskala(953, 'field_associate')], permissions: [] },
   { id: idOf(905), display_name: 'Putri Indah Lestari', status: 'active', jira_account_id: '712020:eee', slack_user_id: null, emails: ['putri.indah@gmail.com'], units: ['eskala'], roles: [eskala(954, 'content_editor'), eskala(956, 'quality_assurance')], permissions: [] },
@@ -276,6 +277,9 @@ export function fixtureResponse(path: string, method: string, state: FixtureStat
   if (method !== 'GET') {
     if (state === 'cap' && /\/intakes$/.test(p)) fail(402, 'ai_cap_reached', 'Batas biaya AI bulan ini sudah tercapai. Intake dijeda.')
     if (/\/intakes$/.test(p)) return { ...intake(state), cached: false, dropped: { patient_data: 0, invalid: 0, unchanged: 0 } }
+    // Otomasi and Laporan (spec 009): Greenlight, batches, Harvest runs, marks, sanctions.
+    const written = otomasiWrite(p, body)
+    if (written !== undefined) return written
     // Registry writes answer with the updated record (PATCH client, PUT team, POST/PATCH accounts).
     const registry = p.match(/^\/v1\/clients\/([^/]+)(\/team\/[^/]+|\/accounts(\/[^/]+)?)?$/)
     if (registry) {
@@ -306,6 +310,8 @@ export function fixtureResponse(path: string, method: string, state: FixtureStat
   if (p === '/v1/ai/costs') return aiCosts(empty)
   if (p === '/v1/ai/usage') return { month: '2026-09', spent_usd: state === 'cap' ? 5.0 : 0.37, cap_usd: 5, paused: state === 'cap' }
   if (p === '/v1/clients') return empty ? [] : clientsList(String(query?.status ?? 'active'))
+  const otomasi = otomasiGet(p, empty, query)
+  if (otomasi !== undefined) return otomasi
   if (p === '/v1/approvals') {
     return empty ? [] : [{ id: idOf(800), client: { id: CLIENT_ID, name: 'Klinik Mata Sampang' }, part: 'guideline', field_key: 'visual', current_value: null, proposed_value: card(false).pending[0]!.value, set_by: 'Ardella Bernica', set_at: '2026-09-24T09:00:00Z' }]
   }

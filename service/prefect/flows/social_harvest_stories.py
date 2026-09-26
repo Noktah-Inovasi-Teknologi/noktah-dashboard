@@ -2,8 +2,8 @@
 Social Content Harvest — Stories-Only Flow
 
 Harvests and analyzes only the currently-active Instagram/TikTok Stories from up
-to five public profiles, delivering the downloaded stories + analysis Sheet rows
-to Google Drive (spec 002-social-content-harvest).
+to five public profiles, delivering the downloaded stories to Google Drive
+and the analysis to the database (spec 002-social-content-harvest).
 
 Stories are ephemeral (they expire ~24h after posting), so this flow is meant to
 be run *frequently* to catch them before they vanish — it uses roach's fast,
@@ -54,7 +54,7 @@ async def social_harvest_stories_flow(
 
     Args:
         profiles: Public Instagram/TikTok profile URLs (max 5, FR-002)
-        harvest_name: Human name for this run (detail sheet filename + rows);
+        harvest_name: Human name for this run (the analysis spend label);
             defaults to the Prefect flow-run name when omitted
         credentials_block_name: Name of the Google credentials block
 

@@ -46,7 +46,7 @@ const dirty = computed(() => !!person.value && !sameForm(personFormKey(form.valu
 const saving = ref(false)
 async function save() {
   saving.value = true
-  await call('', 'PUT', { version: person.value!.version, ...personBody(form.value) })
+  await call('', 'PUT', { version: person.value!.version, ...personBody(form.value), started_on: form.value.started_on || null })
   saving.value = false
 }
 
@@ -140,6 +140,17 @@ function historyLine(h: RegistryChange): string {
               :team="person.team"
               :disabled="!canManage"
             />
+            <UFormField
+              label="Tanggal mulai bekerja"
+              help="Menentukan masa adaptasi 30 hari di Incentive Framework."
+            >
+              <UInput
+                v-model="form.started_on"
+                type="date"
+                :disabled="!canManage"
+                class="w-full sm:w-56"
+              />
+            </UFormField>
             <div
               v-if="canManage"
               class="flex flex-wrap justify-end gap-2"

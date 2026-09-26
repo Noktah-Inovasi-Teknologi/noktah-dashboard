@@ -203,6 +203,13 @@ async def songbird_client_context(client_name: str, limit: int = 40) -> Dict[str
     return {"client_name": resolved, "records": records, "source": "knowledge_records"}
 
 
+# A post a manager marked in the Hub (post_review_marks, migration 015) while the mark is
+# active. `harvested_signals.advertisement` mirrors only the Iklan mark; this covers all three.
+_NOT_MARKED = """AND NOT EXISTS (SELECT 1 FROM post_review_marks m
+                                  WHERE m.platform = s.platform AND m.content_id = s.content_id
+                                    AND m.cleared_at IS NULL)"""
+
+
 @task(name="songbird.signal.top-performers", retries=2, retry_delay_seconds=30)
 async def songbird_top_performers(
     handles: List[str],
@@ -211,6 +218,7 @@ async def songbird_top_performers(
     *,
     content_mix: Optional[Dict[str, int]] = None,
     exclude_advertisement: bool = True,
+    exclude_marked: bool = True,
     recency_half_life_days: float = RECENCY_HALF_LIFE_DAYS,
     stats: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
@@ -236,6 +244,9 @@ async def songbird_top_performers(
             apportioned to match, so a plan needing Posts sees Post exemplars.
         exclude_advertisement: Drop reviewer-flagged paid/boosted posts — their reach
             was bought, so it is not evidence that the creative works.
+        exclude_marked: Drop posts with any active Hub review mark (Iklan, Tidak relevan,
+            Bukan konten akun ini; spec 009 G-17): a manager said it is not this account's
+            own organic content, so it is no example of what works.
         recency_half_life_days: Half-life of the recency tilt.
         stats: Optional dict updated in place with selection stats for the summary.
     """
@@ -254,13 +265,14 @@ async def songbird_top_performers(
             # (subtitle/content_flow/summary, ~1-3 KB each) are deferred to phase 2.
             candidates = await conn.fetch(
                 f"""
-                SELECT id, platform, profile_key, content_type, published_at,
-                       views, likes, comments, advertisement, caption, hashtags
-                FROM harvested_signals
-                WHERE lower(profile_key) = ANY($1::text[])
-                  AND (published_at IS NULL
-                       OR published_at >= now() - make_interval(days => $2))
-                  {"AND advertisement = false" if exclude_advertisement else ""}
+                SELECT s.id, s.platform, s.profile_key, s.content_type, s.published_at,
+                       s.views, s.likes, s.comments, s.advertisement, s.caption, s.hashtags
+                FROM harvested_signals s
+                WHERE lower(s.profile_key) = ANY($1::text[])
+                  AND (s.published_at IS NULL
+                       OR s.published_at >= now() - make_interval(days => $2))
+                  {"AND s.advertisement = false" if exclude_advertisement else ""}
+                  {_NOT_MARKED if exclude_marked else ""}
                 """,
                 lowered, window_days,
             )

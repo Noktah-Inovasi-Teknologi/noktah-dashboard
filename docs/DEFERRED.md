@@ -22,7 +22,8 @@ Rows are grouped by the part of the system they touch, newest at the bottom of e
 | # | Finding | Found by | Why deferred | Target | Cost if never done |
 |---|---|---|---|---|---|
 | H-1 | No Client groups: branches of one group (e.g. the SMEC clinics) each keep a full Client Card; shared brand facts are copied with "copy from another client", not shared. | spec 008 grill G-3, 2026-09-25 | Groups add a sharing model that could leak one branch's facts into another (ESKL-11176); copying is enough for now | none yet — revisit if copying brand facts becomes a chore | A shared logo or tagline change is repeated per branch by hand, and branches can drift apart |
-| H-2 | Client Card facts and Requests are not pushed into Jira tickets or Slack; a Manager pastes a Jira link onto a Request by hand. | spec 008 grill G-1, G-26, 2026-09-25 | A separate capability (the tracker's "Show the Client Card inside every new Jira issue") | the Client Card → Jira/Slack spec | Staff still work from briefs without the card's facts; the caption errors the card exists to prevent can recur |
+| H-2 | Client Card facts and Requests are not pushed into Jira tickets or Slack; a Manager pastes a Jira link onto a Request by hand. | spec 008 grill G-1, G-26, 2026-09-25 | A separate capability (the tracker's "Show the Client Card inside every new Jira issue"). Re-deferred by spec 009 grill G-2, 2026-09-26: spec 009 changes when and how issues are created, not what they say | the Client Card → Jira/Slack spec | Staff still work from briefs without the card's facts; the caption errors the card exists to prevent can recur |
+| H-3 | The Hub's performance report is internal only; the monthly report each Client receives (Framework v2.1 G2: late or undelivered is a violation) is still made by hand, outside the Hub. | spec 009 grill G-41, 2026-09-26 | The client report has its own format and voice and deserves its own spec | a client monthly report spec | Account Executives keep assembling client reports by hand from the same numbers the Hub already holds, and a late one is a G2 violation |
 
 ## Data & schema
 
@@ -33,7 +34,7 @@ Rows are grouped by the part of the system they touch, newest at the bottom of e
 
 | # | Finding | Found by | Why deferred | Target | Cost if never done |
 |---|---|---|---|---|---|
-| A-1 | The automations (harvest via prefect.yaml, songbird, content-plan → Jira via the Clients sheet and hashmap.py) still read their own copies of the client list; spec 008 keeps the sheet updated from the Registry instead of switching them. Retiring hashmap.py as a source needs a constitution amendment (Data Management section). | spec 008 grill G-1, G-7, 2026-09-25 | Changes how running automations behave; deserves its own careful spec | the Registry switch-over spec | Four copies of the client list persist; the sheet-copy job must keep running and stay correct; harvest targets still drift from the Registry |
+| A-1 | Songbird still reads its own copy of the client list (the Clients and Hashmaps sheets via hashmap.py), so spec 008's Registry → sheet copy must keep running. Spec 009 moved the harvest and the content-plan → Jira automation onto the Registry; only songbird is left. | spec 008 grill G-1, G-7, 2026-09-25; narrowed by spec 009 G-2, 2026-09-26 | Songbird is out of spec 009's scope | a songbird spec | The sheet-copy job must keep running and stay correct; songbird's handles can drift from the Registry |
 
 ## Collection
 
@@ -44,7 +45,6 @@ Rows are grouped by the part of the system they touch, newest at the bottom of e
 
 | # | Finding | Found by | Why deferred | Target | Cost if never done |
 |---|---|---|---|---|---|
-| S-1 | Songbird grounds plans in the old free-form `knowledge_records`, not the new Client Card (Profil, Guideline with archetype/voice ratings, open Requests). | spec 008 plan, 2026-09-25 | Switching generation grounding is an automation change (G-1) and needs its own quality measurement | the Registry switch-over spec, or a songbird spec | Generated plans ignore the Guideline the Brand Manager approved, and keep citing stale facts the Card has corrected |
 
 ## Infrastructure
 

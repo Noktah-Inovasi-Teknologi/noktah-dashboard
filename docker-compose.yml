@@ -35,6 +35,8 @@ services:
       # Noktah Hub internal calls (hub_* flows, spec 008)
       - HUB_API_URL=http://api:8000
       - HUB_API_INTERNAL_TOKEN=${HUB_API_INTERNAL_TOKEN}
+      # SP letters (spec 009): Drive folder Company > HR > Surat Peringatan (restricted)
+      - HUB_SP_LETTER_FOLDER_ID=${HUB_SP_LETTER_FOLDER_ID:-}
     volumes:
       - ./service/prefect/flows:/app/flows
       - ./service/prefect/tasks:/app/tasks
@@ -115,6 +117,8 @@ services:
       # Noktah Hub internal calls (hub_* flows, spec 008)
       - HUB_API_URL=http://api:8000
       - HUB_API_INTERNAL_TOKEN=${HUB_API_INTERNAL_TOKEN}
+      # SP letters (spec 009): Drive folder Company > HR > Surat Peringatan (restricted)
+      - HUB_SP_LETTER_FOLDER_ID=${HUB_SP_LETTER_FOLDER_ID:-}
     volumes:
       - ./service/prefect/flows:/app/flows
       - ./service/prefect/tasks:/app/tasks
@@ -175,7 +179,7 @@ services:
       - SLACK_MANAGERIAL_ESKALA=${SLACK_MANAGERIAL_ESKALA:-}
       - SLACK_MANAGERIAL_NOKTAH=${SLACK_MANAGERIAL_NOKTAH:-}
       - SLACK_AUTOMATION_NOKTAH=${SLACK_AUTOMATION_NOKTAH:-}
-      # Prefect API, used only to pause roster-sync after the one-time import
+      # Prefect API: pause roster-sync after the import; start and read the Otomasi flows (spec 009)
       - PREFECT_API_URL=http://prefect:4200/api
     volumes:
       # Card definition (versioned YAML), read-only, like config/extraction

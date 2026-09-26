@@ -2,8 +2,8 @@
 Social Content Harvest — Most-Recent-N Flow
 
 Harvests and analyzes the N most recent publicly visible content items from up
-to five public Instagram/TikTok profiles, delivering downloaded content and an
-analysis Google Sheet to Google Drive (spec 002-social-content-harvest, FR-016a).
+to five public Instagram/TikTok profiles, delivering downloaded content to
+Google Drive and the analysis to the database (spec 002-social-content-harvest, FR-016a).
 
 Usage (inside the container):
     docker exec prefect python flows/social_harvest_recent.py --profiles "https://www.tiktok.com/@name" --n 10
@@ -47,7 +47,7 @@ async def social_harvest_recent_flow(
     Args:
         profiles: Public Instagram/TikTok profile URLs (max 5, FR-002)
         n: Most-recent items to keep per profile
-        harvest_name: Human name for this run (detail sheet filename + rows);
+        harvest_name: Human name for this run (the analysis spend label);
             defaults to the Prefect flow-run name (e.g. "graceful-rook") when omitted
         credentials_block_name: Name of the Google credentials block
 

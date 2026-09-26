@@ -473,7 +473,12 @@ def process_row_uniform(row: Dict[str, Any], row_index: int) -> Dict[str, Any]:
 def convert_content_plan_row_to_jira_issue(
     row: Dict[str, Any], 
     client_name: str,
-    component_hashmap: Optional[Dict[str, str]] = None
+    component_hashmap: Optional[Dict[str, str]] = None,
+    component_id: Optional[str] = None,
+    field_associate_account: Optional[str] = None,
+    content_editor_account: Optional[str] = None,
+    reporter_account: Optional[str] = None,
+    registry_only: bool = False,
 ) -> Dict[str, Any]:
     """
     Convert a content plan row to Jira issue type 10009 (Content) format
@@ -483,6 +488,13 @@ def convert_content_plan_row_to_jira_issue(
         client_name: Client name for component mapping
         component_hashmap: Override for the client -> component ID mapping;
             defaults to the sheet-backed COMPONENTS hashmap
+        component_id, field_associate_account, content_editor_account, reporter_account:
+            Explicit Jira ids from the Hub's Registry (spec 009). Each one given wins over
+            its hashmap lookup.
+        registry_only: True for the Hub's flow: the explicit ids are the whole truth and
+            the Hashmaps sheet is never read, so a missing id stays missing instead of
+            being filled from the retired sheet. The old CLI leaves it False and keeps the
+            hashmap as its source.
 
     Returns:
         Formatted Jira issue data for type 10009
@@ -490,7 +502,7 @@ def convert_content_plan_row_to_jira_issue(
     logger = get_run_logger()
 
     # Falls back to the "Hashmaps" worksheet (hashmap.py), resolved on first access
-    if component_hashmap is None:
+    if component_hashmap is None and not registry_only and component_id is None:
         component_hashmap = COMPONENTS
     
     try:
@@ -501,8 +513,9 @@ def convert_content_plan_row_to_jira_issue(
             logger.warning(f"No 'Topik' column found in row: {row}")
             summary = "Content"
         
-        # Get component ID from hashmap
-        component_id = component_hashmap.get(client_name)
+        # Component: the Registry's id when given, else the hashmap
+        if component_id is None and component_hashmap is not None:
+            component_id = component_hashmap.get(client_name)
         if not component_id:
             logger.warning(f"No component mapping found for client: {client_name}")
         
@@ -530,17 +543,28 @@ def convert_content_plan_row_to_jira_issue(
             except ValueError:
                 logger.warning(f"Could not calculate due date from publication date: {publication_date}")
         
-        # Get Field Associate
-        field_associate_name = FIELD_ASSOCIATE.get(client_name, "")
-        field_associate_id = WORKERS.get(field_associate_name, "") if field_associate_name else ""
-        
-        # Get Content Editor
-        content_editor_name = CONTENT_EDITOR.get(client_name, "")
-        content_editor_id = WORKERS.get(content_editor_name, "") if content_editor_name else ""
-        
+        # Field Associate / Content Editor / Reporter: the Registry's Jira account ids when
+        # given, else the hashmap (old CLI). registry_only never touches the hashmap.
+        field_associate_name = ""
+        content_editor_name = ""
+        if field_associate_account is not None or registry_only:
+            field_associate_id = field_associate_account or ""
+        else:
+            field_associate_name = FIELD_ASSOCIATE.get(client_name, "")
+            field_associate_id = WORKERS.get(field_associate_name, "") if field_associate_name else ""
+
+        if content_editor_account is not None or registry_only:
+            content_editor_id = content_editor_account or ""
+        else:
+            content_editor_name = CONTENT_EDITOR.get(client_name, "")
+            content_editor_id = WORKERS.get(content_editor_name, "") if content_editor_name else ""
+
         # Reporter: the company account that reports every issue. Named "Noktah" in the Hub since the
         # 2026-09-26 merge; the old name is kept until the WORKERS copy has the new one.
-        reporter_id = WORKERS.get("Noktah") or WORKERS.get("Noktah Inovasi Teknologi", "")
+        if reporter_account is not None or registry_only:
+            reporter_id = reporter_account or ""
+        else:
+            reporter_id = WORKERS.get("Noktah") or WORKERS.get("Noktah Inovasi Teknologi", "")
         
         # Get Content Type from "Bentuk" column
         content_type = row.get("Bentuk", "")
@@ -648,6 +672,24 @@ def convert_content_plan_row_to_jira_issue(
     except Exception as e:
         logger.error(f"Failed to convert row to Jira issue: {str(e)}")
         raise
+
+
+PLAN_ROW_PROPERTY = "noktah.plan-row"
+
+
+def hub_issue_payload(issue: Dict[str, Any], plan_id: str, row_number: int, batch_id: str) -> Dict[str, Any]:
+    """What the Hub sends to the bulk endpoint for one plan row (spec 009, research R3).
+
+    Drops the converter's top-level `metadata` (it is for run files, not for Jira) and adds
+    the `noktah.plan-row` entity property, which is how a created key is mapped back to
+    its row: bulk create does not say which key came from which input.
+    """
+    payload = {k: v for k, v in issue.items() if k != "metadata"}
+    payload["properties"] = [{
+        "key": PLAN_ROW_PROPERTY,
+        "value": {"plan_id": plan_id, "row_number": row_number, "batch_id": batch_id},
+    }]
+    return payload
 
 
 @task(name="save-to-json")

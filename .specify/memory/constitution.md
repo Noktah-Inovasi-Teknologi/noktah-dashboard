@@ -1,4 +1,19 @@
 <!--
+SYNC IMPACT REPORT (1.2.0)
+==================
+Version change: 1.1.0 → 1.2.0 (MINOR — scoped amendment of a section, no principle changed)
+
+Sections amended:
+  - Data Management & Integration Patterns — the Hub Registry (written only by
+    hub-api) is the source of clients, teams, social accounts, Jira components and
+    Content Plan folders for the content-plan → Jira automation and the Harvest
+    (spec 009, DEFERRED A-1 claimed for those two). hashmap.py remains the source
+    for songbird only, until A-1 closes.
+
+Templates reviewed: plan/spec/tasks templates — no change needed.
+-->
+
+<!--
 SYNC IMPACT REPORT
 ==================
 Version change: 1.0.0 → 1.1.0 (MINOR — additive)
@@ -294,9 +309,15 @@ values from fixed lists. Confidence is reported per attribute, not per extractio
 
 ## Data Management & Integration Patterns
 
-Static data mappings (workers, components, role assignments) live in `hashmap.py` and MUST be
-accessed via `.get()` with explicit fallback values. They MUST NOT be embedded in flow or task
-logic directly.
+**The Hub Registry is the source of clients, teams, social accounts, Jira components and
+Content Plan folders** for the content-plan → Jira automation and the Harvest. It lives in the
+relational store, is written only by hub-api, and flows read it through hub-api's `/internal`
+routes. It MUST NOT be copied into flow or task logic.
+
+Static data mappings (workers, components, role assignments) that the Registry does not yet
+serve, which today means those songbird reads, live in `hashmap.py`. They MUST be accessed via
+`.get()` with explicit fallback values and MUST NOT be embedded in flow or task logic directly.
+Moving songbird onto the Registry (DEFERRED A-1) retires `hashmap.py` as a source.
 
 **The content attribute vocabulary is NOT static mapping data and MUST NOT live in `hashmap.py`.**
 It is versioned, queryable, migratable state and belongs in the relational store. See Principle XII.
@@ -382,4 +403,4 @@ equal weight.
 
 Refer to `.claude/rules/backend/prefect.md` for runtime development guidance.
 
-**Version**: 1.1.0 | **Ratified**: 2026-07-05 | **Last Amended**: 2026-07-31
+**Version**: 1.2.0 | **Ratified**: 2026-07-05 | **Last Amended**: 2026-09-26

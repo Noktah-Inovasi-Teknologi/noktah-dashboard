@@ -1,0 +1,46 @@
+# Indonesian national public holidays (hari libur nasional), for the Hub's working-day
+# calendar (spec 009): sanctions are worked out on working day 2 and issued after working
+# day 3 (Incentive Framework v2.1 §7.1). Working days are Monday to Friday minus these dates.
+#
+# Maintained by hand. Check each year against the government SKB (Surat Keputusan Bersama)
+# on hari libur nasional and cuti bersama, and add next year's dates before December.
+# Cuti bersama are NOT listed unless the company observes them as days off.
+# Read at startup by hub-api (mounted read-only at /app/config/hub); restart after editing:
+#   docker-compose restart api
+holidays:
+  - 2026-01-01  # Tahun Baru Masehi
+  - 2026-01-16  # Isra Mi'raj
+  - 2026-02-17  # Tahun Baru Imlek
+  - 2026-03-19  # Hari Suci Nyepi
+  - 2026-03-20  # Idul Fitri
+  - 2026-03-21  # Idul Fitri
+  - 2026-04-03  # Wafat Yesus Kristus
+  - 2026-05-01  # Hari Buruh
+  - 2026-05-14  # Kenaikan Yesus Kristus
+  - 2026-05-27  # Idul Adha
+  - 2026-05-31  # Waisak
+  - 2026-06-01  # Hari Lahir Pancasila
+  - 2026-06-16  # Tahun Baru Islam
+  - 2026-08-17  # Hari Kemerdekaan
+  - 2026-08-25  # Maulid Nabi
+  - 2026-12-25  # Natal
+  # 2027: SKB 3 Menteri on Hari Libur Nasional dan Cuti Bersama 2027, signed 15 September 2026
+  # (setneg.go.id). Cuti bersama not listed.
+  - 2027-01-01  # Tahun Baru Masehi
+  - 2027-01-05  # Isra Mikraj
+  - 2027-02-06  # Tahun Baru Imlek
+  - 2027-03-08  # Hari Suci Nyepi
+  - 2027-03-10  # Idulfitri
+  - 2027-03-11  # Idulfitri
+  - 2027-03-26  # Wafat Yesus Kristus
+  - 2027-03-28  # Paskah
+  - 2027-05-01  # Hari Buruh
+  - 2027-05-06  # Kenaikan Yesus Kristus
+  - 2027-05-17  # Iduladha
+  - 2027-05-20  # Waisak
+  - 2027-06-01  # Hari Lahir Pancasila
+  - 2027-06-06  # Tahun Baru Islam
+  - 2027-08-15  # Maulid Nabi
+  - 2027-08-17  # Hari Kemerdekaan
+  - 2027-12-25  # Natal
+  - 2027-12-26  # Isra Mikraj

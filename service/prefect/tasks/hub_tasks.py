@@ -21,12 +21,19 @@ def _base_and_token() -> tuple[str, str]:
 
 
 @task(name="hub.internal.call", retries=2, retry_delay_seconds=30)
-def hub_internal_call(path: str, params: Optional[Dict[str, Any]] = None, timeout: float = 600.0) -> Dict[str, Any]:
-    """POST /internal/<path>; raises on non-2xx so Prefect retries and the flow alerts."""
+def hub_internal_call(path: str, params: Optional[Dict[str, Any]] = None, timeout: float = 600.0,
+                      json: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """POST /internal/<path>; raises on non-2xx so Prefect retries and the flow alerts.
+
+    `params` go in the query string (the spec 008 routes); `json` is the request body
+    (the spec 009 routes, whose inputs are lists of rows, issues and results).
+    """
     base, token = _base_and_token()
-    response = httpx.post(f"{base}/internal/{path.lstrip('/')}", params=params or {},
+    response = httpx.post(f"{base}/internal/{path.lstrip('/')}", params=params or {}, json=json,
                           headers={"X-Hub-Internal-Token": token}, timeout=timeout)
     if response.status_code == 404:
-        raise RuntimeError(f"hub-api refused /internal/{path} (token mismatch, or route missing)")
-    response.raise_for_status()
+        raise RuntimeError(f"hub-api refused /internal/{path} (token mismatch, route missing, or "
+                           f"not found): {response.text[:300]}")
+    if response.status_code >= 400:
+        raise RuntimeError(f"hub-api /internal/{path} answered HTTP {response.status_code}: {response.text[:300]}")
     return response.json()
